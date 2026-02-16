@@ -1448,7 +1448,7 @@
             }
         }
     },
-    "redactMessage": "Muuda sõnumit",
+    "redactMessage": "Eemalda sõnum",
     "@redactMessage": {
         "type": "String",
         "placeholders": {}
