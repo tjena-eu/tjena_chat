@@ -328,7 +328,7 @@
         "type": "String",
         "description": "Usage hint for the command /html"
     },
-    "commandHint_invite": "Snubeg aseqdac i d-ittunefken ɣer texxamt-agi",
+    "commandHint_invite": "Snubg aseqdac i d-ittunefken ɣer texxamt-agi",
     "@commandHint_invite": {
         "type": "String",
         "description": "Usage hint for the command /invite"
@@ -629,7 +629,7 @@
         "type": "String",
         "placeholders": {}
     },
-    "inviteForMe": "Snubget-yi-d",
+    "inviteForMe": "Snubget i nekk",
     "@inviteForMe": {
         "type": "String",
         "placeholders": {}
@@ -1328,6 +1328,181 @@
     },
     "removeDevice": "Kkes ibenk",
     "@removeDevice": {
+        "type": "String",
+        "placeholders": {}
+    },
+    "unbanFromChat": "Kkes agdal seg udiwenni",
+    "@unbanFromChat": {
+        "type": "String",
+        "placeholders": {}
+    },
+    "removeYourAvatar": "Kkes avaṭar-ik·im",
+    "@removeYourAvatar": {
+        "type": "String",
+        "placeholders": {}
+    },
+    "replaceRoomWithNewerVersion": "Semselsi taxxamt s lqem amaynut",
+    "@replaceRoomWithNewerVersion": {
+        "type": "String",
+        "placeholders": {}
+    },
+    "reply": "Err",
+    "@reply": {
+        "type": "String",
+        "placeholders": {}
+    },
+    "confirm": "Sentem",
+    "@confirm": {
+        "type": "String",
+        "placeholders": {}
+    },
+    "connect": "Qqen",
+    "@connect": {
+        "type": "String",
+        "placeholders": {}
+    },
+    "contactHasBeenInvitedToTheGroup": "Anermis yettwaɛreḍ ɣer ugraw",
+    "@contactHasBeenInvitedToTheGroup": {
+        "type": "String",
+        "placeholders": {}
+    },
+    "containsDisplayName": "Igber askan n yisem",
+    "@containsDisplayName": {
+        "type": "String",
+        "placeholders": {}
+    },
+    "containsUserName": "Igber isem n useqdac",
+    "@containsUserName": {
+        "type": "String",
+        "placeholders": {}
+    },
+    "contentHasBeenReported": "Agbur yettwammel i inedbalen n uqeddac",
+    "@contentHasBeenReported": {
+        "type": "String",
+        "placeholders": {}
+    },
+    "iHaveClickedOnLink": "Ttekkiɣ ɣef useɣwen",
+    "@iHaveClickedOnLink": {
+        "type": "String",
+        "placeholders": {}
+    },
+    "incorrectPassphraseOrKey": "Tafyirt n uɛeddi neɣ tasarut n tririt d tarameɣtut",
+    "@incorrectPassphraseOrKey": {
+        "type": "String",
+        "placeholders": {}
+    },
+    "inoffensive": "Ur yettḍurru ara",
+    "@inoffensive": {
+        "type": "String",
+        "placeholders": {}
+    },
+    "inviteContact": "Snubg anermis",
+    "@inviteContact": {
+        "type": "String",
+        "placeholders": {}
+    },
+    "inviteContactToGroupQuestion": "Tebɣiḍ ad d-ɛerḍeḍ {contact} ɣer udiwenni \"{groupName}\"?",
+    "inviteContactToGroup": "Snubg anermis ɣer {groupName}",
+    "@inviteContactToGroup": {
+        "type": "String",
+        "placeholders": {
+            "groupName": {
+                "type": "String"
+            }
+        }
+    },
+    "noChatDescriptionYet": "Ulac aglam n udiwenni i d-yenulfan yakan.",
+    "inviteText": "{username} yeɛreḍ-ik·m ɣer FluffyChat.\n1. Rzu ɣer fluffychat.im syin sbedd asnas \n2. Jerred neɣ kcem \n3. Ldi aseɣwen n tinubga: \n {link}",
+    "@inviteText": {
+        "type": "String",
+        "placeholders": {
+            "username": {
+                "type": "String"
+            },
+            "link": {
+                "type": "String"
+            }
+        }
+    },
+    "configureChat": "Swel adiwenni",
+    "@configureChat": {
+        "type": "String",
+        "placeholders": {}
+    },
+    "id": "Asulay",
+    "@id": {
+        "type": "String",
+        "placeholders": {}
+    },
+    "identity": "Tamagit",
+    "@identity": {
+        "type": "String",
+        "placeholders": {}
+    },
+    "block": "Iḥder",
+    "blockedUsers": "Iseqdacen yettusweḥlen",
+    "blockUsername": "Zgel isem n useqdac",
+    "loadMore": "Sali-d ugar…",
+    "@loadMore": {
+        "type": "String",
+        "placeholders": {}
+    },
+    "locationDisabledNotice": "Imeẓla n wadig nsan. Ma ulac aɣilif, rmed-iten akken ad izmiren ad bḍun ideg-ik·im.",
+    "@locationDisabledNotice": {
+        "type": "String",
+        "placeholders": {}
+    },
+    "locationPermissionDeniedNotice": "Tisirag n wadig tettwagdel. Ttxil-k·m efk-asen amek ara bḍun ideg-ik·im.",
+    "@locationPermissionDeniedNotice": {
+        "type": "String",
+        "placeholders": {}
+    },
+    "scanQrCode": "Semḍen tangalt QR",
+    "offline": "Aruqqin",
+    "@offline": {
+        "type": "String",
+        "placeholders": {}
+    },
+    "ok": "iH",
+    "@ok": {
+        "type": "String",
+        "placeholders": {}
+    },
+    "online": "Deg uẓeṭṭa",
+    "@online": {
+        "type": "String",
+        "placeholders": {}
+    },
+    "onlineKeyBackupEnabled": "Aḥraz n tsarut deg uẓeṭṭa yermed",
+    "@onlineKeyBackupEnabled": {
+        "type": "String",
+        "placeholders": {}
+    },
+    "unread": "Ur yettwaɣri ara",
+    "sendOnEnter": "Azen ɣef Kcem",
+    "space": "Tallunt",
+    "oopsPushError": "Ayhu! nesḥissif, teḍra-d tuccḍa deg usbadu n yilɣa usriden.",
+    "@oopsPushError": {
+        "type": "String",
+        "placeholders": {}
+    },
+    "oopsSomethingWentWrong": "Ihuh, yella wayen ur neddi ara…",
+    "@oopsSomethingWentWrong": {
+        "type": "String",
+        "placeholders": {}
+    },
+    "openAppToReadMessages": "Ldi asnas akken ad teɣreḍ iznan",
+    "@openAppToReadMessages": {
+        "type": "String",
+        "placeholders": {}
+    },
+    "openCamera": "Ldi takamiṛat",
+    "@openCamera": {
+        "type": "String",
+        "placeholders": {}
+    },
+    "openVideoCamera": "Ldi takamiṛat i tvidyut",
+    "@openVideoCamera": {
         "type": "String",
         "placeholders": {}
     }
