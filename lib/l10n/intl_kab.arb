@@ -1505,5 +1505,57 @@
     "@openVideoCamera": {
         "type": "String",
         "placeholders": {}
-    }
+    },
+    "moreEvents": "Ugar n ineḍruyen",
+    "declineInvitation": "Agi tinnubga",
+    "noMessagesYet": "Ulac iznan akka tura",
+    "longPressToRecordVoiceMessage": "Asiti aɣezzfan i usekles n yizen n taɣect.",
+    "pause": "Serǧu",
+    "resume": "Kemmel",
+    "newSubSpace": "Tallunt tanaddawt tamaynut",
+    "moveToDifferentSpace": "Smutti ɣer tallunt yemgaraden",
+    "moveUp": "Ddu d asawen",
+    "moveDown": "Ddu d akessar",
+    "removeFromSpaceDescription": "Adiwenni ad yettwakkes seg tallunt maca mazal ad yettban deg tebdart-ik·im n udiwenni.",
+    "countChats": "{chats} idiwenniyen",
+    "@countChats": {
+        "type": "String",
+        "placeholders": {
+            "chats": {
+                "type": "int"
+            }
+        }
+    },
+    "spaceMemberOf": "Aɛeggal n tallunt n {spaces}",
+    "@spaceMemberOf": {
+        "type": "String",
+        "placeholders": {
+            "spaces": {
+                "type": "String"
+            }
+        }
+    },
+    "donate": "Mudd tawsa",
+    "startedAPoll": "{username}yessenker tafrent.",
+    "@startedAPoll": {
+        "type": "String",
+        "placeholders": {
+            "username": {
+                "type": "String"
+            }
+        }
+    },
+    "poll": "Tafrent",
+    "startPoll": "Senker tafrent",
+    "endPoll": "Eg taggara n tafrent",
+    "answersVisible": "Tiririyin yettbanen",
+    "answersHidden": "Tiririyin yeffren",
+    "pollQuestion": "Isteqsiyen n tefrent",
+    "answerOption": "tanefrunt n tririt",
+    "addAnswerOption": "Rnu tanefrunt n tririt",
+    "allowMultipleAnswers": "Sireg aget n tiririyin",
+    "pollHasBeenEnded": "Tafrent tfukk",
+    "answersWillBeVisibleWhenPollHasEnded": "Tiririyin ad banent ticki tafrent tfukk",
+    "replyInThread": "Err deg udras udiwenni",
+    "thread": "Adras udiwenni"
 }
