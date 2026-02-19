@@ -6,6 +6,7 @@ import 'package:collection/collection.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:matrix/encryption.dart';
 import 'package:matrix/matrix.dart';
 
 import 'package:fluffychat/l10n/l10n.dart';
@@ -61,13 +62,12 @@ class SettingsController extends State<Settings> {
   }
 
   void logoutAction() async {
-    final noBackup = showChatBackupBanner == true;
     if (await showOkCancelAlertDialog(
           useRootNavigator: false,
           context: context,
           title: L10n.of(context).areYouSureYouWantToLogout,
           message: L10n.of(context).noBackupWarning,
-          isDestructive: noBackup,
+          isDestructive: cryptoIdentityConnected == false,
           okLabel: L10n.of(context).logout,
           cancelLabel: L10n.of(context).cancel,
         ) ==
@@ -167,23 +167,17 @@ class SettingsController extends State<Settings> {
     if (client.prevBatch == null) {
       await client.onSync.stream.first;
     }
-    final crossSigning =
-        await client.encryption?.crossSigning.isCached() ?? false;
-    final needsBootstrap =
-        await client.encryption?.keyManager.isCached() == false ||
-        client.encryption?.crossSigning.enabled == false ||
-        !crossSigning;
-    final isUnknownSession = client.isUnknownSession;
+
+    final state = await client.getCryptoIdentityState();
     setState(() {
-      showChatBackupBanner = needsBootstrap || isUnknownSession;
+      cryptoIdentityConnected = state.initialized && state.connected;
     });
   }
 
-  bool? crossSigningCached;
-  bool? showChatBackupBanner;
+  bool? cryptoIdentityConnected;
 
   void firstRunBootstrapAction([_]) async {
-    if (showChatBackupBanner != true) {
+    if (cryptoIdentityConnected == true) {
       showOkAlertDialog(
         context: context,
         title: L10n.of(context).chatBackup,

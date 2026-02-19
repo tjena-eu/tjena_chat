@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'package:collection/collection.dart' show IterableExtension;
-import 'package:matrix/encryption/utils/key_verification.dart';
+import 'package:matrix/encryption.dart';
 import 'package:matrix/matrix.dart';
 import 'package:url_launcher/url_launcher_string.dart';
 
@@ -40,16 +40,10 @@ class DevicesSettingsController extends State<DevicesSettings> {
 
   void _checkChatBackup() async {
     final client = Matrix.of(context).client;
-    if (client.encryption?.keyManager.enabled == true) {
-      if (await client.encryption?.keyManager.isCached() == false ||
-          await client.encryption?.crossSigning.isCached() == false ||
-          client.isUnknownSession && !mounted) {
-        setState(() {
-          chatBackupEnabled = false;
-        });
-        return;
-      }
-    }
+    final state = await client.getCryptoIdentityState();
+    setState(() {
+      chatBackupEnabled = state.initialized && !state.connected;
+    });
   }
 
   void removeDevicesAction(List<Device> devices) async {

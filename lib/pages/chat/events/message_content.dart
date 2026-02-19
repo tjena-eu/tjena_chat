@@ -3,6 +3,7 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 
 import 'package:go_router/go_router.dart';
+import 'package:matrix/encryption.dart';
 import 'package:matrix/matrix.dart';
 
 import 'package:fluffychat/config/setting_keys.dart';
@@ -57,7 +58,8 @@ class MessageContent extends StatelessWidget {
       return;
     }
     final client = Matrix.of(context).client;
-    if (client.isUnknownSession && client.encryption!.crossSigning.enabled) {
+    final state = await client.getCryptoIdentityState();
+    if (!state.connected) {
       final success = await context.push('/backup');
       if (success != true) return;
     }
