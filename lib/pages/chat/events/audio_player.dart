@@ -179,7 +179,7 @@ class AudioPlayerState extends State<AudioPlayerWidget> {
             matrixFile.mimeType.toLowerCase() == 'audio/ogg') {
           Logs().v('Convert ogg audio file for iOS...');
           final convertedFile = File('${file.path}.caf');
-          if (await convertedFile.exists()) {
+          if (await convertedFile.exists() == false) {
             OpusCaf().convertOpusToCaf(file.path, convertedFile.path);
           }
           file = convertedFile;

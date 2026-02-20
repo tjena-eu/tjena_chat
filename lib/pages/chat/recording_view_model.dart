@@ -55,7 +55,7 @@ class RecordingViewModelState extends State<RecordingViewModel> {
         return;
       }
     }
-    if (await AudioRecorder().hasPermission()) return;
+    if (await AudioRecorder().hasPermission() == false) return;
 
     final audioRecorder = _audioRecorder ??= AudioRecorder();
     setState(() {});
@@ -76,7 +76,7 @@ class RecordingViewModelState extends State<RecordingViewModel> {
       }
 
       final result = await audioRecorder.hasPermission();
-      if (!result) {
+      if (result != true) {
         showOkAlertDialog(
           context: context,
           title: L10n.of(context).oopsSomethingWentWrong,

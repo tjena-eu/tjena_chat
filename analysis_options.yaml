@@ -37,7 +37,6 @@ dart_code_linter:
     - avoid-unnecessary-type-assertions
     - avoid-unnecessary-type-casts
     - avoid-unrelated-type-assertions
-    - no-boolean-literal-compare
     - no-equal-then-else
     - prefer-first
     - prefer-last

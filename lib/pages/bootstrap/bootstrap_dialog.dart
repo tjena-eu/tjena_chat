@@ -161,7 +161,8 @@ class BootstrapDialogState extends State<BootstrapDialog> {
     Widget body = const Center(child: CircularProgressIndicator.adaptive());
     titleText = L10n.of(context).loadingPleaseWait;
 
-    if (bootstrap.newSsssKey?.recoveryKey != null && _recoveryKeyStored) {
+    if (bootstrap.newSsssKey?.recoveryKey != null &&
+        _recoveryKeyStored == false) {
       final key = bootstrap.newSsssKey!.recoveryKey;
       titleText = L10n.of(context).recoveryKey;
       return LoginScaffold(
