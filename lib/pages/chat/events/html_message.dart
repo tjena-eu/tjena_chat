@@ -253,9 +253,8 @@ class HtmlMessage extends StatelessWidget {
             : checkboxCheckedEvents?.firstWhereOrNull(
                 (event) => event.checkedCheckboxId == checkboxIndex,
               );
-        final staticallyChecked = !isCheckbox
-            ? false
-            : node.children.first.attributes['checked'] == 'true';
+        final staticallyChecked =
+            isCheckbox && node.children.first.attributes['checked'] == 'true';
 
         return WidgetSpan(
           child: Padding(

@@ -2,7 +2,6 @@ include: package:flutter_lints/flutter.yaml
 
 linter:
   rules:
-    - camel_case_types
     - avoid_print
     - constant_identifier_names
     - prefer_final_locals
@@ -10,6 +9,16 @@ linter:
     - sort_pub_dependencies
     - require_trailing_commas
     - omit_local_variable_types
+    - cancel_subscriptions
+    - always_declare_return_types
+    - no_adjacent_strings_in_list
+    - test_types_in_equals
+    - throw_in_finally
+    - unnecessary_statements
+    - avoid_bool_literals_in_conditional_expressions
+    - prefer_single_quotes
+    - prefer_const_declarations
+    - unnecessary_lambdas
 
 analyzer:
   plugins:

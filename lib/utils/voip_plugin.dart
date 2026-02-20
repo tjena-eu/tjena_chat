@@ -141,7 +141,7 @@ class VoipPlugin with WidgetsBindingObserver implements WebRTCDelegate {
         FlutterForegroundTask.setOnLockScreenVisibility(false);
         FlutterForegroundTask.stopService();
         final wasForeground = matrix.store.getString('wasForeground');
-        wasForeground == 'false' ? FlutterForegroundTask.minimizeApp() : null;
+        if (wasForeground == 'false') FlutterForegroundTask.minimizeApp();
       }
     }
   }
