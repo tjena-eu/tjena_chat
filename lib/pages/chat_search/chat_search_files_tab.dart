@@ -55,9 +55,9 @@ class ChatSearchFilesTab extends StatelessWidget {
                     'UNKNOWN');
           final sizeString = event.sizeString;
           final prevEvent = i > 0 ? events[i - 1] : null;
-          final sameEnvironment = prevEvent == null
-              ? false
-              : prevEvent.originServerTs.sameEnvironment(event.originServerTs);
+          final sameEnvironment =
+              prevEvent != null &&
+              prevEvent.originServerTs.sameEnvironment(event.originServerTs);
           return Padding(
             padding: const EdgeInsets.all(8.0),
             child: Column(

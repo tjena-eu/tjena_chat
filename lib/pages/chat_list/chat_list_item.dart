@@ -56,9 +56,9 @@ class ChatListItem extends StatelessWidget {
       return const SizedBox.shrink();
     }
 
-    final needLastEventSender = lastEvent == null
-        ? false
-        : room.getState(EventTypes.RoomMember, lastEvent.senderId) == null;
+    final needLastEventSender =
+        lastEvent != null &&
+        room.getState(EventTypes.RoomMember, lastEvent.senderId) == null;
     final space = this.space;
 
     return Padding(

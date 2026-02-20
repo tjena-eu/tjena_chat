@@ -15,11 +15,11 @@ class ErrorReporter {
   const ErrorReporter(this.context, [this.message]);
 
   static const Set<String> ingoredTypes = {
-    "IOException",
-    "ClientException",
-    "SocketException",
-    "TlsException",
-    "HandshakeException",
+    'IOException',
+    'ClientException',
+    'SocketException',
+    'TlsException',
+    'HandshakeException',
   };
 
   void onErrorCallback(Object error, [StackTrace? stackTrace]) {

@@ -135,7 +135,7 @@ extension LocalNotificationsExtension on MatrixState {
         var action = DesktopNotificationActions.values.singleWhereOrNull(
           (a) => a.name == actionStr,
         );
-        if (action == null && actionStr == "default") {
+        if (action == null && actionStr == 'default') {
           action = DesktopNotificationActions.openChat;
         }
         switch (action!) {

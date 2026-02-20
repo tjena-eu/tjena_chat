@@ -207,7 +207,7 @@ class LoginController extends State<Login> {
     final data = <String, dynamic>{
       'new_password': password,
       'logout_devices': false,
-      "auth": AuthenticationThreePidCreds(
+      'auth': AuthenticationThreePidCreds(
         type: AuthenticationTypes.emailIdentity,
         threepidCreds: ThreepidCreds(
           sid: response.result!.sid,

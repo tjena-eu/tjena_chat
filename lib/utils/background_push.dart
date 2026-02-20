@@ -231,7 +231,7 @@ class BackgroundPush {
           currentPushers.first.data.format ==
               AppSettings.pushNotificationsPusherFormat.value &&
           mapEquals(currentPushers.single.data.additionalProperties, {
-            "data_message": pusherDataMessageFormat,
+            'data_message': pusherDataMessageFormat,
           })) {
         Logs().i('[Push] Pusher already set');
       } else {
@@ -269,7 +269,7 @@ class BackgroundPush {
             data: PusherData(
               url: Uri.parse(gatewayUrl!),
               format: AppSettings.pushNotificationsPusherFormat.value,
-              additionalProperties: {"data_message": pusherDataMessageFormat},
+              additionalProperties: {'data_message': pusherDataMessageFormat},
             ),
             kind: 'http',
           ),
@@ -290,7 +290,7 @@ class BackgroundPush {
   static bool _wentToRoomOnStartup = false;
 
   Future<void> setupPush() async {
-    Logs().d("SetupPush");
+    Logs().d('SetupPush');
     if (client.onLoginStateChanged.value != LoginState.loggedIn ||
         !PlatformInfos.isMobile ||
         matrix == null) {
@@ -371,7 +371,7 @@ class BackgroundPush {
   Future<void> setupUp() async {
     await UnifiedPushUi(
       context: matrix!.context,
-      instances: ["default"],
+      instances: ['default'],
       unifiedPushFunctions: UPFunctions(),
       showNoDistribDialog: false,
       onNoDistribDialogDismissed: () {}, // TODO: Implement me
