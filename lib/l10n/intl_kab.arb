@@ -58,7 +58,7 @@
         "type": "String",
         "placeholders": {}
     },
-    "confirmMatrixId": "Ttxil-ik·im, sentem asulay-ik·im n Matrix akken ad tekkseḍ amiḍan-ik·im.",
+    "confirmMatrixId": "Ttxil-ik·im, sentem asulay-ik·im n Matriks akken ad tekkseḍ amiḍan-ik·im.",
     "supposedMxid": "A win yufan, ad yili d {mxid}",
     "@supposedMxid": {
         "type": "String",
@@ -296,7 +296,7 @@
         "type": "String",
         "placeholders": {}
     },
-    "commandHint_markasdm": "Creḍ d akken taxxamt n yizen usrid i usulay Matrix i d-yettunefken",
+    "commandHint_markasdm": "Creḍ d akken taxxamt n yizen usrid i Usulay Matriks i d-yettunefken",
     "commandHint_markasgroup": "Creḍ am ugraw",
     "commandHint_ban": "Gdel aseqdac i d-ittunefken seg texxamt-agi",
     "@commandHint_ban": {
@@ -1623,5 +1623,46 @@
     "notificationRuleContainsDisplayName": "Yegber Isem n ubeqqeḍ",
     "notificationRuleContainsDisplayNameDescription": "Azen ilɣa i useqdac ma yella yizen yegber Isem-is n ubeqqeḍ.",
     "notificationRuleIsRoomMention": "Abdar n Texxamt",
-    "notificationRuleIsRoomMentionDescription": "Azen ilɣa i useqdac ticki yella ubdar n texxamt."
+    "notificationRuleIsRoomMentionDescription": "Azen ilɣa i useqdac ticki yella ubdar n texxamt.",
+    "badServerLoginTypesException": "Aqeddac agejdan issefrak anawen n tuqqna:\n{serverVersions}\nMaca asnas-agi issefrak kan:\n{supportedVersions}",
+    "@badServerLoginTypesException": {
+        "type": "String",
+        "placeholders": {
+            "serverVersions": {
+                "type": "String"
+            },
+            "supportedVersions": {
+                "type": "String"
+            }
+        }
+    },
+    "sendTypingNotifications": "Azen alɣu ttaruɣ",
+    "swipeRightToLeftToReply": "Zuɣer seg uyeffus ɣer uzelmaḍ akken ad d-terreḍ",
+    "badServerVersionsException": "Aqeddac agejdan issefrak ileqman Spec:\n{serverVersions}\nMaca asnas-agi issefrak kan {supportedVersions}",
+    "@badServerVersionsException": {
+        "type": "String",
+        "placeholders": {
+            "serverVersions": {
+                "type": "String"
+            },
+            "supportedVersions": {
+                "type": "String"
+            }
+        }
+    },
+    "countChatsAndCountParticipants": "{chats} n yidiwenniyen akked {participants} n yimttekkiyen",
+    "@countChatsAndCountParticipants": {
+        "type": "String",
+        "placeholders": {
+            "chats": {
+                "type": "int"
+            },
+            "participants": {
+                "type": "int"
+            }
+        }
+    },
+    "noMoreChatsFound": "Ulac ugar n idiwenniyen yettwafen…",
+    "noChatsFoundHere": "Ur d-nufi ula d yiwen n udiwenni da. Bdu adiwenni akked yiwen s useqdec n tqeffalt ukessar-a. ⤵️",
+    "joinedChats": "Yettwarna ɣer udiwenni"
 }
