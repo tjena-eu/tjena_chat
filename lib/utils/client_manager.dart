@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:fluffychat/utils/custom_image_resizer.dart';
 import 'package:flutter/foundation.dart';
 
 import 'package:collection/collection.dart';
@@ -122,6 +123,7 @@ abstract class ClientManager {
         // To make room emotes work
         'im.ponies.room_emotes',
       },
+      customImageResizer: customImageResizer,
       logLevel: kReleaseMode ? Level.warning : Level.verbose,
       database: await flutterMatrixSdkDatabaseBuilder(clientName),
       supportedLoginTypes: {
