@@ -1593,7 +1593,7 @@
     "unableToJoinChat": "Ur yezmir ara ad yernu ɣer udiwenni. Ahat aseqdac n udiwenni-agi imdel-it yakan.",
     "previous": "Uzwir",
     "otherPartyNotLoggedIn": "Aḥric nniḍen ur yeqqin ara akka tura, ihi ur yezmir ara ad d-yeṭṭef iznan!",
-    "appWantsToUseForLogin": "Seqdec '{server]' akken ad teqqneḍ",
+    "appWantsToUseForLogin": "Seqdec '{server}' akken ad teqqneḍ",
     "@appWantsToUseForLogin": {
         "type": "String",
         "placeholders": {
