@@ -53,6 +53,7 @@ jobs:
           mkdir public/nightly
           cp -r build/web/* public/
           cp -r build/web/* public/nightly/
+          echo "app.fluffy.chat" >> public/CNAME
       - name: Deploy to GitHub Pages
         if: startsWith(github.ref, 'refs/tags/v')
         uses: peaceiris/actions-gh-pages@v4
