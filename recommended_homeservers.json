@@ -26,15 +26,6 @@
                 "All",
                 "English"
             ]
-        },
-        {
-            "name": "frei.chat",
-            "description": "frei.chat was opened on January 23rd, 2022 and enjoys new users every day.",
-            "reg_method": "oidc",
-            "languages": [
-                "All",
-                "Deutsch"
-            ]
         }
     ]
 }
