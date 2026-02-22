@@ -75,13 +75,13 @@ class SignInViewModel extends ValueNotifier<SignInState> {
 
       publicHomeservers.sort(sortHomeservers);
 
-      final defaultServer =
-          publicHomeservers.singleWhereOrNull(
-            (server) => server.name == AppSettings.defaultHomeserver.value,
-          ) ??
-          defaultHomeserverData;
+      final defaultServer = publicHomeservers.singleWhereOrNull(
+        (server) => server.name == AppSettings.defaultHomeserver.value,
+      );
 
-      publicHomeservers.insert(0, defaultServer);
+      if (defaultServer == null) {
+        publicHomeservers.insert(0, defaultHomeserverData);
+      }
 
       value = value.copyWith(
         selectedHomeserver: value.selectedHomeserver ?? publicHomeservers.first,
