@@ -91,6 +91,7 @@ class SignInPage extends StatelessWidget {
                         itemCount: publicHomeservers.length,
                         itemBuilder: (context, i) {
                           final server = publicHomeservers[i];
+                          final homepage = server.homepage;
                           return RadioListTile.adaptive(
                             value: server,
                             radioScaleFactor:
@@ -104,19 +105,18 @@ class SignInPage extends StatelessWidget {
                             title: Row(
                               children: [
                                 Expanded(child: Text(server.name ?? 'Unknown')),
-                                SizedBox.square(
-                                  dimension: 32,
-                                  child: IconButton(
-                                    icon: const Icon(
-                                      Icons.open_in_new_outlined,
-                                      size: 16,
-                                    ),
-                                    onPressed: () => launchUrlString(
-                                      server.homepage ??
-                                          'https://${server.name}',
+                                if (homepage != null)
+                                  SizedBox.square(
+                                    dimension: 32,
+                                    child: IconButton(
+                                      icon: const Icon(
+                                        Icons.open_in_new_outlined,
+                                        size: 16,
+                                      ),
+                                      onPressed: () =>
+                                          launchUrlString(homepage),
                                     ),
                                   ),
-                                ),
                               ],
                             ),
                             subtitle: Column(
