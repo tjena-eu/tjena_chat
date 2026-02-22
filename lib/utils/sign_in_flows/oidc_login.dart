@@ -20,7 +20,7 @@ Future<void> oidcLoginFlow(
 ) async {
   Logs().i('Starting Matrix Native OIDC Flow...');
   final redirectUrl = kIsWeb
-      ? Uri.parse(html.window.location.href).resolveUri(Uri(query: ''))
+      ? Uri.parse(html.window.location.href.split('#').first.split('?').first)
       : (PlatformInfos.isMobile || PlatformInfos.isWeb || PlatformInfos.isMacOS)
       ? Uri.parse('${AppConfig.appOpenUrlScheme.toLowerCase()}:/login')
       : Uri.parse('http://localhost:3001/login');
