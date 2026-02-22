@@ -7,9 +7,7 @@ import 'package:universal_html/html.dart' as html;
 
 import 'package:fluffychat/config/app_config.dart';
 import 'package:fluffychat/config/setting_keys.dart';
-import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/utils/platform_infos.dart';
-import 'package:fluffychat/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.dart';
 
 Future<void> oidcLoginFlow(
   Client client,
@@ -62,17 +60,6 @@ Future<void> oidcLoginFlow(
     prompt: signUp ? 'create' : null,
   );
 
-  if (!PlatformInfos.isMobile && !PlatformInfos.isMacOS) {
-    final consent = await showOkCancelAlertDialog(
-      context: context,
-      title: L10n.of(
-        context,
-      ).appWantsToUseForLogin(client.homeserver!.toString()),
-      message: L10n.of(context).appWantsToUseForLoginDescription,
-      okLabel: L10n.of(context).continueText,
-    );
-    if (consent != OkCancelResult.ok) return;
-  }
   if (!context.mounted) return;
 
   final returnUrlString = await FlutterWebAuth2.authenticate(
