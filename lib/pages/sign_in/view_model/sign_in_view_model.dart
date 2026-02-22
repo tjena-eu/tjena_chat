@@ -7,7 +7,7 @@ import 'package:matrix/matrix_api_lite/utils/logs.dart';
 
 import 'package:fluffychat/config/app_config.dart';
 import 'package:fluffychat/config/setting_keys.dart';
-import 'package:fluffychat/pages/sign_in/view_model/flows/sort_homeservers.dart';
+import 'package:fluffychat/pages/sign_in/utils/sort_homeservers.dart';
 import 'package:fluffychat/pages/sign_in/view_model/model/public_homeserver_data.dart';
 import 'package:fluffychat/pages/sign_in/view_model/sign_in_state.dart';
 import 'package:fluffychat/widgets/matrix.dart';

@@ -13,13 +13,17 @@ import 'package:fluffychat/widgets/layouts/login_scaffold.dart';
 import 'package:fluffychat/widgets/matrix.dart';
 
 class IntroPage extends StatelessWidget {
-  final bool isLoading;
-  final String? loggingInToHomeserver;
+  final bool isLoading, hasPresetHomeserver;
+  final String? loggingInToHomeserver, welcomeText;
+  final VoidCallback login;
 
   const IntroPage({
     required this.isLoading,
     required this.loggingInToHomeserver,
     super.key,
+    required this.hasPresetHomeserver,
+    required this.welcomeText,
+    required this.login,
   });
 
   @override
@@ -119,7 +123,7 @@ class IntroPage extends StatelessWidget {
                               horizontal: 32.0,
                             ),
                             child: SelectableLinkify(
-                              text: L10n.of(context).appIntro,
+                              text: welcomeText ?? L10n.of(context).appIntro,
                               textScaleFactor: MediaQuery.textScalerOf(
                                 context,
                               ).scale(1),
@@ -138,41 +142,42 @@ class IntroPage extends StatelessWidget {
                               mainAxisSize: .min,
                               crossAxisAlignment: .stretch,
                               children: [
-                                ElevatedButton(
-                                  style: ElevatedButton.styleFrom(
-                                    backgroundColor:
-                                        theme.colorScheme.secondary,
-                                    foregroundColor:
-                                        theme.colorScheme.onSecondary,
+                                if (!hasPresetHomeserver)
+                                  ElevatedButton(
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor:
+                                          theme.colorScheme.secondary,
+                                      foregroundColor:
+                                          theme.colorScheme.onSecondary,
+                                    ),
+                                    onPressed: () => context.go(
+                                      '${GoRouterState.of(context).uri.path}/sign_up',
+                                    ),
+                                    child: Text(
+                                      L10n.of(context).createNewAccount,
+                                    ),
                                   ),
-                                  onPressed: () => context.go(
-                                    '${GoRouterState.of(context).uri.path}/sign_up',
-                                  ),
-                                  child: Text(
-                                    L10n.of(context).createNewAccount,
-                                  ),
-                                ),
                                 SizedBox(height: 16),
                                 ElevatedButton(
-                                  onPressed: () => context.go(
-                                    '${GoRouterState.of(context).uri.path}/sign_in',
-                                  ),
+                                  onPressed: login,
                                   child: Text(L10n.of(context).signIn),
                                 ),
-                                TextButton(
-                                  onPressed: () async {
-                                    final client = await Matrix.of(
-                                      context,
-                                    ).getLoginClient();
-                                    context.go(
-                                      '${GoRouterState.of(context).uri.path}/login',
-                                      extra: client,
-                                    );
-                                  },
-                                  child: Text(
-                                    L10n.of(context).loginWithMatrixId,
+
+                                if (!hasPresetHomeserver)
+                                  TextButton(
+                                    onPressed: () async {
+                                      final client = await Matrix.of(
+                                        context,
+                                      ).getLoginClient();
+                                      context.go(
+                                        '${GoRouterState.of(context).uri.path}/login',
+                                        extra: client,
+                                      );
+                                    },
+                                    child: Text(
+                                      L10n.of(context).loginWithMatrixId,
+                                    ),
                                   ),
-                                ),
                               ],
                             ),
                           ),

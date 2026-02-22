@@ -5,11 +5,11 @@ import 'package:go_router/go_router.dart';
 import 'package:url_launcher/url_launcher_string.dart';
 
 import 'package:fluffychat/l10n/l10n.dart';
-import 'package:fluffychat/pages/sign_in/view_model/flows/oidc_login.dart';
-import 'package:fluffychat/pages/sign_in/view_model/flows/sso_login.dart';
 import 'package:fluffychat/pages/sign_in/view_model/model/public_homeserver_data.dart';
 import 'package:fluffychat/utils/localized_exception_extension.dart';
 import 'package:fluffychat/utils/platform_infos.dart';
+import 'package:fluffychat/utils/sign_in_flows/oidc_login.dart';
+import 'package:fluffychat/utils/sign_in_flows/sso_login.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.dart';
 import 'package:fluffychat/widgets/matrix.dart';
 
