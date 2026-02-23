@@ -25,13 +25,20 @@ jobs:
       - name: Check license compliance
         run: dart run license_checker check-licenses -c licenses.yaml --problematic
       - run: flutter analyze
+      - run: dart run dart_code_linter:metrics check-unused-code lib
+      - run: dart run dart_code_linter:metrics check-unused-files lib
+      - run: dart run dart_code_linter:metrics check-unused-l10n lib
+      - name: Check for commented-out Dart code with semicolons
+        run: |
+          if grep -R --include="*.dart" -nE '^[[:space:]]*//[^/<].*;[[:space:]]*$' lib/; then
+            echo ""
+            echo "❌ Found commented-out Dart code ending with semicolon."
+            exit 1
+          fi
       - name: Add Firebase Messaging
         run: ./scripts/add-firebase-messaging.sh
       - run: flutter analyze
       - run: flutter test
-      - run: dart run dart_code_linter:metrics check-unused-code lib
-      - run: dart run dart_code_linter:metrics check-unused-files lib
-      - run: dart run dart_code_linter:metrics check-unused-l10n lib
 
   build_debug_apk:
     runs-on: ubuntu-latest
