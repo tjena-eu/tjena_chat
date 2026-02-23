@@ -68,7 +68,7 @@
         "type": "String",
         "placeholders": {}
     },
-    "areGuestsAllowedToJoin": "¿Son permitidos los usuarios de visita?",
+    "areGuestsAllowedToJoin": "¿Pueden los usuarios invitados unirse?",
     "@areGuestsAllowedToJoin": {
         "type": "String",
         "placeholders": {}
@@ -3060,5 +3060,99 @@
     "poll": "Encuesta",
     "startPoll": "Iniciar encuesta",
     "endPoll": "Finalizar encuesta",
-    "answersVisible": "Respuestas visibles"
+    "answersVisible": "Respuestas visibles",
+    "spaceMemberOf": "Espacio miembro de {spaces}",
+    "@spaceMemberOf": {
+        "type": "String",
+        "placeholders": {
+            "spaces": {
+                "type": "String"
+            }
+        }
+    },
+    "spaceMemberOfCanKnock": "Miembros del espacio de {spaces} pueden llamar",
+    "@spaceMemberOfCanKnock": {
+        "type": "String",
+        "placeholders": {
+            "spaces": {
+                "type": "String"
+            }
+        }
+    },
+    "donate": "Donar",
+    "answersHidden": "Respuestas ocultas",
+    "pollQuestion": "Pregunta de encuesta",
+    "answerOption": "Respuesta",
+    "addAnswerOption": "Añadir respuesta",
+    "allowMultipleAnswers": "Permitir varias respuestas",
+    "pollHasBeenEnded": "La encuesta ha terminado",
+    "countVotes": "{count, plural, =1{One vote} other{{count} votes}}",
+    "@countVotes": {
+        "type": "int",
+        "placeholders": {
+            "count": {
+                "type": "int"
+            }
+        }
+    },
+    "answersWillBeVisibleWhenPollHasEnded": "Las respuestas serán visibles cuando termine la encuesta",
+    "replyInThread": "Contestar en el hilo",
+    "countReplies": "{count, plural, =1{One reply} other{{count} replies}}",
+    "@countReplies": {
+        "type": "int",
+        "placeholders": {
+            "count": {
+                "type": "int"
+            }
+        }
+    },
+    "thread": "Hilo",
+    "backToMainChat": "Volver al chat pricipal",
+    "saveChanges": "Guardar cambios",
+    "createSticker": "Crear sticker o emoticono",
+    "useAsSticker": "Usar como sticker",
+    "useAsEmoji": "Usar como emoticono",
+    "stickerPackNameAlreadyExists": "El nombre del paquete de stickers ya existe",
+    "newStickerPack": "Nuevo paquete de stickers",
+    "stickerPackName": "Nombre del paquete de stickers",
+    "attribution": "Atribución",
+    "skipChatBackup": "Omitir copia de seguridad del chat",
+    "skipChatBackupWarning": "¿Estás seguro? Sin habilitar la copia de seguridad del chat puedes perder el acceso a tus mensajes si cambias de dispositivo.",
+    "loadingMessages": "Cargando mensajes",
+    "setupChatBackup": "Configurar la copia de seguridad del chat",
+    "noMoreResultsFound": "No se han encontrado más resultados",
+    "chatSearchedUntil": "Chat buscado hasta {time}",
+    "@chatSearchedUntil": {
+        "type": "String",
+        "placeholders": {
+            "time": {
+                "type": "String"
+            }
+        }
+    },
+    "federationBaseUrl": "URL de la Federación Base",
+    "clientWellKnownInformation": "Información conocida del cliente:",
+    "baseUrl": "URL Base",
+    "identityServer": "Identidad del Servidor:",
+    "versionWithNumber": "Versión: {version}",
+    "@versionWithNumber": {
+        "type": "String",
+        "placeholders": {
+            "version": {
+                "type": "String"
+            }
+        }
+    },
+    "logs": "Registros",
+    "advancedConfigs": "Configuración avanzada",
+    "advancedConfigurations": "Configuraciones Avanzadas",
+    "signIn": "Iniciar sesión",
+    "createNewAccount": "Crear nueva cuenta",
+    "signUpGreeting": "¡FluffyChat está descentralizado! ¡Selecciona un servidor donde quieres crear tu cuenta y sigamos!",
+    "signInGreeting": "¿Ya tienes una cuenta en Matrix? ¡Bienvenido de nuevo! Selecciona tu servidor e inicia sesión.",
+    "appIntro": "Con FluffyChat puedes hablar con tus amigos ¡Es un sistema de mensajería de [matrix] seguro y descentralizado! Aprende más en https://matrix.org si quieres o simplemente inicia sesión.",
+    "theProcessWasCanceled": "El proceso se ha cancelado.",
+    "join": "Unirse",
+    "searchOrEnterHomeserverAddress": "Buscar o pon la dirección de tu servidor local",
+    "matrixId": "Matrix ID"
 }
