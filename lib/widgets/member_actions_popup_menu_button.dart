@@ -45,40 +45,22 @@ Future<void> showMemberActionsPopupMenu({
           children: [
             Avatar(
               name: displayname,
+              size: 30,
               mxContent: user.avatarUrl,
               presenceUserId: user.id,
               presenceBackgroundColor: theme.colorScheme.surfaceContainer,
             ),
-            Column(
-              mainAxisSize: .min,
-              crossAxisAlignment: .start,
-              children: [
-                ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 128),
-                  child: Text(
-                    displayname,
-                    textAlign: TextAlign.center,
-                    style: theme.textTheme.labelLarge,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-                ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 128),
-                  child: Text(
-                    user.id,
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(fontSize: 10),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-              ],
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 200),
+              child: Text(
+                displayname,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
             ),
           ],
         ),
       ),
-      const PopupMenuDivider(),
       if (onMention != null)
         PopupMenuItem(
           value: _MemberActions.mention,
