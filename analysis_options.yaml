@@ -45,8 +45,6 @@ dart_code_linter:
     - avoid-unnecessary-conditionals
     # TODO:
     # - member-ordering
-    # - avoid-late-keyword
-    # - avoid-non-null-assertion
     # - avoid-global-state
     # - prefer-match-file-name
     # - avoid-banned-imports:
@@ -61,6 +59,7 @@ dart_code_linter:
     - prefer-media-query-direct-access
     - avoid-wrapping-in-padding
     - prefer-correct-edge-insets-constructor
+    - avoid-returning-widgets
     # TODO:
     # - avoid-returning-widgets
     # - prefer-single-widget-per-file:
