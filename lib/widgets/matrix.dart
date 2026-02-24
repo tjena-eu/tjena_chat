@@ -32,8 +32,6 @@ import '../utils/account_bundles.dart';
 import '../utils/background_push.dart';
 import 'local_notifications_extension.dart';
 
-// import 'package:flutter_secure_storage/flutter_secure_storage.dart';
-
 class Matrix extends StatefulWidget {
   final Widget? child;
 
