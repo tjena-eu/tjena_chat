@@ -1,3 +1,4 @@
+import 'package:fluffychat/config/setting_keys.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
@@ -64,6 +65,8 @@ Future<void> connectToHomeserverFlow(
       setState(AsyncSnapshot.withData(ConnectionState.done, true));
       return;
     }
+
+    await AppSettings.defaultHomeserver.setItem(homeserverInput);
 
     if (context.mounted) {
       setState(AsyncSnapshot.withData(ConnectionState.done, true));
