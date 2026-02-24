@@ -128,15 +128,6 @@ class _MxcImageState extends State<MxcImage> {
     WidgetsBinding.instance.addPostFrameCallback((_) => _tryLoad());
   }
 
-  Widget placeholder(BuildContext context) =>
-      widget.placeholder?.call(context) ??
-      Container(
-        width: widget.width,
-        height: widget.height,
-        alignment: Alignment.center,
-        child: const CircularProgressIndicator.adaptive(strokeWidth: 2),
-      );
-
   @override
   Widget build(BuildContext context) {
     final data = _imageData;
@@ -172,7 +163,34 @@ class _MxcImageState extends State<MxcImage> {
                 },
               ),
             )
-          : placeholder(context),
+          : _MxcImagePlaceholder(
+              width: widget.width,
+              height: widget.height,
+              placeholder: widget.placeholder,
+            ),
     );
+  }
+}
+
+class _MxcImagePlaceholder extends StatelessWidget {
+  final double? width;
+  final double? height;
+  final Widget Function(BuildContext context)? placeholder;
+
+  const _MxcImagePlaceholder({
+    required this.width,
+    required this.height,
+    required this.placeholder,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return placeholder?.call(context) ??
+        Container(
+          width: width,
+          height: height,
+          alignment: Alignment.center,
+          child: const CircularProgressIndicator.adaptive(strokeWidth: 2),
+        );
   }
 }
