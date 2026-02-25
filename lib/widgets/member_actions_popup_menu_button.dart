@@ -34,6 +34,8 @@ Future<void> showMemberActionsPopupMenu({
     Offset.zero & overlay.size,
   );
 
+  const defaultPowerLevels = {0, 50, 100, 9007199254740991};
+
   final action = await showMenu<_MemberActions>(
     context: context,
     position: position,
@@ -124,7 +126,7 @@ Future<void> showMemberActionsPopupMenu({
           ),
       ],
       if (user.canChangeUserPowerLevel ||
-          !{0, 50, 100}.contains(user.powerLevel))
+          !defaultPowerLevels.contains(user.powerLevel))
         PopupMenuItem(
           value: _MemberActions.setPowerLevel,
           enabled: user.canChangeUserPowerLevel,
@@ -137,7 +139,7 @@ Future<void> showMemberActionsPopupMenu({
                     ? L10n.of(context).setPowerLevel
                     : L10n.of(context).powerLevel,
               ),
-              if (!{0, 50, 100}.contains(user.powerLevel))
+              if (!defaultPowerLevels.contains(user.powerLevel))
                 Text(' (${user.powerLevel})'),
             ],
           ),

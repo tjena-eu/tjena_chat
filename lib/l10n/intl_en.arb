@@ -3133,5 +3133,6 @@
     "removeModeratorRights": "Remove moderator rights",
     "removeAdminRights": "Remove admin rights",
     "powerLevel": "Power level",
-    "setPowerLevelDescription": "Power levels define what a member is allowed to do in this room and usually range between 0 and 100."
+    "setPowerLevelDescription": "Power levels define what a member is allowed to do in this room and usually range between 0 and 100.",
+    "owner": "Owner"
 }
