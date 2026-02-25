@@ -86,10 +86,13 @@ class AdaptiveDialogAction extends StatelessWidget {
 class AdaptiveDialogInkWell extends StatelessWidget {
   final Widget child;
   final VoidCallback onTap;
+  final EdgeInsets padding;
+
   const AdaptiveDialogInkWell({
     super.key,
     required this.onTap,
     required this.child,
+    this.padding = const EdgeInsets.all(16),
   });
 
   @override
@@ -100,7 +103,7 @@ class AdaptiveDialogInkWell extends StatelessWidget {
         onPressed: onTap,
         borderRadius: BorderRadius.circular(AppConfig.borderRadius / 2),
         color: theme.colorScheme.surfaceBright,
-        padding: EdgeInsets.all(8),
+        padding: padding,
         child: child,
       );
     }
@@ -111,7 +114,7 @@ class AdaptiveDialogInkWell extends StatelessWidget {
         borderRadius: BorderRadius.circular(AppConfig.borderRadius / 2),
         onTap: onTap,
         child: Padding(
-          padding: const EdgeInsets.all(8.0),
+          padding: padding,
           child: Center(child: child),
         ),
       ),
@@ -135,6 +138,7 @@ class AdaptiveIconTextButton extends StatelessWidget {
     final color = Theme.of(context).colorScheme.secondary;
     return Expanded(
       child: AdaptiveDialogInkWell(
+        padding: EdgeInsets.all(8.0),
         onTap: onTap,
         child: Column(
           mainAxisSize: .min,
