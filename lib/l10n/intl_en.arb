@@ -3126,5 +3126,12 @@
     "theProcessWasCanceled": "The process was canceled.",
     "join": "Join",
     "searchOrEnterHomeserverAddress": "Search or enter homeserver address",
-    "matrixId": "Matrix ID"
+    "matrixId": "Matrix ID",
+    "setPowerLevel": "Set power level",
+    "makeModerator": "Make moderator",
+    "makeAdmin": "Make admin",
+    "removeModeratorRights": "Remove moderator rights",
+    "removeAdminRights": "Remove admin rights",
+    "powerLevel": "Power level",
+    "setPowerLevelDescription": "Power levels define what a member is allowed to do in this room and usually range between 0 and 100."
 }
