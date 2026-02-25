@@ -227,7 +227,10 @@ class UserDialog extends StatelessWidget {
                   AdaptiveIconTextButton(
                     label: L10n.of(context).share,
                     icon: Icons.adaptive.share,
-                    onTap: () => FluffyShare.share(profile.userId, context),
+                    onTap: () => FluffyShare.share(
+                      'https://matrix.to/#/${profile.userId}',
+                      context,
+                    ),
                   ),
                 ],
               ),
