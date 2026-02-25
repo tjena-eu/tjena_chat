@@ -82,3 +82,73 @@ class AdaptiveDialogAction extends StatelessWidget {
     }
   }
 }
+
+class AdaptiveDialogInkWell extends StatelessWidget {
+  final Widget child;
+  final VoidCallback onTap;
+  const AdaptiveDialogInkWell({
+    super.key,
+    required this.onTap,
+    required this.child,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    if ({TargetPlatform.iOS, TargetPlatform.macOS}.contains(theme.platform)) {
+      return CupertinoButton(
+        onPressed: onTap,
+        borderRadius: BorderRadius.circular(AppConfig.borderRadius / 2),
+        color: theme.colorScheme.surfaceBright,
+        padding: EdgeInsets.all(8),
+        child: child,
+      );
+    }
+    return Material(
+      color: theme.colorScheme.surfaceBright,
+      borderRadius: BorderRadius.circular(AppConfig.borderRadius / 2),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(AppConfig.borderRadius / 2),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.all(8.0),
+          child: Center(child: child),
+        ),
+      ),
+    );
+  }
+}
+
+class AdaptiveIconTextButton extends StatelessWidget {
+  final String label;
+  final IconData icon;
+  final VoidCallback onTap;
+  const AdaptiveIconTextButton({
+    super.key,
+    required this.label,
+    required this.icon,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final color = Theme.of(context).colorScheme.secondary;
+    return Expanded(
+      child: AdaptiveDialogInkWell(
+        onTap: onTap,
+        child: Column(
+          mainAxisSize: .min,
+          children: [
+            Icon(icon, color: color),
+            Text(
+              label,
+              style: TextStyle(fontSize: 12, color: color),
+              maxLines: 1,
+              overflow: .ellipsis,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}

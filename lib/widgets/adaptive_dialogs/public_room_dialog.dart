@@ -6,7 +6,9 @@ import 'package:go_router/go_router.dart';
 import 'package:matrix/matrix.dart';
 
 import 'package:fluffychat/l10n/l10n.dart';
+import 'package:fluffychat/utils/fluffy_share.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.dart';
+import 'package:fluffychat/widgets/adaptive_dialogs/show_text_input_dialog.dart';
 import '../../config/themes.dart';
 import '../../utils/url_launcher.dart';
 import '../avatar.dart';
@@ -90,15 +92,8 @@ class PublicRoomDialog extends StatelessWidget {
     final roomLink = roomAlias ?? chunk?.roomId;
     var copied = false;
     return AlertDialog.adaptive(
-      title: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 256),
-        child: Text(
-          chunk?.name ?? roomAlias?.localpart ?? chunk?.roomId ?? 'Unknown',
-          textAlign: TextAlign.center,
-        ),
-      ),
       content: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 256, maxHeight: 256),
+        constraints: const BoxConstraints(maxWidth: 256),
         child: FutureBuilder<PublishedRoomsChunk>(
           future: _search(context),
           builder: (context, snapshot) {
@@ -109,125 +104,196 @@ class PublicRoomDialog extends StatelessWidget {
             final topic = profile?.topic;
             return SingleChildScrollView(
               child: Column(
-                spacing: 8,
+                spacing: 16,
                 mainAxisSize: .min,
                 crossAxisAlignment: .stretch,
                 children: [
-                  if (roomLink != null)
-                    HoverBuilder(
-                      builder: (context, hovered) => StatefulBuilder(
-                        builder: (context, setState) => MouseRegion(
-                          cursor: SystemMouseCursors.click,
-                          child: GestureDetector(
-                            onTap: () {
-                              Clipboard.setData(ClipboardData(text: roomLink));
-                              setState(() {
-                                copied = true;
-                              });
-                            },
-                            child: RichText(
-                              text: TextSpan(
-                                children: [
-                                  WidgetSpan(
-                                    child: Padding(
-                                      padding: const EdgeInsets.only(
-                                        right: 4.0,
-                                      ),
-                                      child: AnimatedScale(
-                                        duration:
-                                            FluffyThemes.animationDuration,
-                                        curve: FluffyThemes.animationCurve,
-                                        scale: hovered
-                                            ? 1.33
-                                            : copied
-                                            ? 1.25
-                                            : 1.0,
-                                        child: Icon(
-                                          copied
-                                              ? Icons.check_circle
-                                              : Icons.copy,
-                                          size: 12,
-                                          color: copied ? Colors.green : null,
+                  Row(
+                    spacing: 12,
+                    children: [
+                      Avatar(
+                        mxContent: avatar,
+                        name: profile?.name ?? roomLink,
+                        size: Avatar.defaultSize * 1.5,
+                        onTap: avatar != null
+                            ? () => showDialog(
+                                context: context,
+                                builder: (_) => MxcImageViewer(avatar),
+                              )
+                            : null,
+                      ),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: .start,
+                          children: [
+                            Text(
+                              profile?.name ??
+                                  roomLink ??
+                                  profile?.roomId ??
+                                  ' - ',
+                              maxLines: 1,
+                              overflow: .ellipsis,
+                              style: TextStyle(fontSize: 16),
+                            ),
+                            const SizedBox(height: 8),
+                            if (roomLink != null)
+                              HoverBuilder(
+                                builder: (context, hovered) => StatefulBuilder(
+                                  builder: (context, setState) => MouseRegion(
+                                    cursor: SystemMouseCursors.click,
+                                    child: GestureDetector(
+                                      onTap: () {
+                                        Clipboard.setData(
+                                          ClipboardData(text: roomLink),
+                                        );
+                                        setState(() {
+                                          copied = true;
+                                        });
+                                      },
+                                      child: RichText(
+                                        text: TextSpan(
+                                          children: [
+                                            WidgetSpan(
+                                              child: Padding(
+                                                padding: const EdgeInsets.only(
+                                                  right: 4.0,
+                                                ),
+                                                child: AnimatedScale(
+                                                  duration: FluffyThemes
+                                                      .animationDuration,
+                                                  curve: FluffyThemes
+                                                      .animationCurve,
+                                                  scale: hovered
+                                                      ? 1.33
+                                                      : copied
+                                                      ? 1.25
+                                                      : 1.0,
+                                                  child: Icon(
+                                                    copied
+                                                        ? Icons.check_circle
+                                                        : Icons.copy,
+                                                    size: 12,
+                                                    color: copied
+                                                        ? Colors.green
+                                                        : null,
+                                                  ),
+                                                ),
+                                              ),
+                                            ),
+                                            TextSpan(text: roomLink),
+                                          ],
+                                          style: theme.textTheme.bodyMedium
+                                              ?.copyWith(fontSize: 10),
                                         ),
+                                        textAlign: TextAlign.center,
                                       ),
                                     ),
                                   ),
-                                  TextSpan(text: roomLink),
-                                ],
-                                style: theme.textTheme.bodyMedium?.copyWith(
-                                  fontSize: 10,
                                 ),
                               ),
-                              textAlign: TextAlign.center,
+
+                            if (profile?.numJoinedMembers != null)
+                              Text(
+                                L10n.of(context).countParticipants(
+                                  profile?.numJoinedMembers ?? 0,
+                                ),
+                                style: const TextStyle(fontSize: 10),
+                                textAlign: TextAlign.center,
+                              ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  if (topic != null && topic.isNotEmpty)
+                    ConstrainedBox(
+                      constraints: BoxConstraints(maxHeight: 200),
+                      child: Scrollbar(
+                        thumbVisibility: true,
+                        trackVisibility: true,
+                        child: SingleChildScrollView(
+                          child: SelectableLinkify(
+                            text: topic,
+                            textScaleFactor: MediaQuery.textScalerOf(
+                              context,
+                            ).scale(1),
+                            textAlign: .start,
+                            options: const LinkifyOptions(humanize: false),
+                            linkStyle: TextStyle(
+                              color: theme.colorScheme.primary,
+                              decoration: TextDecoration.underline,
+                              decorationColor: theme.colorScheme.primary,
                             ),
+                            onOpen: (url) =>
+                                UrlLauncher(context, url.url).launchUrl(),
                           ),
                         ),
                       ),
                     ),
-                  Center(
-                    child: Avatar(
-                      mxContent: avatar,
-                      name: profile?.name ?? roomLink,
-                      size: Avatar.defaultSize * 2,
-                      onTap: avatar != null
-                          ? () => showDialog(
-                              context: context,
-                              builder: (_) => MxcImageViewer(avatar),
-                            )
-                          : null,
+
+                  Row(
+                    mainAxisAlignment: .spaceBetween,
+                    spacing: 4,
+                    children: [
+                      AdaptiveIconTextButton(
+                        label: L10n.of(context).report,
+                        icon: Icons.gavel_outlined,
+                        onTap: () async {
+                          Navigator.of(context).pop();
+                          final reason = await showTextInputDialog(
+                            context: context,
+                            title: L10n.of(context).whyDoYouWantToReportThis,
+                            okLabel: L10n.of(context).report,
+                            cancelLabel: L10n.of(context).cancel,
+                            hintText: L10n.of(context).reason,
+                          );
+                          if (reason == null || reason.isEmpty) return;
+                          await showFutureLoadingDialog(
+                            context: context,
+                            future: () => Matrix.of(context).client.reportRoom(
+                              chunk?.roomId ?? roomAlias!,
+                              reason,
+                            ),
+                          );
+                        },
+                      ),
+                      AdaptiveIconTextButton(
+                        label: L10n.of(context).copy,
+                        icon: Icons.copy_outlined,
+                        onTap: () =>
+                            Clipboard.setData(ClipboardData(text: roomLink!)),
+                      ),
+                      AdaptiveIconTextButton(
+                        label: L10n.of(context).share,
+                        icon: Icons.adaptive.share,
+                        onTap: () => FluffyShare.share(
+                          'https://matrix.to/#/$roomLink',
+                          context,
+                        ),
+                      ),
+                    ],
+                  ),
+                  AdaptiveDialogInkWell(
+                    onTap: () => _joinRoom(context),
+                    child: Text(
+                      chunk?.joinRule == 'knock' &&
+                              Matrix.of(
+                                    context,
+                                  ).client.getRoomById(chunk!.roomId) ==
+                                  null
+                          ? L10n.of(context).knock
+                          : chunk?.roomType == 'm.space'
+                          ? L10n.of(context).joinSpace
+                          : L10n.of(context).joinRoom,
+                      style: TextStyle(color: theme.colorScheme.secondary),
                     ),
                   ),
-                  if (profile?.numJoinedMembers != null)
-                    Text(
-                      L10n.of(
-                        context,
-                      ).countParticipants(profile?.numJoinedMembers ?? 0),
-                      style: const TextStyle(fontSize: 10),
-                      textAlign: TextAlign.center,
-                    ),
-                  if (topic != null && topic.isNotEmpty)
-                    SelectableLinkify(
-                      text: topic,
-                      textScaleFactor: MediaQuery.textScalerOf(
-                        context,
-                      ).scale(1),
-                      textAlign: TextAlign.center,
-                      options: const LinkifyOptions(humanize: false),
-                      linkStyle: TextStyle(
-                        color: theme.colorScheme.primary,
-                        decoration: TextDecoration.underline,
-                        decorationColor: theme.colorScheme.primary,
-                      ),
-                      onOpen: (url) =>
-                          UrlLauncher(context, url.url).launchUrl(),
-                    ),
                 ],
               ),
             );
           },
         ),
       ),
-      actions: [
-        AdaptiveDialogAction(
-          bigButtons: true,
-          borderRadius: AdaptiveDialogAction.topRadius,
-          onPressed: () => _joinRoom(context),
-          child: Text(
-            chunk?.joinRule == 'knock' &&
-                    Matrix.of(context).client.getRoomById(chunk!.roomId) == null
-                ? L10n.of(context).knock
-                : chunk?.roomType == 'm.space'
-                ? L10n.of(context).joinSpace
-                : L10n.of(context).joinRoom,
-          ),
-        ),
-        AdaptiveDialogAction(
-          bigButtons: true,
-          borderRadius: AdaptiveDialogAction.bottomRadius,
-          onPressed: Navigator.of(context).pop,
-          child: Text(L10n.of(context).close),
-        ),
-      ],
     );
   }
 }

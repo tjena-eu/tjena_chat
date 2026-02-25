@@ -1,4 +1,3 @@
-import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -6,11 +5,11 @@ import 'package:flutter_linkify/flutter_linkify.dart';
 import 'package:go_router/go_router.dart';
 import 'package:matrix/matrix.dart';
 
-import 'package:fluffychat/config/app_config.dart';
 import 'package:fluffychat/config/themes.dart';
 import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/utils/date_time_extension.dart';
 import 'package:fluffychat/utils/fluffy_share.dart';
+import 'package:fluffychat/widgets/adaptive_dialogs/adaptive_dialog_action.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/show_text_input_dialog.dart';
 import 'package:fluffychat/widgets/avatar.dart';
 import 'package:fluffychat/widgets/presence_builder.dart';
@@ -19,6 +18,8 @@ import '../future_loading_dialog.dart';
 import '../hover_builder.dart';
 import '../matrix.dart';
 import '../mxc_image_viewer.dart';
+
+// ignore: unused_import
 
 class UserDialog extends StatelessWidget {
   static Future<void> show({
@@ -162,23 +163,35 @@ class UserDialog extends StatelessWidget {
               ),
 
               if (statusMsg != null)
-                SelectableLinkify(
-                  text: statusMsg,
-                  textScaleFactor: MediaQuery.textScalerOf(context).scale(1),
-                  textAlign: TextAlign.start,
-                  options: const LinkifyOptions(humanize: false),
-                  linkStyle: TextStyle(
-                    color: theme.colorScheme.primary,
-                    decoration: TextDecoration.underline,
-                    decorationColor: theme.colorScheme.primary,
+                ConstrainedBox(
+                  constraints: BoxConstraints(maxHeight: 200),
+                  child: Scrollbar(
+                    thumbVisibility: true,
+                    trackVisibility: true,
+                    child: SingleChildScrollView(
+                      child: SelectableLinkify(
+                        text: statusMsg,
+                        textScaleFactor: MediaQuery.textScalerOf(
+                          context,
+                        ).scale(1),
+                        textAlign: TextAlign.start,
+                        options: const LinkifyOptions(humanize: false),
+                        linkStyle: TextStyle(
+                          color: theme.colorScheme.primary,
+                          decoration: TextDecoration.underline,
+                          decorationColor: theme.colorScheme.primary,
+                        ),
+                        onOpen: (url) =>
+                            UrlLauncher(context, url.url).launchUrl(),
+                      ),
+                    ),
                   ),
-                  onOpen: (url) => UrlLauncher(context, url.url).launchUrl(),
                 ),
               Row(
                 mainAxisAlignment: .spaceBetween,
                 spacing: 4,
                 children: [
-                  _AdaptiveIconTextButton(
+                  AdaptiveIconTextButton(
                     label: L10n.of(context).block,
                     icon: Icons.block_outlined,
                     onTap: () {
@@ -190,7 +203,7 @@ class UserDialog extends StatelessWidget {
                       );
                     },
                   ),
-                  _AdaptiveIconTextButton(
+                  AdaptiveIconTextButton(
                     label: L10n.of(context).report,
                     icon: Icons.gavel_outlined,
                     onTap: () async {
@@ -211,14 +224,14 @@ class UserDialog extends StatelessWidget {
                       );
                     },
                   ),
-                  _AdaptiveIconTextButton(
+                  AdaptiveIconTextButton(
                     label: L10n.of(context).share,
                     icon: Icons.adaptive.share,
                     onTap: () => FluffyShare.share(profile.userId, context),
                   ),
                 ],
               ),
-              _AdaptiveDialogInkWell(
+              AdaptiveDialogInkWell(
                 onTap: () async {
                   final router = GoRouter.of(context);
                   final roomIdResult = await showFutureLoadingDialog(
@@ -238,71 +251,6 @@ class UserDialog extends StatelessWidget {
             ],
           );
         },
-      ),
-    );
-  }
-}
-
-class _AdaptiveDialogInkWell extends StatelessWidget {
-  final Widget child;
-  final VoidCallback onTap;
-  const _AdaptiveDialogInkWell({required this.onTap, required this.child});
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    if ({TargetPlatform.iOS, TargetPlatform.macOS}.contains(theme.platform)) {
-      return CupertinoButton(
-        onPressed: onTap,
-        borderRadius: BorderRadius.circular(AppConfig.borderRadius / 2),
-        color: theme.colorScheme.surfaceBright,
-        padding: EdgeInsets.all(8),
-        child: child,
-      );
-    }
-    return Material(
-      color: theme.colorScheme.surfaceBright,
-      borderRadius: BorderRadius.circular(AppConfig.borderRadius / 2),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(AppConfig.borderRadius / 2),
-        onTap: onTap,
-        child: Padding(
-          padding: const EdgeInsets.all(8.0),
-          child: Center(child: child),
-        ),
-      ),
-    );
-  }
-}
-
-class _AdaptiveIconTextButton extends StatelessWidget {
-  final String label;
-  final IconData icon;
-  final VoidCallback onTap;
-  const _AdaptiveIconTextButton({
-    required this.label,
-    required this.icon,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final color = Theme.of(context).colorScheme.secondary;
-    return Expanded(
-      child: _AdaptiveDialogInkWell(
-        onTap: onTap,
-        child: Column(
-          mainAxisSize: .min,
-          children: [
-            Icon(icon, color: color),
-            Text(
-              label,
-              style: TextStyle(fontSize: 12, color: color),
-              maxLines: 1,
-              overflow: .ellipsis,
-            ),
-          ],
-        ),
       ),
     );
   }
