@@ -3,12 +3,18 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import 'dart:io';
+
 import 'package:file_picker/file_picker.dart';
 import 'package:fluffychat/l10n/l10n.dart';
+import 'package:fluffychat/utils/platform_infos.dart';
 import 'package:fluffychat/utils/size_string.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:gal/gal.dart';
 import 'package:matrix/matrix.dart';
 import 'package:open_file/open_file.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
 extension MatrixFileExtension on MatrixFile {
@@ -32,6 +38,33 @@ extension MatrixFileExtension on MatrixFile {
         ),
       ),
     );
+  }
+
+  Future<void> saveToDevice(BuildContext context) async {
+    if (kIsWeb || !PlatformInfos.isMobile) {
+      return save(context);
+    }
+    final scaffoldMessenger = ScaffoldMessenger.of(context);
+    final l10n = L10n.of(context);
+    try {
+      if (this is MatrixImageFile) {
+        await Gal.putImageBytes(bytes);
+      } else if (this is MatrixVideoFile) {
+        final tempDir = await getTemporaryDirectory();
+        final tempFile = File('${tempDir.path}/$name');
+        await tempFile.writeAsBytes(bytes);
+        await Gal.putVideo(tempFile.path);
+        await tempFile.delete();
+      } else {
+        return save(context);
+      }
+      if (!context.mounted) return;
+      scaffoldMessenger.showSnackBar(
+        SnackBar(content: Text(l10n.savedToGallery)),
+      );
+    } catch (_) {
+      return save(context);
+    }
   }
 
   FileType get filePickerFileType {

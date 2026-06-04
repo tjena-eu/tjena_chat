@@ -54,6 +54,9 @@ class ImageViewerController extends State<ImageViewer> {
     );
     if (index < 0) index = 0;
     pageController = PageController(initialPage: index);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      currentEvent.autoSaveToDevice(widget.outerContext);
+    });
   }
 
   late final PageController pageController;
@@ -78,6 +81,7 @@ class ImageViewerController extends State<ImageViewer> {
     );
     if (!mounted) return;
     setState(() {});
+    currentEvent.autoSaveToDevice(context);
   }
 
   Future<void> nextImage() async {
@@ -87,6 +91,7 @@ class ImageViewerController extends State<ImageViewer> {
     );
     if (!mounted) return;
     setState(() {});
+    currentEvent.autoSaveToDevice(context);
   }
 
   int get _index => pageController.page?.toInt() ?? 0;
