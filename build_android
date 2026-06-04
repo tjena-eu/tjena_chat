@@ -44,7 +44,7 @@ if "$ADB" devices | grep -q "device$"; then
   echo "==> Device found — installing..."
   "$ADB" install -r "$OUT_DIR/tjena-release.apk" && echo "==> Installed successfully" || {
     echo "==> Direct install failed (likely signature conflict). Reinstalling fresh..."
-    "$ADB" uninstall chat.fluffy.fluffychat 2>/dev/null || true
+    "$ADB" uninstall tjena.tjenachat 2>/dev/null || true
     "$ADB" install "$OUT_DIR/tjena-release.apk" && echo "==> Installed successfully"
   }
 fi
