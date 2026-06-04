@@ -11,6 +11,7 @@ import 'package:fluffychat/widgets/layouts/login_scaffold.dart';
 import 'package:fluffychat/widgets/matrix.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:url_launcher/url_launcher_string.dart';
 
 class IntroPage extends StatelessWidget {
@@ -151,8 +152,9 @@ class IntroPage extends StatelessWidget {
                                       foregroundColor:
                                           theme.colorScheme.onSecondary,
                                     ),
-                                    onPressed: () => context.go(
-                                      '${GoRouterState.of(context).uri.path}/sign_up',
+                                    onPressed: () => launchUrl(
+                                      Uri.parse('https://web.tjena.eu/#/register'),
+                                      mode: LaunchMode.inAppBrowserView,
                                     ),
                                     child: Text(
                                       L10n.of(context).createNewAccount,
