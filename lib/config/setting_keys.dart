@@ -51,9 +51,10 @@ enum AppSettings<T> {
     false,
   ),
   displayChatDetailsColumn('chat.fluffy.display_chat_details_column', false),
+  autoSaveMedia<bool>('chat.fluffy.auto_save_media', false),
   // AppConfig-mirrored settings
-  applicationName<String>('chat.fluffy.application_name', 'FluffyChat'),
-  defaultHomeserver<String>('chat.fluffy.default_homeserver', 'matrix.org'),
+  applicationName<String>('chat.fluffy.application_name', 'tjena!chat'),
+  defaultHomeserver<String>('chat.fluffy.default_homeserver', 'tjena.eu'),
   // colorSchemeSeed stored as ARGB int
   colorSchemeSeedInt<int>('chat.fluffy.color_scheme_seed', 0xFF5625BA),
   emojiSuggestionLocale<String>('emoji_suggestion_locale', ''),
@@ -61,16 +62,16 @@ enum AppSettings<T> {
   enableMatrixNativeOIDC<bool>('chat.fluffy.enable_matrix_native_oidc', false),
   presetHomeserver<String>('chat.fluffy.preset_homeserver', ''),
   welcomeText<String>('chat.fluffy.welcome_text', ''),
-  website<String>('chat.fluffy.website_url', 'https://fluffychat.im'),
+  website<String>('chat.fluffy.website_url', 'https://tjena.eu'),
   logoUrl<String>(
     'chat.fluffy.logo_url',
-    'https://fluffychat.im/assets/favicon.png',
+    'https://tjena.eu/assets/favicon.png',
   ),
   privacyPolicy<String>(
     'chat.fluffy.privacy_policy_url',
-    'https://fluffychat.im/en/privacy',
+    'https://tjena.eu/privacy',
   ),
-  tos<String>('chat.fluffy.tos_url', 'https://fluffychat.im/en/tos'),
+  tos<String>('chat.fluffy.tos_url', 'https://tjena.eu/tos'),
   sendTimelineEventTimeout<int>('chat.fluffy.send_timeline_event_timeout', 15),
   webNotificationSound<bool>('chat.fluffy.web_notification_sound', true),
   chatFilter<String>('chat.fluffy.chat_filter', 'allChats'),

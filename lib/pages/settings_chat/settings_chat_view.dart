@@ -57,6 +57,12 @@ class SettingsChatView extends StatelessWidget {
                   title: L10n.of(context).autoplayImages,
                   setting: AppSettings.autoplayImages,
                 ),
+              if (PlatformInfos.isMobile)
+                SettingsSwitchListTile.adaptive(
+                  title: L10n.of(context).autoSaveMedia,
+                  subtitle: L10n.of(context).autoSaveMediaDescription,
+                  setting: AppSettings.autoSaveMedia,
+                ),
               SettingsSwitchListTile.adaptive(
                 title: L10n.of(context).sendOnEnter,
                 setting: AppSettings.sendOnEnter,

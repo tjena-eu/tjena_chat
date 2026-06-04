@@ -64,6 +64,7 @@ dependencies:
   package_info_plus: ^9.0.1
   particles_network: ^1.9.4
   pasteboard: ^0.5.0
+  gal: ^1.2.0
   path: ^1.9.0
   path_provider: ^2.1.2
   pretty_qr_code: ^3.6.0
@@ -112,10 +113,8 @@ flutter:
 flutter_launcher_icons:
   image_path: assets/logo/img/logo.png
   android: true
-  adaptive_icon_foreground: assets/logo/img/logo_mono.png
-  adaptive_icon_background: assets/logo/img/logo_background.png
-  adaptive_icon_monochrome: assets/logo/img/logo_mono.png
-  adaptive_icon_foreground_inset: 24
+  adaptive_icon_foreground: assets/logo/img/logo.png
+  adaptive_icon_background: "#295d9f"
   ios: true
   macos:
     generate: true
@@ -123,9 +122,9 @@ flutter_launcher_icons:
     generate: true
   web:
     generate: true
-    image_path: assets/logo/img/logo_standalone.png
-    background_color: "#FFFFFF"
-    theme_color: "#41a2bc"
+    image_path: assets/logo/img/logo.png
+    background_color: "#295d9f"
+    theme_color: "#295d9f"
 
 # Guidelines for adding a dependency override:
 # 1. Don't do it if you can avoid it or fix it upstream in a manageable time

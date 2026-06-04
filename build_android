@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+FLUTTER="${FLUTTER:-/home/niklas/flutter/bin/flutter}"
+export ANDROID_HOME="${ANDROID_HOME:-$HOME/android-sdk}"
+export ANDROID_SDK_ROOT="$ANDROID_HOME"
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+OUT_DIR="$SCRIPT_DIR/.build"
+KEY_PROPS="$SCRIPT_DIR/android/key.properties"
+KEYSTORE="$SCRIPT_DIR/android/tjena-dev.keystore"
+APK_SRC="$SCRIPT_DIR/build/app/outputs/flutter-apk/app-release.apk"
+
+mkdir -p "$OUT_DIR"
+
+# Auto-generate a development signing keystore if none configured yet
+if [ ! -f "$KEY_PROPS" ]; then
+  echo "==> No key.properties found — generating development keystore..."
+  keytool -genkey -v \
+    -keystore "$KEYSTORE" \
+    -alias tjena \
+    -keyalg RSA -keysize 2048 -validity 10000 \
+    -dname "CN=Tjena Dev, OU=Dev, O=Tjena, L=Unknown, ST=Unknown, C=SE" \
+    -storepass tjena123 -keypass tjena123 \
+    -noprompt 2>/dev/null
+  cat > "$KEY_PROPS" <<EOF
+keyAlias=tjena
+keyPassword=tjena123
+storeFile=$KEYSTORE
+storePassword=tjena123
+EOF
+  echo "==> Development keystore created at $KEYSTORE"
+fi
+
+echo "==> Building Android APK (release)..."
+"$FLUTTER" build apk --release
+
+cp "$APK_SRC" "$OUT_DIR/tjena-release.apk"
+echo "==> APK ready: $OUT_DIR/tjena-release.apk"
+
+# Auto-install if a device is connected
+ADB="${ANDROID_HOME}/platform-tools/adb"
+if "$ADB" devices | grep -q "device$"; then
+  echo "==> Device found — installing..."
+  "$ADB" install -r "$OUT_DIR/tjena-release.apk" && echo "==> Installed successfully" || {
+    echo "==> Direct install failed (likely signature conflict). Reinstalling fresh..."
+    "$ADB" uninstall chat.fluffy.fluffychat 2>/dev/null || true
+    "$ADB" install "$OUT_DIR/tjena-release.apk" && echo "==> Installed successfully"
+  }
+fi
