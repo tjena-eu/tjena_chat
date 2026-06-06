@@ -117,9 +117,12 @@ class IntroPage extends StatelessWidget {
                             ),
                           ),
                           Center(
-                            child: Image.asset(
-                              './assets/logo/mini/logo_font_mini.png',
-                              width: 156,
+                            child: Text(
+                              'tjena!chat',
+                              style: theme.textTheme.headlineMedium?.copyWith(
+                                fontWeight: FontWeight.bold,
+                                color: theme.colorScheme.primary,
+                              ),
                             ),
                           ),
                           const SizedBox(height: 8),
@@ -153,7 +156,7 @@ class IntroPage extends StatelessWidget {
                                           theme.colorScheme.onSecondary,
                                     ),
                                     onPressed: () => launchUrl(
-                                      Uri.parse('https://web.tjena.eu/#/register'),
+                                      Uri.parse('https://tjena.eu/register'),
                                       mode: LaunchMode.inAppBrowserView,
                                     ),
                                     child: Text(

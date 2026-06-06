@@ -21,6 +21,7 @@ class VoipPlugin with WidgetsBindingObserver implements WebRTCDelegate {
   final MatrixState matrix;
   Client get client => matrix.client;
   VoipPlugin(this.matrix) {
+    Logs().i('[VOIP] VoipPlugin created for ${client.userID}');
     voip = VoIP(client, this);
     if (!kIsWeb) {
       final wb = WidgetsBinding.instance;
@@ -77,12 +78,76 @@ class VoipPlugin with WidgetsBindingObserver implements WebRTCDelegate {
   Future<RTCPeerConnection> createPeerConnection(
     Map<String, dynamic> configuration, [
     Map<String, dynamic> constraints = const {},
-  ]) => webrtc_impl.createPeerConnection(configuration, constraints);
+  ]) async {
+    // The Matrix SDK passes ICE servers from the homeserver's /voip/turnServer
+    // endpoint as { username, credential, urls: [<list>] }. flutter_webrtc's
+    // Android code handles the List form correctly (credentials checked before
+    // use), so we keep the SDK's servers untouched and only guarantee a STUN
+    // fallback so candidate gathering never starts empty.
+    final servers =
+        (configuration['iceServers'] as List?)
+            ?.map((e) => Map<String, dynamic>.from(e as Map))
+            .toList() ??
+        <Map<String, dynamic>>[];
+
+    final hasStun = servers.any((s) {
+      final urls = s['urls'] ?? s['url'];
+      final list = urls is List ? urls : [urls];
+      return list.any((u) => u is String && u.startsWith('stun:'));
+    });
+    if (!hasStun) {
+      servers.add({
+        'urls': [
+          'stun:stun.l.google.com:19302',
+          'stun:stun1.l.google.com:19302',
+        ],
+      });
+    }
+
+    // Log what we actually received so we can tell whether TURN was fetched.
+    Logs().i('[VOIP] iceServers count=${servers.length}');
+    for (final s in servers) {
+      final urls = s['urls'] ?? s['url'];
+      final hasCreds = s['username'] != null && s['credential'] != null;
+      Logs().i('[VOIP]   server urls=$urls creds=$hasCreds');
+    }
+
+    final pc = await webrtc_impl.createPeerConnection(
+      {...configuration, 'iceServers': servers},
+      constraints,
+    );
+
+    // onConnectionState is not overwritten by the SDK, so this survives.
+    // It also lets us see relay vs host/srflx candidate selection.
+    pc.onConnectionState = (state) {
+      Logs().i('[VOIP] PeerConnectionState: $state');
+    };
+
+    return pc;
+  }
 
   Future<bool> get hasCallingAccount async => false;
 
   @override
   Future<void> playRingtone() async {
+    // playRingtone is called before initWithInvite (which calls getUserMedia).
+    // On Android, getUserMedia is blocked in background without a foreground context.
+    // Wake the screen and bring the app forward NOW so the mic is accessible.
+    if (PlatformInfos.isAndroid && background) {
+      try {
+        final wasForeground = await FlutterForegroundTask.isAppOnForeground;
+        await matrix.store.setString(
+          'wasForeground',
+          wasForeground == true ? 'true' : 'false',
+        );
+        FlutterForegroundTask.setOnLockScreenVisibility(true);
+        FlutterForegroundTask.wakeUpScreen();
+        FlutterForegroundTask.launchApp();
+        Logs().i('[VOIP] playRingtone: woke screen for incoming call');
+      } catch (e) {
+        Logs().e('[VOIP] playRingtone: foreground launch failed $e');
+      }
+    }
     if (!background && !await hasCallingAccount) {
       try {
         await UserMediaManager().startRingingTone();
@@ -101,25 +166,23 @@ class VoipPlugin with WidgetsBindingObserver implements WebRTCDelegate {
 
   @override
   Future<void> handleNewCall(CallSession call) async {
-    if (PlatformInfos.isAndroid) {
+    Logs().i('[VOIP] handleNewCall: ${call.callId} dir=${call.direction}');
+    // Foreground launch already done in playRingtone for incoming calls.
+    // For outgoing calls (no ringtone played), do it here.
+    if (PlatformInfos.isAndroid && call.direction == CallDirection.kOutgoing) {
       try {
         final wasForeground = await FlutterForegroundTask.isAppOnForeground;
-
         await matrix.store.setString(
           'wasForeground',
           wasForeground == true ? 'true' : 'false',
         );
         FlutterForegroundTask.setOnLockScreenVisibility(true);
         FlutterForegroundTask.wakeUpScreen();
-        FlutterForegroundTask.launchApp();
       } catch (e) {
-        Logs().e('VOIP foreground failed $e');
+        Logs().e('[VOIP] foreground setup failed $e');
       }
-      // use fallback flutter call pages for outgoing and video calls.
-      addCallingOverlay(call.callId, call);
-    } else {
-      addCallingOverlay(call.callId, call);
     }
+    addCallingOverlay(call.callId, call);
   }
 
   @override
@@ -167,7 +230,10 @@ class VoipPlugin with WidgetsBindingObserver implements WebRTCDelegate {
 
   @override
   Future<void> registerListeners(CallSession session) async {
-    // TODO: Implement me
+    Logs().i('[VOIP] registerListeners: ${session.callId} dir=${session.direction}');
+    session.onCallStateChanged.stream.listen((state) {
+      Logs().i('[VOIP] call state: $state (${session.callId})');
+    });
     return;
   }
 }

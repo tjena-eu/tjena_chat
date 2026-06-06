@@ -358,9 +358,11 @@ class MatrixState extends State<Matrix> with WidgetsBindingObserver {
 
   Future<void> createVoipPlugin() async {
     if (!AppSettings.experimentalVoip.value) {
+      Logs().i('[VOIP] createVoipPlugin: disabled by setting');
       voipPlugin = null;
       return;
     }
+    Logs().i('[VOIP] createVoipPlugin: creating plugin');
     voipPlugin = VoipPlugin(this);
   }
 
