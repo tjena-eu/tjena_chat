@@ -35,13 +35,7 @@ class _VideoRendererState extends State<VideoRenderer> {
   Future<RTCVideoRenderer> _initializeRenderer() async {
     _renderer ??= RTCVideoRenderer();
     await _renderer!.initialize();
-    final ms = mediaStream;
-    Logs().i(
-      '[VOIP] VideoRenderer bind: isLocal=${widget.stream?.isLocal()} '
-      'mirror=${widget.mirror} streamId=${ms?.id} ownerTag=${ms?.ownerTag} '
-      'videoTracks=${ms?.getVideoTracks().map((t) => t.id).toList()}',
-    );
-    _renderer!.srcObject = ms;
+    _renderer!.srcObject = mediaStream;
     return _renderer!;
   }
 

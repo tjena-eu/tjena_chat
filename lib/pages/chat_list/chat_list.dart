@@ -818,6 +818,19 @@ class ChatListController extends State<ChatList>
     });
   }
 
+  Future<void> dismissStatusList() async {
+    final result = await showOkCancelAlertDialog(
+      title: 'Hide status list',
+      message: 'Hide the status list at the top of your chats? '
+          'You can re-enable it in Settings → Chats.',
+      context: context,
+    );
+    if (result == OkCancelResult.ok) {
+      await AppSettings.showPresences.setItem(false);
+      if (mounted) setState(() {});
+    }
+  }
+
   Future<void> setStatus() async {
     final l10n = L10n.of(context);
     final client = Matrix.of(context).client;

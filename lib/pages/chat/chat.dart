@@ -23,6 +23,7 @@ import 'package:fluffychat/pages/chat_details/chat_details.dart';
 import 'package:fluffychat/utils/adaptive_bottom_sheet.dart';
 import 'package:fluffychat/utils/error_reporter.dart';
 import 'package:fluffychat/utils/file_selector.dart';
+import 'package:fluffychat/utils/live_location/live_location_manager.dart';
 import 'package:fluffychat/utils/matrix_sdk_extensions/event_extension.dart';
 import 'package:fluffychat/utils/matrix_sdk_extensions/filtered_timeline_extension.dart';
 import 'package:fluffychat/utils/matrix_sdk_extensions/matrix_locals.dart';
@@ -49,6 +50,7 @@ import 'package:universal_html/universal_html.dart' as web;
 import '../../utils/account_bundles.dart';
 import '../../utils/localized_exception_extension.dart';
 import 'send_file_dialog.dart';
+import 'send_live_location_dialog.dart';
 import 'send_location_dialog.dart';
 
 class ChatPage extends StatelessWidget {
@@ -389,6 +391,9 @@ class ChatController extends State<ChatPageWithRoom>
     _loadDraft();
     WidgetsBinding.instance.addPostFrameCallback(_shareItems);
     web.window.addEventListener('paste', _handleClipboardFilePasteWeb);
+    // Resume an interrupted live-location share (e.g. after an app restart).
+    // Use widget.room (sendingClient isn't assigned until later in initState).
+    LiveLocationManager.instance.restoreIfActive(widget.room.client);
     super.initState();
     _displayChatDetailsColumn = ValueNotifier(
       AppSettings.displayChatDetailsColumn.value,
@@ -905,6 +910,13 @@ class ChatController extends State<ChatPageWithRoom>
     );
   }
 
+  Future<void> sendLiveLocationAction() async {
+    await showAdaptiveDialog(
+      context: context,
+      builder: (c) => SendLiveLocationDialog(room: room),
+    );
+  }
+
   String _getSelectedEventString() {
     var copyString = '';
     if (selectedEvents.length == 1) {
@@ -1372,6 +1384,9 @@ class ChatController extends State<ChatPageWithRoom>
       case AddPopupMenuActions.location:
         sendLocationAction();
         return;
+      case AddPopupMenuActions.liveLocation:
+        sendLiveLocationAction();
+        return;
     }
   }
 
@@ -1628,4 +1643,5 @@ enum AddPopupMenuActions {
   photoCamera,
   videoCamera,
   location,
+  liveLocation,
 }
