@@ -5,7 +5,11 @@
 
 import 'package:fluffychat/config/app_config.dart';
 import 'package:fluffychat/config/themes.dart';
+import 'package:fluffychat/pages/stories/add_story_sheet.dart';
+import 'package:fluffychat/pages/stories/story_viewer.dart';
+import 'package:fluffychat/utils/matrix_sdk_extensions/client_stories_extension.dart';
 import 'package:fluffychat/utils/stream_extension.dart';
+import 'package:fluffychat/widgets/adaptive_dialogs/show_modal_action_popup.dart';
 import 'package:fluffychat/widgets/avatar.dart';
 import 'package:fluffychat/widgets/hover_builder.dart';
 import 'package:fluffychat/widgets/matrix.dart';
@@ -14,6 +18,17 @@ import 'package:matrix/matrix.dart';
 
 import '../../widgets/adaptive_dialogs/user_dialog.dart';
 
+/// Active story rooms keyed by their author's user id (most recent first is not
+/// important here — we only need presence of a story).
+Map<String, Room> _activeStoryRoomsByAuthor(Client client) {
+  final map = <String, Room>{};
+  for (final room in client.storiesRoomsWithActivePosts) {
+    final author = room.storyAuthorId;
+    if (author != null) map[author] = room;
+  }
+  return map;
+}
+
 class StatusMessageList extends StatelessWidget {
   final void Function() onStatusEdit;
 
@@ -21,18 +36,66 @@ class StatusMessageList extends StatelessWidget {
 
   static const double height = 116;
 
-  void _onStatusTab(BuildContext context, Profile profile) {
+  Future<void> _onStatusTab(
+    BuildContext context,
+    Profile profile,
+    Room? storyRoom,
+  ) async {
     final client = Matrix.of(context).client;
-    if (profile.userId == client.userID) return onStatusEdit();
+    final isOwn = profile.userId == client.userID;
 
-    UserDialog.show(context: context, profile: profile);
-    return;
+    // Tapping someone else's avatar with an active story opens the viewer.
+    if (!isOwn) {
+      if (storyRoom != null) {
+        await StoryViewer.show(context, storyRoom);
+        return;
+      }
+      UserDialog.show(context: context, profile: profile);
+      return;
+    }
+
+    // Own entry: offer to post / view a story or edit the status message.
+    final action = await showModalActionPopup<String>(
+      context: context,
+      actions: [
+        AdaptiveModalAction(
+          value: 'add',
+          label: 'Add to story',
+          icon: const Icon(Icons.add_a_photo_outlined),
+        ),
+        if (storyRoom != null)
+          AdaptiveModalAction(
+            value: 'view',
+            label: 'View my story',
+            icon: const Icon(Icons.visibility_outlined),
+          ),
+        AdaptiveModalAction(
+          value: 'status',
+          label: 'Set status',
+          icon: const Icon(Icons.edit_outlined),
+        ),
+      ],
+    );
+    if (!context.mounted) return;
+    switch (action) {
+      case 'add':
+        await showAddStorySheet(context);
+        break;
+      case 'view':
+        if (storyRoom != null) await StoryViewer.show(context, storyRoom);
+        break;
+      case 'status':
+        onStatusEdit();
+        break;
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     final client = Matrix.of(context).client;
-    final interestingPresences = client.interestingPresences;
+    final storyRooms = _activeStoryRoomsByAuthor(client);
+    // Show story authors in the row too, even if they have no live presence.
+    final userIds = {...client.interestingPresences, ...storyRooms.keys};
 
     return StreamBuilder(
       stream: client.onSync.stream.rateLimit(const Duration(seconds: 3)),
@@ -41,12 +104,12 @@ class StatusMessageList extends StatelessWidget {
           duration: FluffyThemes.animationDuration,
           curve: Curves.easeInOut,
           child: FutureBuilder(
-            initialData: interestingPresences
+            initialData: userIds
                 // ignore: deprecated_member_use
                 .map((userId) => client.presences[userId])
                 .whereType<CachedPresence>(),
             future: Future.wait(
-              client.interestingPresences.map(
+              userIds.map(
                 (userId) => client.fetchCurrentPresence(
                   userId,
                   fetchOnlyFromCached: true,
@@ -55,12 +118,16 @@ class StatusMessageList extends StatelessWidget {
             ),
             builder: (context, snapshot) {
               final presences = snapshot.data
-                  ?.where(isInterestingPresence)
+                  ?.where(
+                    (p) =>
+                        p.userid == client.userID ||
+                        storyRooms.containsKey(p.userid) ||
+                        isInterestingPresence(p),
+                  )
                   .toList();
 
-              // If no other presences than the own entry is interesting, we
-              // hide the presence header.
-              if (presences == null || presences.length <= 1) {
+              // Always show at least our own entry so a story can be added.
+              if (presences == null || presences.isEmpty) {
                 return const SizedBox.shrink();
               }
 
@@ -68,6 +135,11 @@ class StatusMessageList extends StatelessWidget {
                 // Make sure own entry is at the first position:
                 if (a.userid == client.userID) return -1;
                 if (b.userid == client.userID) return 1;
+                // Users with an active story first:
+                final aStory = storyRooms.containsKey(a.userid);
+                final bStory = storyRooms.containsKey(b.userid);
+                if (aStory && !bStory) return -1;
+                if (!aStory && bStory) return 1;
                 // Sort presences with statusMsg first:
                 if (a.statusMsg != null && b.statusMsg == null) return -1;
                 if (a.statusMsg == null && b.statusMsg != null) return 1;
@@ -86,11 +158,16 @@ class StatusMessageList extends StatelessWidget {
                   ),
                   scrollDirection: Axis.horizontal,
                   itemCount: presences.length,
-                  itemBuilder: (context, i) => PresenceAvatar(
-                    presence: presences[i],
-                    height: StatusMessageList.height,
-                    onTap: (profile) => _onStatusTab(context, profile),
-                  ),
+                  itemBuilder: (context, i) {
+                    final storyRoom = storyRooms[presences[i].userid];
+                    return PresenceAvatar(
+                      presence: presences[i],
+                      height: StatusMessageList.height,
+                      hasStory: storyRoom != null,
+                      onTap: (profile) =>
+                          _onStatusTab(context, profile, storyRoom),
+                    );
+                  },
                 ),
               );
             },
@@ -104,12 +181,14 @@ class StatusMessageList extends StatelessWidget {
 class PresenceAvatar extends StatelessWidget {
   final CachedPresence presence;
   final double height;
+  final bool hasStory;
   final void Function(Profile) onTap;
 
   const PresenceAvatar({
     required this.presence,
     required this.height,
     required this.onTap,
+    this.hasStory = false,
     super.key,
   });
 
@@ -154,7 +233,19 @@ class PresenceAvatar extends StatelessWidget {
                               Container(
                                 padding: const EdgeInsets.all(3),
                                 decoration: BoxDecoration(
-                                  gradient: presence.gradient,
+                                  // A vibrant ring marks an active story;
+                                  // otherwise fall back to the presence colour.
+                                  gradient: hasStory
+                                      ? const LinearGradient(
+                                          colors: [
+                                            Color(0xFFF58529),
+                                            Color(0xFFDD2A7B),
+                                            Color(0xFF8134AF),
+                                          ],
+                                          begin: Alignment.topLeft,
+                                          end: Alignment.bottomRight,
+                                        )
+                                      : presence.gradient,
                                   borderRadius: BorderRadius.circular(
                                     avatarSize,
                                   ),
