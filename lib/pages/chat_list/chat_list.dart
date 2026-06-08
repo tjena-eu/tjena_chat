@@ -158,9 +158,8 @@ class ChatListController extends State<ChatList>
   List<Room> get filteredRooms => Matrix.of(context)
       .client
       .rooms
-      // Story rooms (MSC3588) back the stories feature; never list them as
-      // normal chats.
-      .where((room) => !room.isStoryRoom)
+      // Story rooms are shown as normal chats (hiding them caused rooms to get
+      // stuck invisible). They can still be browsed in the Stories space too.
       .where(getRoomFilterByActiveFilter(activeFilter))
       .toList();
 

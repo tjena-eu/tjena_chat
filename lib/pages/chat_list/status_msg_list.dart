@@ -4,6 +4,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import 'package:fluffychat/config/app_config.dart';
+import 'package:fluffychat/config/setting_keys.dart';
 import 'package:fluffychat/config/themes.dart';
 import 'package:fluffychat/pages/stories/add_story_sheet.dart';
 import 'package:fluffychat/pages/stories/story_viewer.dart';
@@ -21,6 +22,7 @@ import '../../widgets/adaptive_dialogs/user_dialog.dart';
 /// Active story rooms keyed by their author's user id (most recent first is not
 /// important here — we only need presence of a story).
 Map<String, Room> _activeStoryRoomsByAuthor(Client client) {
+  if (!AppSettings.storiesEnabled.value) return {};
   final map = <String, Room>{};
   for (final room in client.storiesRoomsWithActivePosts) {
     final author = room.storyAuthorId;
@@ -55,15 +57,17 @@ class StatusMessageList extends StatelessWidget {
     }
 
     // Own entry: offer to post / view a story or edit the status message.
+    final storiesOn = AppSettings.storiesEnabled.value;
     final action = await showModalActionPopup<String>(
       context: context,
       actions: [
-        AdaptiveModalAction(
-          value: 'add',
-          label: 'Add to story',
-          icon: const Icon(Icons.add_a_photo_outlined),
-        ),
-        if (storyRoom != null)
+        if (storiesOn)
+          AdaptiveModalAction(
+            value: 'add',
+            label: 'Add to story',
+            icon: const Icon(Icons.add_a_photo_outlined),
+          ),
+        if (storiesOn && storyRoom != null)
           AdaptiveModalAction(
             value: 'view',
             label: 'View my story',

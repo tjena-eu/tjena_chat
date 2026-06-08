@@ -47,8 +47,13 @@ enum AppSettings<T> {
   showPresences<bool>('chat.fluffy.show_presences', true),
   // Stories: who receives my stories ('none' | 'all' | 'selected') and whether
   // I receive others' stories ('all' | 'none').
+  // Master switch for the stories feature (sets up the space + story room and
+  // auto-joins applicable rooms when turned on).
+  storiesEnabled<bool>('chat.fluffy.stories_enabled', false),
   storiesSendScope<String>('chat.fluffy.stories_send_scope', 'all'),
   storiesReceiveScope<String>('chat.fluffy.stories_receive_scope', 'all'),
+  // How long a story stays visible before it's considered expired (hours).
+  storiesRetentionHours<int>('chat.fluffy.stories_retention_hours', 24),
   experimentalVoip<bool>('chat.fluffy.experimental_voip', true),
   shareKeysWith<String>('chat.fluffy.share_keys_with_2', 'all'),
   noEncryptionWarningShown<bool>(
