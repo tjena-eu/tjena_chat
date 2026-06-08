@@ -3,33 +3,31 @@
 
 Root cause (confirmed via logcat): on Android, libwebrtc returns remote
 MediaStream ids wrapped in curly braces ("{uuid}"), while the peer's
-sdp_stream_metadata is keyed by the bare uuid. The SDK's `_addRemoteStream`
-looks up metadata by the braced id, misses, and drops the remote stream — so
-`remoteUserMediaStream` stays null and no video is shown. Audio is unaffected
-because it is wired at the native track level, independent of this lookup.
+sdp_stream_metadata is keyed by the bare uuid (and is sometimes absent
+entirely). The SDK's `_addRemoteStream` looks up metadata by the braced id,
+misses, and drops the remote stream — so `remoteUserMediaStream` stays null and
+no video is shown. Audio is unaffected (wired natively).
 
-This patch makes the lookup tolerant of the braces and, if metadata is still
-missing, assumes a usermedia stream instead of dropping it (same behaviour as
-matrix-js-sdk).
+This patch:
+  * makes the metadata lookup brace-tolerant, and
+  * falls back to assuming a usermedia stream when metadata is missing (like
+    matrix-js-sdk) instead of dropping it, and
+  * exposes a public `addReconstructedRemoteStream` so the app can inject a
+    remote stream rebuilt from RtpReceiver tracks if flutter_webrtc's onTrack
+    ever fails to deliver one.
 
-The script is idempotent and re-appliable: it replaces the region between the
-method signature and the `final videoMuted` line regardless of whether the file
-is pristine or already carries an older version of this patch. `build_android`
-runs it before each build so the fix survives `flutter pub get` regenerating
-pub-cache.
+IMPORTANT: matrix is a *git* dependency (famedly/matrix-dart-sdk), so its source
+lives at ~/.pub-cache/git/matrix-dart-sdk-<ref>/, NOT hosted/pub.dev. build_android
+resolves the real path from .dart_tool/package_config.json before calling this.
+
+The script is idempotent and re-appliable (anchor-based, version-tagged), so it
+survives `flutter pub get`. It also strips diagnostic log lines left by earlier
+patch versions.
 """
 import sys
 
 # Bump when REPLACEMENT changes so an already-patched SDK gets re-patched.
-PATCH_VERSION = "v6"
-
-# A log line inserted right after the onTrack handler opens, to confirm whether
-# onTrack fires and whether event.streams is populated.
-ONTRACK_ANCHOR = "    pc.onTrack = (RTCTrackEvent event) async {\n"
-ONTRACK_LOG = (
-    "      Logs().i('[VOIP] onTrack FIRE streams=' + event.streams.length.toString()"
-    " + ' kind=' + event.track.kind.toString() + ' trackId=' + event.track.id.toString());\n"
-)
+PATCH_VERSION = "v7"
 VERSION_TAG = f"// tjena-patch-version: {PATCH_VERSION}"
 
 # Anchors bounding the region we own (pristine or previously patched). We
@@ -37,6 +35,12 @@ VERSION_TAG = f"// tjena-patch-version: {PATCH_VERSION}"
 # line.
 START_ANCHOR = "  Future<void> _addRemoteStream(MediaStream stream) async {"
 END_ANCHOR = "    final videoMuted = metadata.video_muted;"
+
+# Diagnostic line inserted by older patch versions (v5/v6); removed on apply.
+STALE_ONTRACK_LOG = (
+    "      Logs().i('[VOIP] onTrack FIRE streams=' + event.streams.length.toString()"
+    " + ' kind=' + event.track.kind.toString() + ' trackId=' + event.track.id.toString());\n"
+)
 
 REPLACEMENT = """  // tjena patch: public entrypoint to inject a remote stream reconstructed
   // from RtpReceiver tracks, used when flutter_webrtc's onTrack never fires
@@ -52,12 +56,6 @@ REPLACEMENT = """  // tjena patch: public entrypoint to inject a remote stream r
     // missing, assume usermedia so the remote video renders.
     final rawId = stream.id;
     final cleanId = rawId?.replaceAll(RegExp(r'[{}]'), '');
-    Logs().i(
-      '[VOIP] _addRemoteStream ENTER id=$rawId '
-      'video=${stream.getVideoTracks().length} '
-      'audio=${stream.getAudioTracks().length} '
-      'metaKeys=${_remoteSDPStreamMetadata?.sdpStreamMetadatas.keys.toList()}',
-    );
     var metadata = _remoteSDPStreamMetadata?.sdpStreamMetadatas[rawId] ??
         _remoteSDPStreamMetadata?.sdpStreamMetadatas[cleanId];
     metadata ??= SDPStreamPurpose(
@@ -79,8 +77,15 @@ def main() -> int:
     with open(path, "r", encoding="utf-8") as f:
         content = f.read()
 
+    # Always strip stale diagnostic lines from earlier patch versions.
+    if STALE_ONTRACK_LOG in content:
+        content = content.replace(STALE_ONTRACK_LOG, "")
+
     if VERSION_TAG in content:
-        print(f"  matrix VoIP patch {PATCH_VERSION} already applied, skipping")
+        # Still write back in case we stripped stale diagnostics above.
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(content)
+        print(f"  matrix VoIP patch {PATCH_VERSION} already applied")
         return 0
 
     start = content.find(START_ANCHOR)
@@ -101,16 +106,6 @@ def main() -> int:
     end += len(END_ANCHOR)
 
     content = content[:start] + REPLACEMENT + content[end:]
-
-    # Insert onTrack diagnostic log right after the handler opens.
-    if ONTRACK_LOG not in content:
-        idx = content.find(ONTRACK_ANCHOR)
-        if idx != -1:
-            insert_at = idx + len(ONTRACK_ANCHOR)
-            content = content[:insert_at] + ONTRACK_LOG + content[insert_at:]
-        else:
-            print("  WARNING: onTrack anchor not found; skipping onTrack log")
-
     with open(path, "w", encoding="utf-8") as f:
         f.write(content)
     print(f"  applied matrix VoIP remote-stream metadata patch {PATCH_VERSION}")

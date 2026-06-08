@@ -4,6 +4,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import 'package:fluffychat/config/setting_keys.dart';
+import 'package:fluffychat/utils/live_location/live_location_constants.dart';
 import 'package:matrix/matrix.dart';
 
 extension VisibleInGuiExtension on List<Event> {
@@ -26,21 +27,30 @@ extension VisibleInGuiExtension on List<Event> {
 }
 
 extension IsStateExtension on Event {
-  bool get isVisibleInGui =>
-      // always filter out edit and reaction relationships
-      !{
-        RelationshipTypes.edit,
-        RelationshipTypes.reaction,
-      }.contains(relationshipType) &&
-      // always filter out m.key.* and other known but unimportant events
-      !isKnownHiddenStates &&
-      // event types to hide: redaction and reaction events
-      // if a reaction has been redacted we also want it to be hidden in the timeline
-      !{EventTypes.Reaction, EventTypes.Redaction}.contains(type) &&
-      // if we enabled to hide all redacted events, don't show those
-      (!AppSettings.hideRedactedEvents.value || !redacted) &&
-      // if we enabled to hide all unknown events, don't show those
-      (!AppSettings.hideUnknownEvents.value || isEventTypeKnown);
+  bool get isVisibleInGui {
+    // Live location: hide the frequent beacon updates (rendered inside the
+    // beacon_info tile), but always show the beacon_info tile itself even
+    // though the SDK considers these types "unknown".
+    if (LiveLocationKeys.isBeacon(type)) return false;
+    if (LiveLocationKeys.isBeaconInfo(type)) {
+      return !(AppSettings.hideRedactedEvents.value && redacted);
+    }
+    return
+        // always filter out edit and reaction relationships
+        !{
+          RelationshipTypes.edit,
+          RelationshipTypes.reaction,
+        }.contains(relationshipType) &&
+        // always filter out m.key.* and other known but unimportant events
+        !isKnownHiddenStates &&
+        // event types to hide: redaction and reaction events
+        // if a reaction has been redacted we also want it to be hidden in the timeline
+        !{EventTypes.Reaction, EventTypes.Redaction}.contains(type) &&
+        // if we enabled to hide all redacted events, don't show those
+        (!AppSettings.hideRedactedEvents.value || !redacted) &&
+        // if we enabled to hide all unknown events, don't show those
+        (!AppSettings.hideUnknownEvents.value || isEventTypeKnown);
+  }
 
   bool get isState => !{
     EventTypes.Message,

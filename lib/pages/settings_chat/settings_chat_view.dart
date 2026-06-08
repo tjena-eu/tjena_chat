@@ -40,6 +40,12 @@ class SettingsChatView extends StatelessWidget {
                 setting: AppSettings.renderHtml,
               ),
               SettingsSwitchListTile.adaptive(
+                title: 'Show status list',
+                subtitle:
+                    'Show contacts’ status and presence at the top of your chats.',
+                setting: AppSettings.showPresences,
+              ),
+              SettingsSwitchListTile.adaptive(
                 title: L10n.of(context).hideRedactedMessages,
                 subtitle: L10n.of(context).hideRedactedMessagesBody,
                 setting: AppSettings.hideRedactedEvents,

@@ -104,22 +104,14 @@ class VoipPlugin with WidgetsBindingObserver implements WebRTCDelegate {
       });
     }
 
-    // Log what we actually received so we can tell whether TURN was fetched.
-    Logs().i('[VOIP] iceServers count=${servers.length}');
-    for (final s in servers) {
-      final urls = s['urls'] ?? s['url'];
-      final hasCreds = s['username'] != null && s['credential'] != null;
-      Logs().i('[VOIP]   server urls=$urls creds=$hasCreds');
-    }
-
     final pc = await webrtc_impl.createPeerConnection(
       {...configuration, 'iceServers': servers},
       constraints,
     );
 
     // onConnectionState is not overwritten by the SDK, so this survives.
+    // On connect, recover the remote stream if onTrack failed to deliver one.
     pc.onConnectionState = (state) async {
-      Logs().i('[VOIP] PeerConnectionState: $state');
       if (state ==
           webrtc_impl.RTCPeerConnectionState.RTCPeerConnectionStateConnected) {
         await _recoverRemoteStreamIfMissing(pc);
@@ -145,20 +137,14 @@ class VoipPlugin with WidgetsBindingObserver implements WebRTCDelegate {
       if (call == null) return;
 
       // If onTrack already delivered a remote stream, do nothing.
-      if (call.getRemoteStreams.isNotEmpty) {
-        Logs().i('[VOIP] remote stream already present, no recovery needed');
-        return;
-      }
+      if (call.getRemoteStreams.isNotEmpty) return;
 
       final receivers = await pc.getReceivers();
       final tracks = receivers
           .map((r) => r.track)
           .whereType<webrtc_impl.MediaStreamTrack>()
           .toList();
-      if (tracks.isEmpty) {
-        Logs().w('[VOIP] recovery: no receiver tracks available');
-        return;
-      }
+      if (tracks.isEmpty) return;
 
       final remoteStream = await webrtc_impl.createLocalMediaStream(
         'tjena_reconstructed_remote',
@@ -166,10 +152,7 @@ class VoipPlugin with WidgetsBindingObserver implements WebRTCDelegate {
       for (final track in tracks) {
         await remoteStream.addTrack(track);
       }
-      Logs().i(
-        '[VOIP] recovery: injecting reconstructed remote stream '
-        'tracks=${tracks.map((t) => t.kind).toList()}',
-      );
+      Logs().i('[VOIP] recovered remote stream from receivers (onTrack missed)');
       await call.addReconstructedRemoteStream(remoteStream);
     } catch (e, s) {
       Logs().e('[VOIP] remote stream recovery failed', e, s);

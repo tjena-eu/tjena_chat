@@ -61,6 +61,11 @@ PY
 )"
 if [ -n "$CALL_SESSION" ] && [ -f "$CALL_SESSION" ]; then
   echo "  matrix source: $CALL_SESSION"
+  # Restore to pristine first so the patch always applies to a clean file
+  # (avoids layering a new patch version on top of an older one). The matrix
+  # dep is a git checkout, so this is safe; ignore errors if it isn't.
+  MATRIX_REPO="$(dirname "$(dirname "$(dirname "$(dirname "$(dirname "$CALL_SESSION")")")")")"
+  git -C "$MATRIX_REPO" checkout -- lib/src/voip/call_session.dart 2>/dev/null || true
   python3 "$SCRIPT_DIR/patches/voip_remote_stream_fix.py" "$CALL_SESSION"
 else
   echo "  WARNING: matrix SDK source not found (run 'flutter pub get'); skipping VoIP patch"
