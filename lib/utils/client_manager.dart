@@ -128,7 +128,9 @@ abstract class ClientManager {
       customImageResizer: PlatformInfos.supportsCustomImageResizer
           ? customImageResizer
           : null,
-      logLevel: kReleaseMode ? Level.warning : Level.verbose,
+      // TEMP DEBUG: verbose in release to diagnose remote video stream.
+      // Revert to `kReleaseMode ? Level.warning : Level.verbose` after.
+      logLevel: Level.verbose,
       database: await flutterMatrixSdkDatabaseBuilder(clientName),
       supportedLoginTypes: {
         AuthenticationTypes.password,

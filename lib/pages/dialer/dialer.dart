@@ -459,10 +459,21 @@ class MyCallingPage extends State<Calling> {
                     ),
                   );
                 } else {
+                  Logs().i(
+                    '[VOIP] dialer streams: '
+                    'remoteUserMedia=${call.remoteUserMediaStream?.stream?.id} '
+                    'localUserMedia=${call.localUserMediaStream?.stream?.id} '
+                    'remoteStreams=${call.getRemoteStreams.map((s) => '${s.stream?.id}:${s.purpose}:local=${s.isLocal()}').toList()} '
+                    'localStreams=${call.getLocalStreams.map((s) => '${s.stream?.id}:${s.purpose}:local=${s.isLocal()}').toList()}',
+                  );
+                  // Fall back to the local camera as the main view when no
+                  // remote video stream is available yet, so the user at least
+                  // sees their own self-view.
                   final primaryStream =
                       call.remoteScreenSharingStream ??
                       call.localScreenSharingStream ??
-                      call.remoteUserMediaStream;
+                      call.remoteUserMediaStream ??
+                      call.localUserMediaStream;
 
                   if (primaryStream != null) {
                     stackWidgets.add(
