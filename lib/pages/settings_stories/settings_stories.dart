@@ -3,15 +3,14 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import 'package:flutter/material.dart';
-
-import 'package:matrix/matrix.dart';
-
 import 'package:fluffychat/config/setting_keys.dart';
 import 'package:fluffychat/utils/matrix_sdk_extensions/client_stories_extension.dart';
+import 'package:fluffychat/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.dart';
 import 'package:fluffychat/widgets/avatar.dart';
 import 'package:fluffychat/widgets/future_loading_dialog.dart';
 import 'package:fluffychat/widgets/matrix.dart';
+import 'package:flutter/material.dart';
+import 'package:matrix/matrix.dart';
 
 /// Settings for stories/status sharing: who receives my stories and who I
 /// receive them from. Stories are restricted to my own homeserver.
@@ -23,10 +22,20 @@ class StoriesSettingsPage extends StatefulWidget {
 }
 
 class _StoriesSettingsPageState extends State<StoriesSettingsPage> {
+  late bool _enabled = AppSettings.storiesEnabled.value;
   late String _sendScope = AppSettings.storiesSendScope.value;
   late String _receiveScope = AppSettings.storiesReceiveScope.value;
-  late Set<String> _selected =
+  late int _retentionHours = AppSettings.storiesRetentionHours.value;
+  late final Set<String> _selected =
       Matrix.of(context).client.storiesSelectedRecipients.toSet();
+
+  static const Map<String, int> _retentionOptions = {
+    '6 hours': 6,
+    '12 hours': 12,
+    '24 hours': 24,
+    '2 days': 48,
+    '7 days': 168,
+  };
 
   Client get client => Matrix.of(context).client;
 
@@ -64,12 +73,46 @@ class _StoriesSettingsPageState extends State<StoriesSettingsPage> {
     await _applyChanges();
   }
 
-  Future<void> _resetSharing() async {
-    final room = client.myStoriesRoom;
-    if (room == null) return;
+  Future<void> _setEnabled(bool enabled) async {
+    setState(() => _enabled = enabled);
     await showFutureLoadingDialog(
       context: context,
-      future: room.leave,
+      future: enabled ? client.enableStories : client.disableStories,
+    );
+  }
+
+  Future<void> _setRetention(int hours) async {
+    setState(() => _retentionHours = hours);
+    await AppSettings.storiesRetentionHours.setItem(hours);
+  }
+
+  Future<void> _deleteMyStories() async {
+    final confirmed = await showOkCancelAlertDialog(
+      context: context,
+      title: 'Delete my stories',
+      message: 'Remove all stories you have posted? This cannot be undone.',
+      isDestructive: true,
+    );
+    if (confirmed != OkCancelResult.ok || !mounted) return;
+    await showFutureLoadingDialog(
+      context: context,
+      future: client.deleteMyStories,
+    );
+  }
+
+  Future<void> _cleanUpStoryRooms() async {
+    final confirmed = await showOkCancelAlertDialog(
+      context: context,
+      title: 'Clean up story rooms',
+      message: 'Leave all story rooms (yours and ones shared with you), '
+          'including old or stuck ones. You can re-enable stories afterwards '
+          'to start fresh.',
+      isDestructive: true,
+    );
+    if (confirmed != OkCancelResult.ok || !mounted) return;
+    await showFutureLoadingDialog(
+      context: context,
+      future: client.leaveAllStoryRooms,
     );
     if (mounted) setState(() {});
   }
@@ -83,15 +126,36 @@ class _StoriesSettingsPageState extends State<StoriesSettingsPage> {
       appBar: AppBar(title: const Text('Stories')),
       body: ListView(
         children: [
-          ListTile(
-            title: Text(
-              'Receiving',
-              style: theme.textTheme.titleSmall?.copyWith(
-                color: theme.colorScheme.primary,
+          SwitchListTile.adaptive(
+            value: _enabled,
+            onChanged: _setEnabled,
+            title: const Text('Enable stories'),
+            subtitle: const Text(
+              'Turn on stories to set up your Stories space and start sharing '
+              'and receiving stories with your contacts.',
+            ),
+          ),
+          const Divider(),
+          if (!_enabled)
+            const Padding(
+              padding: EdgeInsets.all(24),
+              child: Text(
+                'Stories are turned off.',
+                textAlign: TextAlign.center,
               ),
             ),
-            subtitle: const Text('Whose stories you see. Limited to your own server.'),
-          ),
+          if (_enabled) ...[
+            ListTile(
+              title: Text(
+                'Receiving',
+                style: theme.textTheme.titleSmall?.copyWith(
+                  color: theme.colorScheme.primary,
+                ),
+              ),
+              subtitle: const Text(
+                'Whose stories you see. Limited to your own server.',
+              ),
+            ),
           RadioListTile<String>(
             title: const Text('Receive from everyone (same server)'),
             value: 'all',
@@ -162,16 +226,44 @@ class _StoriesSettingsPageState extends State<StoriesSettingsPage> {
           ],
           const Divider(),
           ListTile(
+            title: Text(
+              'Story duration',
+              style: theme.textTheme.titleSmall?.copyWith(
+                color: theme.colorScheme.primary,
+              ),
+            ),
+            subtitle: const Text('How long your stories stay visible.'),
+          ),
+          for (final entry in _retentionOptions.entries)
+            RadioListTile<int>(
+              title: Text(entry.key),
+              value: entry.value,
+              groupValue: _retentionHours,
+              onChanged: (v) => _setRetention(v!),
+            ),
+          const Divider(),
+          ListTile(
             leading: Icon(
-              Icons.refresh,
+              Icons.delete_outline,
               color: theme.colorScheme.error,
             ),
-            title: const Text('Reset story sharing'),
-            subtitle: const Text(
-              'Leave and recreate your story room. Use this if sharing got '
-              'stuck after leaving or missing an invite.',
+              title: const Text('Delete my stories'),
+              subtitle: const Text('Remove all stories you have posted.'),
+              onTap: _deleteMyStories,
             ),
-            onTap: _resetSharing,
+          ],
+          const Divider(),
+          ListTile(
+            leading: Icon(
+              Icons.cleaning_services_outlined,
+              color: theme.colorScheme.error,
+            ),
+            title: const Text('Clean up story rooms'),
+            subtitle: const Text(
+              'Leave all story rooms, including old or stuck ones. Use this if '
+              'stories got into a broken state.',
+            ),
+            onTap: _cleanUpStoryRooms,
           ),
         ],
       ),

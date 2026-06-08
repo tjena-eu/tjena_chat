@@ -15,11 +15,65 @@ import 'package:matrix/matrix.dart';
 /// stories feature; the storage model is kept compatible with it.
 extension ClientStoriesExtension on Client {
   static const String storiesRoomType = 'msc3588.stories.stories-room';
-  static const Duration storyLifetime = Duration(hours: 24);
+
+  /// How long a story stays visible. Configurable via settings.
+  static Duration get storyLifetime =>
+      Duration(hours: AppSettings.storiesRetentionHours.value);
 
   /// Account-data key for the explicitly selected story recipients
   /// (used when the send scope is 'selected').
   static const String recipientsAccountDataType = 'chat.fluffy.stories_recipients';
+
+  /// Account-data key storing the id of our "Stories" space.
+  static const String spaceAccountDataType = 'chat.fluffy.stories_space';
+
+  String? get storiesSpaceId =>
+      accountData[spaceAccountDataType]?.content.tryGet<String>('id');
+
+  /// Our joined "Stories" space, if it exists.
+  Room? get storiesSpace {
+    final id = storiesSpaceId;
+    if (id == null) return null;
+    final room = getRoomById(id);
+    return (room != null && room.isSpace && room.membership == Membership.join)
+        ? room
+        : null;
+  }
+
+  /// Get our "Stories" space or create it. All story rooms are filed under it
+  /// so they live in their own space instead of cluttering the chat list.
+  Future<Room> getOrCreateStoriesSpace() async {
+    final existing = storiesSpace;
+    if (existing != null) return existing;
+
+    final roomId = await createRoom(
+      creationContent: {'type': 'm.space'},
+      preset: CreateRoomPreset.privateChat,
+      name: 'Stories',
+      topic: 'Your stories and the stories shared with you.',
+    );
+    if (getRoomById(roomId) == null) {
+      await onSync.stream.firstWhere(
+        (sync) => sync.rooms?.join?[roomId] != null,
+      );
+    }
+    await setAccountData(userID!, spaceAccountDataType, {'id': roomId});
+    final room = getRoomById(roomId);
+    if (room == null) throw Exception('Failed to create stories space.');
+    return room;
+  }
+
+  /// File [room] under our Stories space (creating the space on first use).
+  Future<void> addRoomToStoriesSpace(Room room) async {
+    try {
+      final space = await getOrCreateStoriesSpace();
+      final alreadyChild =
+          space.spaceChildren.any((c) => c.roomId == room.id);
+      if (!alreadyChild) await space.setSpaceChild(room.id);
+    } catch (e) {
+      Logs().w('[Stories] failed to add ${room.id} to stories space', e);
+    }
+  }
 
   List<String> get storiesSelectedRecipients =>
       accountData[recipientsAccountDataType]?.content.tryGetList<String>(
@@ -101,6 +155,7 @@ extension ClientStoriesExtension on Client {
     final existing = myStoriesRoom;
     if (existing != null) {
       await syncMyStoryRoomInvites();
+      await addRoomToStoriesSpace(existing);
       return existing;
     }
 
@@ -143,6 +198,7 @@ extension ClientStoriesExtension on Client {
     if (room == null) {
       throw Exception('Failed to create stories room.');
     }
+    await addRoomToStoriesSpace(room);
     return room;
   }
 
@@ -181,22 +237,26 @@ extension ClientStoriesExtension on Client {
     }
   }
 
-  /// Apply the receive-scope setting to incoming story-room invites: auto-join
-  /// them when receiving 'all' (so they actually work / are viewable), or
-  /// reject them when receiving 'none'. Also leaves joined story rooms of
-  /// others when set to 'none'.
+  /// Auto-join applicable incoming story-room invites. Non-destructive: it only
+  /// *joins* same-homeserver contacts' story rooms (when enabled and receiving),
+  /// and only *rejects* a clearly-identified story room that is cross-server or
+  /// when receiving is set to 'none'. Undetected invites are left untouched so
+  /// they remain visible and can be accepted manually (recoverable).
   Future<void> applyStoriesReceivePolicy() async {
+    if (!AppSettings.storiesEnabled.value) return; // off: do nothing
     final receiveAll = AppSettings.storiesReceiveScope.value != 'none';
     for (final room in storiesRooms) {
       final author = room.storyAuthorId;
       if (author == userID) continue; // never touch our own
-      // Stories are federation-restricted: only accept same-homeserver authors.
-      final accept =
-          receiveAll && author != null && isSameHomeserver(author);
       try {
+        final accept =
+            receiveAll && author != null && isSameHomeserver(author);
         if (accept) {
           if (room.membership == Membership.invite) await room.join();
-        } else {
+          await addRoomToStoriesSpace(room);
+        } else if (author != null) {
+          // Known author but not acceptable (cross-server, or receiving none):
+          // reject/leave. Undetected rooms (author == null) are left alone.
           if (room.membership == Membership.invite ||
               room.membership == Membership.join) {
             await room.leave();
@@ -204,6 +264,50 @@ extension ClientStoriesExtension on Client {
         }
       } catch (e) {
         Logs().w('[Stories] receive policy failed for ${room.id}', e);
+      }
+    }
+  }
+
+  /// Turn stories on: create our story room + space (inviting contacts) and
+  /// auto-join applicable incoming story rooms.
+  Future<void> enableStories() async {
+    await AppSettings.storiesEnabled.setItem(true);
+    await getOrCreateMyStoriesRoom();
+    await applyStoriesReceivePolicy();
+  }
+
+  /// Turn stories off. Non-destructive — just flips the flag; existing rooms are
+  /// left in place (use [leaveAllStoryRooms] to clean up).
+  Future<void> disableStories() async {
+    await AppSettings.storiesEnabled.setItem(false);
+  }
+
+  /// Leave every story room (own + received), clearing old/stuck rooms. Used by
+  /// the "clean up" action in settings.
+  Future<void> leaveAllStoryRooms() async {
+    for (final room in storiesRooms) {
+      if (room.membership == Membership.leave) continue;
+      try {
+        await room.leave();
+      } catch (e) {
+        Logs().w('[Stories] failed to leave ${room.id}', e);
+      }
+    }
+  }
+
+  /// Redact every story post in my story room (delete all my stories now).
+  Future<void> deleteMyStories() async {
+    final room = myStoriesRoom;
+    if (room == null) return;
+    final timeline = await room.getTimeline();
+    final posts = timeline.events
+        .where((e) => e.type == EventTypes.Message && !e.redacted)
+        .toList();
+    for (final post in posts) {
+      try {
+        await room.redactEvent(post.eventId);
+      } catch (e) {
+        Logs().w('[Stories] failed to delete story post', e);
       }
     }
   }
