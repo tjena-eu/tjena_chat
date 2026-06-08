@@ -6,6 +6,7 @@
 import 'package:fluffychat/config/setting_keys.dart';
 import 'package:fluffychat/config/themes.dart';
 import 'package:fluffychat/l10n/l10n.dart';
+import 'package:fluffychat/pages/settings_stories/settings_stories.dart';
 import 'package:fluffychat/utils/platform_infos.dart';
 import 'package:fluffychat/widgets/layouts/max_width_body.dart';
 import 'package:fluffychat/widgets/matrix.dart';
@@ -44,6 +45,19 @@ class SettingsChatView extends StatelessWidget {
                 subtitle:
                     'Show contacts’ status and presence at the top of your chats.',
                 setting: AppSettings.showPresences,
+              ),
+              ListTile(
+                leading: const Icon(Icons.auto_stories_outlined),
+                title: const Text('Stories'),
+                subtitle: const Text(
+                  'Choose who can see your stories and whose you receive.',
+                ),
+                trailing: const Icon(Icons.chevron_right_outlined),
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => const StoriesSettingsPage(),
+                  ),
+                ),
               ),
               SettingsSwitchListTile.adaptive(
                 title: L10n.of(context).hideRedactedMessages,
