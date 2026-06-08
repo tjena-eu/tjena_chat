@@ -35,7 +35,13 @@ class _VideoRendererState extends State<VideoRenderer> {
   Future<RTCVideoRenderer> _initializeRenderer() async {
     _renderer ??= RTCVideoRenderer();
     await _renderer!.initialize();
-    _renderer!.srcObject = mediaStream;
+    final ms = mediaStream;
+    Logs().i(
+      '[VOIP] VideoRenderer bind: isLocal=${widget.stream?.isLocal()} '
+      'mirror=${widget.mirror} streamId=${ms?.id} ownerTag=${ms?.ownerTag} '
+      'videoTracks=${ms?.getVideoTracks().map((t) => t.id).toList()}',
+    );
+    _renderer!.srcObject = ms;
     return _renderer!;
   }
 
@@ -50,15 +56,34 @@ class _VideoRendererState extends State<VideoRenderer> {
 
   @override
   void initState() {
+    _subscribeToStreamChanges();
+    setupRenderer();
+    super.initState();
+  }
+
+  void _subscribeToStreamChanges() {
+    _streamChangeSubscription?.cancel();
     _streamChangeSubscription = widget.stream?.onStreamChanged.stream.listen((
       stream,
     ) {
+      if (!mounted) return;
       setState(() {
         _renderer?.srcObject = stream;
       });
     });
-    setupRenderer();
-    super.initState();
+  }
+
+  @override
+  void didUpdateWidget(VideoRenderer oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // When the dialer swaps the wrapped stream on this slot (e.g. the main view
+    // switching from the local self-view to the remote stream once it arrives),
+    // Flutter reuses this State, so we must re-point the renderer at the new
+    // stream — otherwise it keeps showing the old (local) video.
+    if (!identical(oldWidget.stream, widget.stream)) {
+      _subscribeToStreamChanges();
+      _renderer?.srcObject = mediaStream;
+    }
   }
 
   Future<void> setupRenderer() async {

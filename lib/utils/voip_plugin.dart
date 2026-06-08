@@ -118,12 +118,62 @@ class VoipPlugin with WidgetsBindingObserver implements WebRTCDelegate {
     );
 
     // onConnectionState is not overwritten by the SDK, so this survives.
-    // It also lets us see relay vs host/srflx candidate selection.
-    pc.onConnectionState = (state) {
+    pc.onConnectionState = (state) async {
       Logs().i('[VOIP] PeerConnectionState: $state');
+      if (state ==
+          webrtc_impl.RTCPeerConnectionState.RTCPeerConnectionStateConnected) {
+        await _recoverRemoteStreamIfMissing(pc);
+      }
     };
 
     return pc;
+  }
+
+  /// On Android, flutter_webrtc's `onTrack` sometimes never fires even though
+  /// the remote tracks are present on the RtpReceivers. When that happens the
+  /// matrix SDK never registers a remote stream, so no remote video renders
+  /// (audio still plays, routed natively). As a fallback, once the connection
+  /// is established we reconstruct a remote MediaStream from the receiver tracks
+  /// and hand it to the SDK so the dialer can render it normally.
+  Future<void> _recoverRemoteStreamIfMissing(
+    webrtc_impl.RTCPeerConnection pc,
+  ) async {
+    try {
+      final cid = voip.currentCID;
+      if (cid == null) return;
+      final call = voip.calls[cid];
+      if (call == null) return;
+
+      // If onTrack already delivered a remote stream, do nothing.
+      if (call.getRemoteStreams.isNotEmpty) {
+        Logs().i('[VOIP] remote stream already present, no recovery needed');
+        return;
+      }
+
+      final receivers = await pc.getReceivers();
+      final tracks = receivers
+          .map((r) => r.track)
+          .whereType<webrtc_impl.MediaStreamTrack>()
+          .toList();
+      if (tracks.isEmpty) {
+        Logs().w('[VOIP] recovery: no receiver tracks available');
+        return;
+      }
+
+      final remoteStream = await webrtc_impl.createLocalMediaStream(
+        'tjena_reconstructed_remote',
+      );
+      for (final track in tracks) {
+        await remoteStream.addTrack(track);
+      }
+      Logs().i(
+        '[VOIP] recovery: injecting reconstructed remote stream '
+        'tracks=${tracks.map((t) => t.kind).toList()}',
+      );
+      await call.addReconstructedRemoteStream(remoteStream);
+    } catch (e, s) {
+      Logs().e('[VOIP] remote stream recovery failed', e, s);
+    }
   }
 
   Future<bool> get hasCallingAccount async => false;

@@ -32,6 +32,40 @@ EOF
   echo "==> Development keystore created at $KEYSTORE"
 fi
 
+# Apply the matrix-dart-sdk VoIP fix (remote video on Android). Idempotent;
+# re-applied here so it survives `flutter pub get` regenerating the dependency.
+# The matrix package is a *git* dependency, so we resolve its real source path
+# from .dart_tool/package_config.json rather than guessing pub-cache layout.
+# See patches/voip_remote_stream_fix.py for details.
+echo "==> Ensuring matrix SDK VoIP patch is applied..."
+CALL_SESSION="$(python3 - "$SCRIPT_DIR" <<'PY'
+import json, os, sys
+from urllib.parse import urlparse, unquote
+root = sys.argv[1]
+cfg = os.path.join(root, ".dart_tool", "package_config.json")
+try:
+    data = json.load(open(cfg))
+except Exception:
+    sys.exit(0)
+for p in data.get("packages", []):
+    if p.get("name") == "matrix":
+        uri = p.get("rootUri", "")
+        if uri.startswith("file://"):
+            base = unquote(urlparse(uri).path)
+        else:
+            # relative to the .dart_tool directory
+            base = os.path.normpath(os.path.join(root, ".dart_tool", uri))
+        print(os.path.join(base, "lib", "src", "voip", "call_session.dart"))
+        break
+PY
+)"
+if [ -n "$CALL_SESSION" ] && [ -f "$CALL_SESSION" ]; then
+  echo "  matrix source: $CALL_SESSION"
+  python3 "$SCRIPT_DIR/patches/voip_remote_stream_fix.py" "$CALL_SESSION"
+else
+  echo "  WARNING: matrix SDK source not found (run 'flutter pub get'); skipping VoIP patch"
+fi
+
 echo "==> Building Android APK (release)..."
 "$FLUTTER" build apk --release
 
