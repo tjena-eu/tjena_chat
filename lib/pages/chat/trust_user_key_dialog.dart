@@ -109,12 +109,7 @@ Future<bool> showTrustUserInRoomDialog(BuildContext context, Room room) async {
       actions: [
         AdaptiveDialogAction(
           bigButtons: true,
-          onPressed: () {
-            for (final user in users) {
-              room.client.userDeviceKeys[user.id]?.masterKey?.trustOnFirstUse();
-            }
-            Navigator.of(context).pop(true);
-          },
+          onPressed: () => Navigator.of(context).pop(_Action.allow),
           child: Text(L10n.of(context).allow),
         ),
         if (room.isDirectChat)

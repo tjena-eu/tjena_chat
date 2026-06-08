@@ -45,6 +45,10 @@ enum AppSettings<T> {
   sendOnEnter<bool>('chat.fluffy.send_on_enter', false),
   displayNavigationRail<bool>('chat.fluffy.display_navigation_rail', false),
   showPresences<bool>('chat.fluffy.show_presences', true),
+  // Stories: who receives my stories ('none' | 'all' | 'selected') and whether
+  // I receive others' stories ('all' | 'none').
+  storiesSendScope<String>('chat.fluffy.stories_send_scope', 'all'),
+  storiesReceiveScope<String>('chat.fluffy.stories_receive_scope', 'all'),
   experimentalVoip<bool>('chat.fluffy.experimental_voip', true),
   shareKeysWith<String>('chat.fluffy.share_keys_with_2', 'all'),
   noEncryptionWarningShown<bool>(

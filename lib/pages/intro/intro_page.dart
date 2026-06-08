@@ -10,7 +10,6 @@ import 'package:fluffychat/utils/platform_infos.dart';
 import 'package:fluffychat/widgets/layouts/login_scaffold.dart';
 import 'package:fluffychat/widgets/matrix.dart';
 import 'package:flutter/material.dart';
-import 'package:go_router/go_router.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:url_launcher/url_launcher_string.dart';
 
@@ -18,6 +17,7 @@ class IntroPage extends StatelessWidget {
   final bool isLoading, hasPresetHomeserver;
   final String? loggingInToHomeserver, welcomeText;
   final VoidCallback login;
+  final VoidCallback changeServer;
 
   const IntroPage({
     required this.isLoading,
@@ -26,6 +26,7 @@ class IntroPage extends StatelessWidget {
     required this.hasPresetHomeserver,
     required this.welcomeText,
     required this.login,
+    required this.changeServer,
   });
 
   @override
@@ -168,23 +169,12 @@ class IntroPage extends StatelessWidget {
                                   onPressed: login,
                                   child: Text(L10n.of(context).signIn),
                                 ),
-
-                                if (!hasPresetHomeserver)
-                                  TextButton(
-                                    onPressed: () async {
-                                      final client = await Matrix.of(
-                                        context,
-                                      ).getLoginClient();
-                                      if (!context.mounted) return;
-                                      context.go(
-                                        '${GoRouterState.of(context).uri.path}/login',
-                                        extra: client,
-                                      );
-                                    },
-                                    child: Text(
-                                      L10n.of(context).loginWithMatrixId,
-                                    ),
+                                TextButton(
+                                  onPressed: changeServer,
+                                  child: const Text(
+                                    'Change server / use another Matrix server',
                                   ),
+                                ),
                               ],
                             ),
                           ),

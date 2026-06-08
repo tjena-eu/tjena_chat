@@ -25,6 +25,13 @@ Future<void> connectToHomeserverFlow(
   bool signUp,
 ) async {
   setState(AsyncSnapshot.waiting());
+  // When adding an account we're already logged in, so the normal
+  // '/home/login' route would redirect to '/rooms'. Use the add-account login
+  // route (which is reachable while logged in) in that case.
+  final currentPath = GoRouterState.of(context).uri.path;
+  final loginRoute = currentPath.contains('/rooms/settings/addaccount')
+      ? '/rooms/settings/addaccount/login'
+      : '/home/login';
   try {
     final homeserverInput = homeserverData.name!;
     var homeserver = Uri.parse(homeserverInput);
@@ -64,7 +71,7 @@ Future<void> connectToHomeserverFlow(
         await launchUrlString(regLink);
       }
       if (!context.mounted) return;
-      context.go('/home/login', extra: client);
+      context.go(loginRoute, extra: client);
       setState(AsyncSnapshot.withData(ConnectionState.done, true));
       return;
     }

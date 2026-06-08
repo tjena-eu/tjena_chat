@@ -20,7 +20,7 @@ class StoryViewer extends StatefulWidget {
   const StoryViewer({required this.room, super.key});
 
   static Future<void> show(BuildContext context, Room room) =>
-      Navigator.of(context).push(
+      Navigator.of(context, rootNavigator: true).push(
         MaterialPageRoute(
           builder: (_) => StoryViewer(room: room),
           fullscreenDialog: true,
