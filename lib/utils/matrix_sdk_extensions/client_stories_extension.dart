@@ -27,46 +27,58 @@ extension ClientStoriesExtension on Client {
   /// Account-data key storing the id of our "Stories" space.
   static const String spaceAccountDataType = 'chat.fluffy.stories_space';
 
+  /// The server-wide shared stories space alias (admin-created), e.g.
+  /// "#stories:tjena.eu".
+  String? get storiesSpaceAlias {
+    final domain = _ownDomain;
+    return domain == null ? null : '#stories:$domain';
+  }
+
+  /// The shared stories space, if we're already joined to it.
+  Room? get storiesSpace {
+    final alias = storiesSpaceAlias;
+    for (final room in rooms) {
+      if (room.isSpace &&
+          room.membership == Membership.join &&
+          (room.canonicalAlias == alias ||
+              room.id == storiesSpaceId)) {
+        return room;
+      }
+    }
+    return null;
+  }
+
   String? get storiesSpaceId =>
       accountData[spaceAccountDataType]?.content.tryGet<String>('id');
 
-  /// Our joined "Stories" space, if it exists.
-  Room? get storiesSpace {
-    final id = storiesSpaceId;
-    if (id == null) return null;
-    final room = getRoomById(id);
-    return (room != null && room.isSpace && room.membership == Membership.join)
-        ? room
-        : null;
-  }
-
-  /// Get our "Stories" space or create it. All story rooms are filed under it
-  /// so they live in their own space instead of cluttering the chat list.
-  Future<Room> getOrCreateStoriesSpace() async {
+  /// Join the shared, admin-created `#stories:<domain>` space (does not create
+  /// it). Returns null if it can't be resolved/joined.
+  Future<Room?> getOrJoinStoriesSpace() async {
     final existing = storiesSpace;
     if (existing != null) return existing;
-
-    final roomId = await createRoom(
-      creationContent: {'type': 'm.space'},
-      preset: CreateRoomPreset.privateChat,
-      name: 'Stories',
-      topic: 'Your stories and the stories shared with you.',
-    );
-    if (getRoomById(roomId) == null) {
-      await onSync.stream.firstWhere(
-        (sync) => sync.rooms?.join?[roomId] != null,
-      );
+    final alias = storiesSpaceAlias;
+    if (alias == null) return null;
+    try {
+      final roomId = await joinRoom(alias);
+      if (getRoomById(roomId) == null) {
+        await onSync.stream.firstWhere(
+          (sync) => sync.rooms?.join?[roomId] != null,
+        );
+      }
+      await setAccountData(userID!, spaceAccountDataType, {'id': roomId});
+      return getRoomById(roomId);
+    } catch (e) {
+      Logs().w('[Stories] could not join shared stories space $alias', e);
+      return null;
     }
-    await setAccountData(userID!, spaceAccountDataType, {'id': roomId});
-    final room = getRoomById(roomId);
-    if (room == null) throw Exception('Failed to create stories space.');
-    return room;
   }
 
-  /// File [room] under our Stories space (creating the space on first use).
+  /// File our own [room] under the shared stories space, so it appears there
+  /// for the people we invited. Best-effort (needs child-add permission).
   Future<void> addRoomToStoriesSpace(Room room) async {
     try {
-      final space = await getOrCreateStoriesSpace();
+      final space = await getOrJoinStoriesSpace();
+      if (space == null) return;
       final alreadyChild =
           space.spaceChildren.any((c) => c.roomId == room.id);
       if (!alreadyChild) await space.setSpaceChild(room.id);
@@ -253,7 +265,8 @@ extension ClientStoriesExtension on Client {
             receiveAll && author != null && isSameHomeserver(author);
         if (accept) {
           if (room.membership == Membership.invite) await room.join();
-          await addRoomToStoriesSpace(room);
+          // Note: the sender files their room under the shared space; the
+          // receiver only needs to join the room itself.
         } else if (author != null) {
           // Known author but not acceptable (cross-server, or receiving none):
           // reject/leave. Undetected rooms (author == null) are left alone.
@@ -272,6 +285,7 @@ extension ClientStoriesExtension on Client {
   /// auto-join applicable incoming story rooms.
   Future<void> enableStories() async {
     await AppSettings.storiesEnabled.setItem(true);
+    await getOrJoinStoriesSpace();
     await getOrCreateMyStoriesRoom();
     await applyStoriesReceivePolicy();
   }
