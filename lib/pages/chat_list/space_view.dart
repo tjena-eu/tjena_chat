@@ -13,6 +13,7 @@ import 'package:fluffychat/config/themes.dart';
 import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/pages/chat_list/unread_bubble.dart';
 import 'package:fluffychat/utils/localized_exception_extension.dart';
+import 'package:fluffychat/utils/matrix_sdk_extensions/client_stories_extension.dart';
 import 'package:fluffychat/utils/stream_extension.dart';
 import 'package:fluffychat/utils/string_color.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.dart';
@@ -540,6 +541,17 @@ class _SpaceViewState extends State<SpaceView> {
                         }
                         final item = _discoveredChildren[i];
                         var joinedRoom = room.client.getRoomById(item.roomId);
+                        // Stories space: only show rooms you're actually in,
+                        // so you never see/join others' story rooms.
+                        final isStoriesSpace =
+                            room.client.storiesSpaceId == widget.spaceId ||
+                            (room.client.storiesSpaceAlias != null &&
+                                room.canonicalAlias ==
+                                    room.client.storiesSpaceAlias);
+                        if (isStoriesSpace &&
+                            joinedRoom?.membership != Membership.join) {
+                          return const SizedBox.shrink();
+                        }
                         final displayname =
                             item.name ??
                             item.canonicalAlias ??
