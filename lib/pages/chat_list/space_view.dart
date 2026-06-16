@@ -25,6 +25,7 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:matrix/matrix.dart' as sdk;
 import 'package:matrix/matrix.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 enum SpaceChildAction {
   mute,
@@ -33,7 +34,11 @@ enum SpaceChildAction {
   markAsRead,
   removeFromSpace,
   leave,
+  pin,
+  unpin,
 }
+
+enum _SpaceSortMode { dateDesc, dateAsc, nameAsc, nameDesc }
 
 enum SpaceActions { settings, invite, members, leave }
 
@@ -62,10 +67,17 @@ class _SpaceViewState extends State<SpaceView> {
   bool _noMoreRooms = false;
   bool _isLoading = false;
 
+  _SpaceSortMode _sortMode = _SpaceSortMode.dateDesc;
+  Set<String> _pins = {};
+
+  String get _sortPrefKey => 'space_sort_mode_${widget.spaceId}';
+  String get _pinsPrefKey => 'space_pins_${widget.spaceId}';
+
   StreamSubscription? _childStateSub;
 
   @override
   void initState() {
+    _loadPrefs();
     _loadHierarchy();
     _childStateSub = Matrix.of(context).client.onSync.stream
         .where(
@@ -77,6 +89,94 @@ class _SpaceViewState extends State<SpaceView> {
         )
         .listen(_loadHierarchy);
     super.initState();
+  }
+
+  Future<void> _loadPrefs() async {
+    final prefs = await SharedPreferences.getInstance();
+    final modeIndex = prefs.getInt(_sortPrefKey) ?? 0;
+    final pins = prefs.getStringList(_pinsPrefKey) ?? [];
+    if (!mounted) return;
+    setState(() {
+      _sortMode = _SpaceSortMode.values[modeIndex.clamp(0, _SpaceSortMode.values.length - 1)];
+      _pins = pins.toSet();
+    });
+  }
+
+  Future<void> _setSortMode(_SpaceSortMode mode) async {
+    setState(() => _sortMode = mode);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(_sortPrefKey, mode.index);
+  }
+
+  Future<void> _togglePin(String roomId) async {
+    final newPins = Set<String>.from(_pins);
+    if (newPins.contains(roomId)) {
+      newPins.remove(roomId);
+    } else {
+      newPins.add(roomId);
+    }
+    setState(() => _pins = newPins);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(_pinsPrefKey, newPins.toList());
+  }
+
+  List<SpaceRoomsChunk$2> _applySortAndPin(
+    List<SpaceRoomsChunk$2> children,
+    sdk.Client client,
+  ) {
+    DateTime ts(SpaceRoomsChunk$2 c) =>
+        client.getRoomById(c.roomId)?.lastEvent?.originServerTs ?? DateTime(0);
+    String name(SpaceRoomsChunk$2 c) =>
+        (c.name ?? c.canonicalAlias ?? client.getRoomById(c.roomId)?.getLocalizedDisplayname() ?? '').toLowerCase();
+
+    int compare(SpaceRoomsChunk$2 a, SpaceRoomsChunk$2 b) =>
+        switch (_sortMode) {
+          _SpaceSortMode.dateDesc => ts(b).compareTo(ts(a)),
+          _SpaceSortMode.dateAsc  => ts(a).compareTo(ts(b)),
+          _SpaceSortMode.nameAsc  => name(a).compareTo(name(b)),
+          _SpaceSortMode.nameDesc => name(b).compareTo(name(a)),
+        };
+
+    final pinned   = children.where((c) => _pins.contains(c.roomId)).toList()..sort(compare);
+    final unpinned = children.where((c) => !_pins.contains(c.roomId)).toList()..sort(compare);
+    return [...pinned, ...unpinned];
+  }
+
+  void _showSortMenu(BuildContext context) {
+    showModalBottomSheet<void>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.calendar_today_outlined),
+              title: const Text('Newest first'),
+              trailing: _sortMode == _SpaceSortMode.dateDesc ? const Icon(Icons.check) : null,
+              onTap: () { Navigator.pop(ctx); _setSortMode(_SpaceSortMode.dateDesc); },
+            ),
+            ListTile(
+              leading: const Icon(Icons.calendar_today_outlined),
+              title: const Text('Oldest first'),
+              trailing: _sortMode == _SpaceSortMode.dateAsc ? const Icon(Icons.check) : null,
+              onTap: () { Navigator.pop(ctx); _setSortMode(_SpaceSortMode.dateAsc); },
+            ),
+            ListTile(
+              leading: const Icon(Icons.sort_by_alpha_outlined),
+              title: const Text('Name A → Z'),
+              trailing: _sortMode == _SpaceSortMode.nameAsc ? const Icon(Icons.check) : null,
+              onTap: () { Navigator.pop(ctx); _setSortMode(_SpaceSortMode.nameAsc); },
+            ),
+            ListTile(
+              leading: const Icon(Icons.sort_by_alpha_outlined),
+              title: const Text('Name Z → A'),
+              trailing: _sortMode == _SpaceSortMode.nameDesc ? const Icon(Icons.check) : null,
+              onTap: () { Navigator.pop(ctx); _setSortMode(_SpaceSortMode.nameDesc); },
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   @override
@@ -240,6 +340,17 @@ class _SpaceViewState extends State<SpaceView> {
       context: posContext,
       position: position,
       items: [
+        PopupMenuItem(
+          value: _pins.contains(roomId) ? SpaceChildAction.unpin : SpaceChildAction.pin,
+          child: Row(
+            mainAxisSize: .min,
+            children: [
+              Icon(_pins.contains(roomId) ? Icons.push_pin : Icons.push_pin_outlined),
+              const SizedBox(width: 12),
+              Text(_pins.contains(roomId) ? 'Unpin' : 'Pin'),
+            ],
+          ),
+        ),
         if (room != null && room.membership == Membership.join) ...[
           PopupMenuItem(
             value: room.pushRuleState == PushRuleState.notify
@@ -369,8 +480,18 @@ class _SpaceViewState extends State<SpaceView> {
           context: context,
           future: () => room!.leave(),
         );
+      case SpaceChildAction.pin:
+      case SpaceChildAction.unpin:
+        await _togglePin(roomId);
     }
   }
+
+  IconData get _sortModeIcon => switch (_sortMode) {
+    _SpaceSortMode.dateDesc => Icons.arrow_downward_outlined,
+    _SpaceSortMode.dateAsc  => Icons.arrow_upward_outlined,
+    _SpaceSortMode.nameAsc  => Icons.sort_by_alpha_outlined,
+    _SpaceSortMode.nameDesc => Icons.sort_by_alpha_outlined,
+  };
 
   @override
   Widget build(BuildContext context) {
@@ -413,6 +534,11 @@ class _SpaceViewState extends State<SpaceView> {
           ),
         ),
         actions: [
+          IconButton(
+            icon: Icon(_sortModeIcon),
+            tooltip: 'Sort',
+            onPressed: () => _showSortMenu(context),
+          ),
           if (isAdmin)
             IconButton(
               icon: Icon(Icons.add_outlined),
@@ -484,6 +610,7 @@ class _SpaceViewState extends State<SpaceView> {
                   .rateLimit(const Duration(seconds: 1)),
               builder: (context, snapshot) {
                 final filter = _filterController.text.trim().toLowerCase();
+                final sortedChildren = _applySortAndPin(_discoveredChildren, room.client);
                 return CustomScrollView(
                   slivers: [
                     SliverAppBar(
@@ -520,9 +647,9 @@ class _SpaceViewState extends State<SpaceView> {
                       ),
                     ),
                     SliverList.builder(
-                      itemCount: _discoveredChildren.length + 1,
+                      itemCount: sortedChildren.length + 1,
                       itemBuilder: (context, i) {
-                        if (i == _discoveredChildren.length) {
+                        if (i == sortedChildren.length) {
                           if (_noMoreRooms) {
                             return const SizedBox.shrink();
                           }
@@ -539,7 +666,7 @@ class _SpaceViewState extends State<SpaceView> {
                             ),
                           );
                         }
-                        final item = _discoveredChildren[i];
+                        final item = sortedChildren[i];
                         var joinedRoom = room.client.getRoomById(item.roomId);
                         // Stories space: only show rooms you're actually in,
                         // so you never see/join others' story rooms.
@@ -653,6 +780,11 @@ class _SpaceViewState extends State<SpaceView> {
                                       ),
                                 title: Row(
                                   children: [
+                                    if (_pins.contains(item.roomId))
+                                      const Padding(
+                                        padding: EdgeInsets.only(right: 4),
+                                        child: Icon(Icons.push_pin, size: 14),
+                                      ),
                                     Expanded(
                                       child: Opacity(
                                         opacity: joinedRoom == null ? 0.5 : 1,
