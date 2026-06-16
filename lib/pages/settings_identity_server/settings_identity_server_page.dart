@@ -3,6 +3,7 @@
 
 import 'dart:convert';
 
+import 'package:fluffychat/utils/identity_server_lookup.dart';
 import 'package:fluffychat/widgets/matrix.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
@@ -24,11 +25,16 @@ class _SettingsIdentityServerPageState
 
   // IS state
   String? _isBaseUrl;
+  String? _wellKnownUrl; // IS URL from homeserver well-known (informational)
   String? _isToken;
   Map<String, _IsPolicy>? _policies; // null = not loaded
   Set<String> _acceptedUrls = {};
   bool _loadingIs = true;
   String? _isError;
+
+  // Custom IS URL editing
+  final _customUrlController = TextEditingController();
+  bool _isCustom = false;
 
   // Account 3PIDs
   List<ThirdPartyIdentifier>? _pids;
@@ -39,6 +45,12 @@ class _SettingsIdentityServerPageState
     WidgetsBinding.instance.addPostFrameCallback((_) => _init());
   }
 
+  @override
+  void dispose() {
+    _customUrlController.dispose();
+    super.dispose();
+  }
+
   Future<void> _init() async {
     setState(() {
       _loadingIs = true;
@@ -47,13 +59,26 @@ class _SettingsIdentityServerPageState
     try {
       final client = Matrix.of(context).client;
 
-      // Load IS URL from wellknown
-      final wk = await client.getWellknown();
-      final isUrl = wk.mIdentityServer?.baseUrl.toString().stripTrailingSlash();
+      // Load IS URL — custom override takes precedence over well-known
+      final prefs = await SharedPreferences.getInstance();
+      final customStored = prefs.getString('custom_is_base_url');
+
+      String? wellKnownUrl;
+      try {
+        final wk = await client.getWellknown();
+        wellKnownUrl =
+            wk.mIdentityServer?.baseUrl.toString().stripTrailingSlash();
+      } catch (_) {}
+
+      final isUrl = await getEffectiveIsUrl(client);
       if (isUrl == null) {
         setState(() {
-          _isError = 'No identity server configured on this homeserver.';
+          _isError = 'No identity server configured.\n'
+              'Enter a custom URL below or ask your server admin to set one.';
           _loadingIs = false;
+          _wellKnownUrl = wellKnownUrl;
+          _isCustom = customStored != null && customStored.isNotEmpty;
+          _customUrlController.text = customStored ?? '';
         });
         return;
       }
@@ -93,7 +118,6 @@ class _SettingsIdentityServerPageState
       }
 
       // Load previously accepted URLs
-      final prefs = await SharedPreferences.getInstance();
       final accepted = prefs
               .getStringList('is_accepted_urls_${Uri.parse(isUrl).host}') ??
           [];
@@ -104,6 +128,9 @@ class _SettingsIdentityServerPageState
       if (!mounted) return;
       setState(() {
         _isBaseUrl = isUrl;
+        _wellKnownUrl = wellKnownUrl;
+        _isCustom = customStored != null && customStored.isNotEmpty;
+        _customUrlController.text = isUrl;
         _isToken = isToken;
         _policies = policies;
         _acceptedUrls = accepted.toSet();
@@ -117,6 +144,18 @@ class _SettingsIdentityServerPageState
         _loadingIs = false;
       });
     }
+  }
+
+  Future<void> _applyCustomUrl() async {
+    final url = _customUrlController.text.trim();
+    await setCustomIsUrl(url.isEmpty ? null : url);
+    await _init();
+  }
+
+  Future<void> _resetToServerDefault() async {
+    await setCustomIsUrl(null);
+    _customUrlController.text = _wellKnownUrl ?? '';
+    await _init();
   }
 
   bool get _allTermsAccepted {
@@ -413,36 +452,88 @@ class _SettingsIdentityServerPageState
       body: _loadingIs
           ? const Center(child: CircularProgressIndicator.adaptive())
           : _isError != null
-          ? Center(
-              child: Padding(
-                padding: const EdgeInsets.all(24),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      Icons.error_outline,
-                      size: 48,
-                      color: theme.colorScheme.error,
+          ? ListView(
+              padding: const EdgeInsets.all(16),
+              children: [
+                Card(
+                  color: theme.colorScheme.errorContainer,
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Icon(
+                              Icons.error_outline,
+                              color: theme.colorScheme.onErrorContainer,
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                _isError!,
+                                style: theme.textTheme.bodySmall?.copyWith(
+                                  color: theme.colorScheme.onErrorContainer,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 12),
+                        FilledButton.icon(
+                          onPressed: _init,
+                          icon: const Icon(Icons.refresh_outlined),
+                          label: const Text('Retry'),
+                        ),
+                      ],
                     ),
-                    const SizedBox(height: 12),
-                    Text(
-                      _isError!,
-                      textAlign: TextAlign.center,
-                    ),
-                    const SizedBox(height: 16),
-                    FilledButton.icon(
-                      onPressed: _init,
-                      icon: const Icon(Icons.refresh_outlined),
-                      label: const Text('Retry'),
-                    ),
-                  ],
+                  ),
                 ),
-              ),
+                const SizedBox(height: 12),
+                Card(
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Identity Server',
+                          style: theme.textTheme.titleMedium?.copyWith(
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        TextField(
+                          controller: _customUrlController,
+                          keyboardType: TextInputType.url,
+                          decoration: InputDecoration(
+                            labelText: 'Identity server URL',
+                            hintText:
+                                _wellKnownUrl ?? 'https://is.example.com',
+                            helperText: _wellKnownUrl != null
+                                ? 'Server default: $_wellKnownUrl'
+                                : null,
+                            border: const OutlineInputBorder(),
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        SizedBox(
+                          width: double.infinity,
+                          child: FilledButton.tonal(
+                            onPressed: _applyCustomUrl,
+                            child: const Text('Apply'),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
             )
           : ListView(
               padding: const EdgeInsets.all(16),
               children: [
-                // ── IS info card ────────────────────────────────────────
+                // ── IS URL card ─────────────────────────────────────────
                 Card(
                   child: Padding(
                     padding: const EdgeInsets.all(16),
@@ -466,21 +557,43 @@ class _SettingsIdentityServerPageState
                             ),
                           ],
                         ),
+                        const SizedBox(height: 12),
+                        TextField(
+                          controller: _customUrlController,
+                          keyboardType: TextInputType.url,
+                          decoration: InputDecoration(
+                            labelText: 'Identity server URL',
+                            hintText: _wellKnownUrl ?? 'https://is.example.com',
+                            helperText: _wellKnownUrl != null
+                                ? 'Server default: $_wellKnownUrl'
+                                : null,
+                            border: const OutlineInputBorder(),
+                            suffixIcon: _isCustom
+                                ? IconButton(
+                                    icon: const Icon(Icons.clear_outlined),
+                                    tooltip: 'Reset to server default',
+                                    onPressed: _resetToServerDefault,
+                                  )
+                                : null,
+                          ),
+                        ),
                         const SizedBox(height: 8),
-                        Text(
-                          _isBaseUrl ?? '—',
-                          style: theme.textTheme.bodySmall?.copyWith(
-                            color: theme.colorScheme.onSurfaceVariant,
-                            fontFamily: 'monospace',
+                        SizedBox(
+                          width: double.infinity,
+                          child: FilledButton.tonal(
+                            onPressed: _applyCustomUrl,
+                            child: const Text('Apply'),
                           ),
                         ),
-                        const SizedBox(height: 4),
-                        Text(
-                          'Configured by your homeserver.',
-                          style: theme.textTheme.labelSmall?.copyWith(
-                            color: theme.colorScheme.onSurfaceVariant,
+                        if (_isCustom) ...[
+                          const SizedBox(height: 4),
+                          Text(
+                            'Using custom identity server',
+                            style: theme.textTheme.labelSmall?.copyWith(
+                              color: theme.colorScheme.primary,
+                            ),
                           ),
-                        ),
+                        ],
                       ],
                     ),
                   ),

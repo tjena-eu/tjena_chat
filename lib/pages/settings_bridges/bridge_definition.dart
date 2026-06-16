@@ -13,6 +13,8 @@ class BridgeDef {
   final List<BridgeAction> actions;
   final List<String> connectedPatterns;
   final List<String> disconnectedPatterns;
+  final String commandPrefix;
+  final String pmCommand;
 
   const BridgeDef({
     required this.id,
@@ -24,6 +26,8 @@ class BridgeDef {
     required this.actions,
     required this.connectedPatterns,
     required this.disconnectedPatterns,
+    required this.commandPrefix,
+    this.pmCommand = 'pm',
   });
 
   String botUserId(String domain) => '@$defaultBotLocalpart:$domain';
@@ -36,6 +40,7 @@ class BridgeAction {
   final IconData icon;
   final bool isDestructive;
   final bool requiresLoginWarning;
+  final bool requiresPhoneNumber;
 
   const BridgeAction({
     required this.id,
@@ -44,6 +49,7 @@ class BridgeAction {
     required this.icon,
     this.isDestructive = false,
     this.requiresLoginWarning = false,
+    this.requiresPhoneNumber = false,
   });
 }
 
@@ -55,13 +61,15 @@ const kBridges = [
     defaultBotLocalpart: 'whatsappbot',
     description: 'Bridge your WhatsApp chats to Matrix via mautrix-whatsapp',
     docsUrl: 'https://docs.mau.fi/bridges/go/whatsapp/index.html',
+    commandPrefix: '!wa',
+    pmCommand: 'start-chat',
     connectedPatterns: ['logged in', 'you are logged in', 'connected to whatsapp'],
     disconnectedPatterns: ['not logged in', 'logged out', 'disconnected'],
     actions: [
       BridgeAction(
-        id: 'ping',
+        id: 'list_logins',
         label: 'Check status',
-        command: 'ping',
+        command: 'list-logins',
         icon: Icons.radar_outlined,
       ),
       BridgeAction(
@@ -72,16 +80,18 @@ const kBridges = [
         requiresLoginWarning: true,
       ),
       BridgeAction(
-        id: 'sync',
-        label: 'Sync contacts',
-        command: 'sync',
-        icon: Icons.sync_outlined,
+        id: 'login_phone',
+        label: 'Login via phone',
+        command: 'login phone',
+        icon: Icons.phone_outlined,
+        requiresLoginWarning: true,
+        requiresPhoneNumber: true,
       ),
       BridgeAction(
-        id: 'reconnect',
-        label: 'Reconnect',
-        command: 'reconnect',
-        icon: Icons.refresh_outlined,
+        id: 'sync',
+        label: 'Sync contacts',
+        command: 'sync contacts',
+        icon: Icons.sync_outlined,
       ),
       BridgeAction(
         id: 'logout',
@@ -99,33 +109,29 @@ const kBridges = [
     defaultBotLocalpart: 'signalbot',
     description: 'Bridge your Signal chats to Matrix via mautrix-signal',
     docsUrl: 'https://docs.mau.fi/bridges/python/signal/index.html',
+    commandPrefix: '!signal',
+    pmCommand: 'start-chat',
     connectedPatterns: ['logged in', 'you are logged in', 'connected', 'linked'],
     disconnectedPatterns: ['not logged in', 'logged out', 'disconnected', 'not linked'],
     actions: [
       BridgeAction(
-        id: 'ping',
+        id: 'list_logins',
         label: 'Check status',
-        command: 'ping',
+        command: 'list-logins',
         icon: Icons.radar_outlined,
       ),
       BridgeAction(
-        id: 'link',
-        label: 'Link device',
-        command: 'link',
+        id: 'login',
+        label: 'Login',
+        command: 'login',
         icon: Icons.link_outlined,
         requiresLoginWarning: true,
       ),
       BridgeAction(
         id: 'sync',
         label: 'Sync contacts',
-        command: 'sync',
+        command: 'sync contacts',
         icon: Icons.sync_outlined,
-      ),
-      BridgeAction(
-        id: 'reconnect',
-        label: 'Reconnect',
-        command: 'reconnect',
-        icon: Icons.refresh_outlined,
       ),
       BridgeAction(
         id: 'logout',

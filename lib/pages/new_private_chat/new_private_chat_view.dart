@@ -191,6 +191,7 @@ class NewPrivateChatView extends StatelessWidget {
                               title: Text(L10n.of(context).scanQrCode),
                               onTap: controller.openScannerAction,
                             ),
+                          ..._bridgeTiles(context, controller),
                           Center(
                             child: Padding(
                               padding: const EdgeInsets.symmetric(
@@ -317,4 +318,24 @@ class NewPrivateChatView extends StatelessWidget {
       ),
     );
   }
+}
+
+List<Widget> _bridgeTiles(
+  BuildContext context,
+  NewPrivateChatController controller,
+) {
+  final available = controller.availableBridges();
+  if (available.isEmpty) return const [];
+  return available.map((def) {
+    return ListTile(
+      leading: CircleAvatar(
+        backgroundColor: def.color,
+        foregroundColor: Colors.white,
+        child: const Icon(Icons.chat_outlined),
+      ),
+      title: Text('New ${def.name} chat'),
+      subtitle: const Text('Start a chat via phone number'),
+      onTap: () => controller.openBridgeNewChat(def),
+    );
+  }).toList();
 }

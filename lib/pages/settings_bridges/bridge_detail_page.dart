@@ -90,7 +90,43 @@ class _BridgeDetailPageState extends State<BridgeDetailPage> {
       final confirmed = await _showLoginWarning(action);
       if (!confirmed) return;
     }
-    await _sendCommand(action.command);
+    if (action.requiresPhoneNumber) {
+      final phone = await _showPhoneDialog();
+      if (phone == null || phone.isEmpty) return;
+      await _sendCommand('${action.command} $phone');
+    } else {
+      await _sendCommand(action.command);
+    }
+  }
+
+  Future<String?> _showPhoneDialog() {
+    final ctrl = TextEditingController();
+    return showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog.adaptive(
+        title: const Text('Enter phone number'),
+        content: TextField(
+          controller: ctrl,
+          keyboardType: TextInputType.phone,
+          autofocus: true,
+          decoration: const InputDecoration(
+            hintText: '+1234567890',
+            labelText: 'Phone number with country code',
+          ),
+          onSubmitted: (v) => Navigator.of(ctx).pop(v.trim()),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(null),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(ctrl.text.trim()),
+            child: const Text('Continue'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<bool> _showLoginWarning(BridgeAction action) async {

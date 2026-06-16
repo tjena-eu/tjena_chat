@@ -5,10 +5,12 @@
 
 import 'dart:async';
 
+import 'package:collection/collection.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/pages/new_private_chat/new_private_chat_view.dart';
 import 'package:fluffychat/pages/new_private_chat/qr_scanner_modal.dart';
+import 'package:fluffychat/pages/settings_bridges/bridge_definition.dart';
 import 'package:fluffychat/utils/adaptive_bottom_sheet.dart';
 import 'package:fluffychat/utils/fluffy_share.dart';
 import 'package:fluffychat/utils/identity_server_lookup.dart';
@@ -17,6 +19,7 @@ import 'package:fluffychat/utils/url_launcher.dart';
 import 'package:fluffychat/widgets/matrix.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:go_router/go_router.dart';
 import 'package:matrix/matrix.dart';
 
 import '../../widgets/adaptive_dialogs/user_dialog.dart';
@@ -141,6 +144,67 @@ class NewPrivateChatController extends State<NewPrivateChat> {
 
   void openUserModal(Profile profile) =>
       UserDialog.show(context: context, profile: profile);
+
+  List<BridgeDef> availableBridges() {
+    final client = Matrix.of(context).client;
+    final domain = client.userID?.domain ?? '';
+    return kBridges.where((def) {
+      final botId = def.botUserId(domain);
+      return client.rooms.any(
+        (r) => r.isDirectChat && r.directChatMatrixID == botId,
+      );
+    }).toList();
+  }
+
+  Future<void> openBridgeNewChat(BridgeDef def) async {
+    final phone = await _showPhoneDialog('New ${def.name} chat');
+    if (phone == null || phone.isEmpty) return;
+
+    final client = Matrix.of(context).client;
+    final domain = client.userID?.domain ?? '';
+    final botId = def.botUserId(domain);
+
+    var dmRoom = client.rooms.firstWhereOrNull(
+      (r) => r.isDirectChat && r.directChatMatrixID == botId,
+    );
+    dmRoom ??= client.getRoomById(await client.startDirectChat(botId));
+
+    if (dmRoom == null || !mounted) return;
+    await dmRoom.sendTextEvent('${def.pmCommand} $phone');
+
+    if (!mounted) return;
+    context.go('/rooms/${dmRoom.id}'); // ignore: use_build_context_synchronously
+  }
+
+  Future<String?> _showPhoneDialog(String title) async {
+    final ctrl = TextEditingController();
+    return showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog.adaptive(
+        title: Text(title),
+        content: TextField(
+          controller: ctrl,
+          keyboardType: TextInputType.phone,
+          autofocus: true,
+          decoration: const InputDecoration(
+            hintText: '+1234567890',
+            labelText: 'Phone number with country code',
+          ),
+          onSubmitted: (v) => Navigator.of(ctx).pop(v.trim()),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(null),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(ctrl.text.trim()),
+            child: const Text('Start chat'),
+          ),
+        ],
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) => NewPrivateChatView(this);
