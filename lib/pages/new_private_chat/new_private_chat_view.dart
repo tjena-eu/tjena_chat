@@ -19,6 +19,7 @@ import 'package:matrix/matrix.dart';
 import 'package:pretty_qr_code/pretty_qr_code.dart';
 
 import '../../widgets/qr_code_viewer.dart';
+import 'local_contacts_page.dart';
 
 class NewPrivateChatView extends StatelessWidget {
   final NewPrivateChatController controller;
@@ -157,6 +158,25 @@ class NewPrivateChatView extends StatelessWidget {
                             title: Text(L10n.of(context).createGroup),
                             onTap: () => context.go('/rooms/newgroup'),
                           ),
+                          if (PlatformInfos.isMobile)
+                            ListTile(
+                              leading: CircleAvatar(
+                                backgroundColor:
+                                    theme.colorScheme.primaryContainer,
+                                foregroundColor:
+                                    theme.colorScheme.onPrimaryContainer,
+                                child: const Icon(Icons.contacts_outlined),
+                              ),
+                              title: const Text('Search local contacts'),
+                              subtitle: const Text(
+                                'Find your contacts on Matrix',
+                              ),
+                              onTap: () => Navigator.of(context).push(
+                                MaterialPageRoute(
+                                  builder: (_) => const LocalContactsPage(),
+                                ),
+                              ),
+                            ),
                           if (PlatformInfos.isMobile)
                             ListTile(
                               leading: CircleAvatar(

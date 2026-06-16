@@ -1,0 +1,6 @@
+services:
+  tjena_chat:
+    image: tjena_chat
+    ports:
+      - "8080:80"
+    restart: unless-stopped

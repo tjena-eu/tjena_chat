@@ -24,10 +24,13 @@ import 'package:fluffychat/pages/new_group/new_group.dart';
 import 'package:fluffychat/pages/new_private_chat/new_private_chat.dart';
 import 'package:fluffychat/pages/settings/settings.dart';
 import 'package:fluffychat/pages/settings_3pid/settings_3pid.dart';
+import 'package:fluffychat/pages/settings_bridges/bridge_detail_page.dart';
+import 'package:fluffychat/pages/settings_bridges/settings_bridges.dart';
 import 'package:fluffychat/pages/settings_chat/settings_chat.dart';
 import 'package:fluffychat/pages/settings_emotes/settings_emotes.dart';
 import 'package:fluffychat/pages/settings_homeserver/settings_homeserver.dart';
 import 'package:fluffychat/pages/settings_ignore_list/settings_ignore_list.dart';
+import 'package:fluffychat/pages/settings_local_backup/local_backup_page.dart';
 import 'package:fluffychat/pages/settings_notifications/settings_notifications.dart';
 import 'package:fluffychat/pages/settings_password/settings_password.dart';
 import 'package:fluffychat/pages/settings_security/settings_security.dart';
@@ -365,6 +368,45 @@ abstract class AppRoutes {
                             const Settings3Pid(),
                           ),
                           redirect: loggedOutRedirect,
+                        ),
+                      ],
+                    ),
+                    GoRoute(
+                      path: 'local-backup',
+                      redirect: loggedOutRedirect,
+                      pageBuilder: (context, state) => defaultPageBuilder(
+                        context,
+                        state,
+                        const LocalBackupPage(),
+                      ),
+                    ),
+                    GoRoute(
+                      path: 'bridges',
+                      redirect: loggedOutRedirect,
+                      pageBuilder: (context, state) => defaultPageBuilder(
+                        context,
+                        state,
+                        const SettingsBridges(),
+                      ),
+                      routes: [
+                        GoRoute(
+                          path: ':bridgeid',
+                          redirect: loggedOutRedirect,
+                          pageBuilder: (context, state) {
+                            final entry = state.extra as BridgeEntry?;
+                            if (entry == null) {
+                              return defaultPageBuilder(
+                                context,
+                                state,
+                                const SettingsBridges(),
+                              );
+                            }
+                            return defaultPageBuilder(
+                              context,
+                              state,
+                              BridgeDetailPage(entry: entry),
+                            );
+                          },
                         ),
                       ],
                     ),

@@ -192,6 +192,24 @@ class SettingsView extends StatelessWidget {
                   ? theme.colorScheme.surfaceContainerHigh
                   : null,
             ),
+            ListTile(
+              leading: const Icon(Icons.swap_horiz_outlined),
+              title: const Text('Messaging Bridges'),
+              subtitle: const Text('WhatsApp · Signal'),
+              onTap: () => context.go('/rooms/settings/bridges'),
+              tileColor: activeRoute.startsWith('/rooms/settings/bridges')
+                  ? theme.colorScheme.surfaceContainerHigh
+                  : null,
+            ),
+            ListTile(
+              leading: const Icon(Icons.archive_outlined),
+              title: const Text('Local Backup'),
+              subtitle: const Text('Export chats to a ZIP file'),
+              onTap: () => context.go('/rooms/settings/local-backup'),
+              tileColor: activeRoute.startsWith('/rooms/settings/local-backup')
+                  ? theme.colorScheme.surfaceContainerHigh
+                  : null,
+            ),
             Divider(color: theme.dividerColor),
             ListTile(
               leading: const Icon(Icons.dns_outlined),

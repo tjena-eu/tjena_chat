@@ -10,6 +10,7 @@ import 'package:collection/collection.dart';
 import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/utils/client_manager.dart';
 import 'package:fluffychat/utils/init_with_restore.dart';
+import 'package:fluffychat/utils/local_backup_service.dart';
 import 'package:fluffychat/utils/matrix_sdk_extensions/matrix_file_extension.dart';
 import 'package:fluffychat/utils/notification_background_handler.dart';
 import 'package:fluffychat/utils/platform_infos.dart';
@@ -380,6 +381,9 @@ class MatrixState extends State<Matrix> with WidgetsBindingObserver {
         client.requestHistoryOnLimitedTimeline = !foreground;
         Logs().v('Set background sync to', foreground);
       }
+    }
+    if (state == AppLifecycleState.resumed && widget.clients.isNotEmpty) {
+      LocalBackupService.runIfDue(widget.clients.first);
     }
   }
 
