@@ -11,6 +11,7 @@ import 'package:fluffychat/pages/new_private_chat/new_private_chat_view.dart';
 import 'package:fluffychat/pages/new_private_chat/qr_scanner_modal.dart';
 import 'package:fluffychat/utils/adaptive_bottom_sheet.dart';
 import 'package:fluffychat/utils/fluffy_share.dart';
+import 'package:fluffychat/utils/identity_server_lookup.dart';
 import 'package:fluffychat/utils/platform_infos.dart';
 import 'package:fluffychat/utils/url_launcher.dart';
 import 'package:fluffychat/widgets/matrix.dart';
@@ -69,9 +70,8 @@ class NewPrivateChatController extends State<NewPrivateChat> {
   }
 
   Future<List<Profile>> _searchUser(String searchTerm) async {
-    final result = await Matrix.of(
-      context,
-    ).client.searchUserDirectory(searchTerm);
+    final client = Matrix.of(context).client;
+    final result = await client.searchUserDirectory(searchTerm);
     final profiles = result.results;
 
     if (searchTerm.isValidMatrixId &&
@@ -80,7 +80,27 @@ class NewPrivateChatController extends State<NewPrivateChat> {
       profiles.add(Profile(userId: searchTerm));
     }
 
+    // If the term looks like an email, also query the identity server
+    if (_looksLikeEmail(searchTerm)) {
+      try {
+        final found = await lookupAddressesOnIS(
+          client,
+          [searchTerm],
+          [],
+        );
+        final mxid = found[searchTerm.toLowerCase()];
+        if (mxid != null && !profiles.any((p) => p.userId == mxid)) {
+          profiles.insert(0, Profile(userId: mxid, displayName: searchTerm));
+        }
+      } catch (_) {}
+    }
+
     return profiles;
+  }
+
+  static bool _looksLikeEmail(String s) {
+    final at = s.indexOf('@');
+    return at > 0 && s.contains('.', at);
   }
 
   void inviteAction() => FluffyShare.shareInviteLink(context);

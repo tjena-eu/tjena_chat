@@ -29,6 +29,7 @@ import 'package:fluffychat/pages/settings_bridges/settings_bridges.dart';
 import 'package:fluffychat/pages/settings_chat/settings_chat.dart';
 import 'package:fluffychat/pages/settings_emotes/settings_emotes.dart';
 import 'package:fluffychat/pages/settings_homeserver/settings_homeserver.dart';
+import 'package:fluffychat/pages/settings_identity_server/settings_identity_server_page.dart';
 import 'package:fluffychat/pages/settings_ignore_list/settings_ignore_list.dart';
 import 'package:fluffychat/pages/settings_local_backup/local_backup_page.dart';
 import 'package:fluffychat/pages/settings_notifications/settings_notifications.dart';
@@ -326,6 +327,15 @@ abstract class AppRoutes {
                         );
                       },
                       redirect: loggedOutRedirect,
+                    ),
+                    GoRoute(
+                      path: 'identity-server',
+                      redirect: loggedOutRedirect,
+                      pageBuilder: (context, state) => defaultPageBuilder(
+                        context,
+                        state,
+                        const SettingsIdentityServerPage(),
+                      ),
                     ),
                     GoRoute(
                       path: 'security',

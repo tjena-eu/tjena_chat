@@ -193,6 +193,16 @@ class SettingsView extends StatelessWidget {
                   : null,
             ),
             ListTile(
+              leading: const Icon(Icons.manage_accounts_outlined),
+              title: const Text('Identity Server'),
+              subtitle: const Text('Publish email & phone number'),
+              onTap: () => context.go('/rooms/settings/identity-server'),
+              tileColor:
+                  activeRoute.startsWith('/rooms/settings/identity-server')
+                      ? theme.colorScheme.surfaceContainerHigh
+                      : null,
+            ),
+            ListTile(
               leading: const Icon(Icons.swap_horiz_outlined),
               title: const Text('Messaging Bridges'),
               subtitle: const Text('WhatsApp · Signal'),
