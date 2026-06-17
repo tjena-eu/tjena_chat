@@ -14,6 +14,7 @@ import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/pages/chat_list/unread_bubble.dart';
 import 'package:fluffychat/utils/localized_exception_extension.dart';
 import 'package:fluffychat/utils/matrix_sdk_extensions/client_stories_extension.dart';
+import 'package:fluffychat/utils/matrix_sdk_extensions/matrix_locals.dart';
 import 'package:fluffychat/utils/stream_extension.dart';
 import 'package:fluffychat/utils/string_color.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.dart';
@@ -814,6 +815,28 @@ class _SpaceViewState extends State<SpaceView> {
                                       ),
                                   ],
                                 ),
+                                subtitle: AppSettings.spaceRoomPreview.value &&
+                                        joinedRoom != null
+                                    ? Text(
+                                        joinedRoom.lastEvent
+                                                ?.calcLocalizedBodyFallback(
+                                                  MatrixLocals(L10n.of(context)),
+                                                  hideReply: true,
+                                                  hideEdit: true,
+                                                  plaintextBody: true,
+                                                  removeMarkdown: true,
+                                                ) ??
+                                            L10n.of(context).noMessagesYet,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: theme.textTheme.bodySmall
+                                            ?.copyWith(
+                                              color: theme
+                                                  .colorScheme
+                                                  .onSurfaceVariant,
+                                            ),
+                                      )
+                                    : null,
                               ),
                             ),
                           ),

@@ -69,6 +69,12 @@ class SettingsChatView extends StatelessWidget {
                 setting: AppSettings.hideRoomsInSpaces,
               ),
               SettingsSwitchListTile.adaptive(
+                title: 'Show message preview in spaces',
+                subtitle:
+                    'Show the last message below room names in space room lists.',
+                setting: AppSettings.spaceRoomPreview,
+              ),
+              SettingsSwitchListTile.adaptive(
                 title: L10n.of(context).hideInvalidOrUnknownMessageFormats,
                 setting: AppSettings.hideUnknownEvents,
               ),
