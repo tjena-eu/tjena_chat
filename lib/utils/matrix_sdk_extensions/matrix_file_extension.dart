@@ -54,6 +54,21 @@ extension MatrixFileExtension on MatrixFile {
       await tempFile.delete();
       return true;
     }
+    // Fallback for bridge chats where MIME type may be absent — detect from extension.
+    final ext = name.toLowerCase().split('.').last;
+    const imageExts = {'jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'heic', 'heif', 'avif'};
+    const videoExts = {'mp4', 'mov', 'avi', 'mkv', 'webm', '3gp', 'm4v'};
+    if (imageExts.contains(ext)) {
+      await Gal.putImageBytes(bytes);
+      return true;
+    } else if (videoExts.contains(ext)) {
+      final tempDir = await getTemporaryDirectory();
+      final tempFile = File('${tempDir.path}/$name');
+      await tempFile.writeAsBytes(bytes);
+      await Gal.putVideo(tempFile.path);
+      await tempFile.delete();
+      return true;
+    }
     return false;
   }
 

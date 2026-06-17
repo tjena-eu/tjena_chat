@@ -61,9 +61,10 @@ extension LocalizedBody on Event {
 
     try {
       final file = await downloadAndDecryptAttachment();
-      await file.saveToGallery();
+      final saved = await file.saveToGallery();
+      if (!saved) await AppSettings.store.remove(savedKey);
     } catch (_) {
-      // silently fail — auto-save is best-effort
+      await AppSettings.store.remove(savedKey);
     }
   }
 

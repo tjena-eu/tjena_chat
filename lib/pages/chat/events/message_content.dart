@@ -152,12 +152,17 @@ class MessageContent extends StatelessWidget {
               borderRadius: borderRadius,
               timeline: timeline,
               textColor: textColor,
-              onTap: () => showDialog(
-                context: context,
-                builder: (_) => ImageViewer(
-                  event,
-                  timeline: timeline,
-                  outerContext: context,
+              onTap: () => Navigator.of(context, rootNavigator: true).push(
+                PageRouteBuilder(
+                  opaque: false,
+                  barrierColor: Colors.transparent,
+                  pageBuilder: (_, _, _) => ImageViewer(
+                    event,
+                    timeline: timeline,
+                    outerContext: context,
+                  ),
+                  transitionsBuilder: (_, animation, _, child) =>
+                      FadeTransition(opacity: animation, child: child),
                 ),
               ),
             );
