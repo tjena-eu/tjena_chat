@@ -37,6 +37,8 @@ enum SpaceChildAction {
   leave,
   pin,
   unpin,
+  archive,
+  unarchive,
 }
 
 enum _SpaceSortMode { dateDesc, dateAsc, nameAsc, nameDesc }
@@ -70,9 +72,12 @@ class _SpaceViewState extends State<SpaceView> {
 
   _SpaceSortMode _sortMode = _SpaceSortMode.dateDesc;
   Set<String> _pins = {};
+  Set<String> _archived = {};
+  bool _showArchived = false;
 
   String get _sortPrefKey => 'space_sort_mode_${widget.spaceId}';
   String get _pinsPrefKey => 'space_pins_${widget.spaceId}';
+  String get _archivedPrefKey => 'space_archived_${widget.spaceId}';
 
   StreamSubscription? _childStateSub;
 
@@ -88,7 +93,8 @@ class _SpaceViewState extends State<SpaceView> {
               ) ??
               false,
         )
-        .listen(_loadHierarchy);
+        // Always reset to page 1 on space-child changes so sort/pins stay correct.
+        .listen((_) => _refreshHierarchy());
     super.initState();
   }
 
@@ -96,10 +102,15 @@ class _SpaceViewState extends State<SpaceView> {
     final prefs = await SharedPreferences.getInstance();
     final modeIndex = prefs.getInt(_sortPrefKey) ?? 0;
     final pins = prefs.getStringList(_pinsPrefKey) ?? [];
+    final archived = prefs.getStringList(_archivedPrefKey) ?? [];
     if (!mounted) return;
     setState(() {
-      _sortMode = _SpaceSortMode.values[modeIndex.clamp(0, _SpaceSortMode.values.length - 1)];
+      _sortMode = _SpaceSortMode.values[modeIndex.clamp(
+        0,
+        _SpaceSortMode.values.length - 1,
+      )];
       _pins = pins.toSet();
+      _archived = archived.toSet();
     });
   }
 
@@ -121,6 +132,18 @@ class _SpaceViewState extends State<SpaceView> {
     await prefs.setStringList(_pinsPrefKey, newPins.toList());
   }
 
+  Future<void> _toggleArchive(String roomId) async {
+    final newArchived = Set<String>.from(_archived);
+    if (newArchived.contains(roomId)) {
+      newArchived.remove(roomId);
+    } else {
+      newArchived.add(roomId);
+    }
+    setState(() => _archived = newArchived);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(_archivedPrefKey, newArchived.toList());
+  }
+
   List<SpaceRoomsChunk$2> _applySortAndPin(
     List<SpaceRoomsChunk$2> children,
     sdk.Client client,
@@ -128,18 +151,26 @@ class _SpaceViewState extends State<SpaceView> {
     DateTime ts(SpaceRoomsChunk$2 c) =>
         client.getRoomById(c.roomId)?.lastEvent?.originServerTs ?? DateTime(0);
     String name(SpaceRoomsChunk$2 c) =>
-        (c.name ?? c.canonicalAlias ?? client.getRoomById(c.roomId)?.getLocalizedDisplayname() ?? '').toLowerCase();
+        (c.name ??
+                c.canonicalAlias ??
+                client.getRoomById(c.roomId)?.getLocalizedDisplayname() ??
+                '')
+            .toLowerCase();
 
     int compare(SpaceRoomsChunk$2 a, SpaceRoomsChunk$2 b) =>
         switch (_sortMode) {
           _SpaceSortMode.dateDesc => ts(b).compareTo(ts(a)),
-          _SpaceSortMode.dateAsc  => ts(a).compareTo(ts(b)),
-          _SpaceSortMode.nameAsc  => name(a).compareTo(name(b)),
+          _SpaceSortMode.dateAsc => ts(a).compareTo(ts(b)),
+          _SpaceSortMode.nameAsc => name(a).compareTo(name(b)),
           _SpaceSortMode.nameDesc => name(b).compareTo(name(a)),
         };
 
-    final pinned   = children.where((c) => _pins.contains(c.roomId)).toList()..sort(compare);
-    final unpinned = children.where((c) => !_pins.contains(c.roomId)).toList()..sort(compare);
+    final pinned =
+        children.where((c) => _pins.contains(c.roomId)).toList()
+          ..sort(compare);
+    final unpinned =
+        children.where((c) => !_pins.contains(c.roomId)).toList()
+          ..sort(compare);
     return [...pinned, ...unpinned];
   }
 
@@ -153,26 +184,46 @@ class _SpaceViewState extends State<SpaceView> {
             ListTile(
               leading: const Icon(Icons.calendar_today_outlined),
               title: const Text('Newest first'),
-              trailing: _sortMode == _SpaceSortMode.dateDesc ? const Icon(Icons.check) : null,
-              onTap: () { Navigator.pop(ctx); _setSortMode(_SpaceSortMode.dateDesc); },
+              trailing: _sortMode == _SpaceSortMode.dateDesc
+                  ? const Icon(Icons.check)
+                  : null,
+              onTap: () {
+                Navigator.pop(ctx);
+                _setSortMode(_SpaceSortMode.dateDesc);
+              },
             ),
             ListTile(
               leading: const Icon(Icons.calendar_today_outlined),
               title: const Text('Oldest first'),
-              trailing: _sortMode == _SpaceSortMode.dateAsc ? const Icon(Icons.check) : null,
-              onTap: () { Navigator.pop(ctx); _setSortMode(_SpaceSortMode.dateAsc); },
+              trailing: _sortMode == _SpaceSortMode.dateAsc
+                  ? const Icon(Icons.check)
+                  : null,
+              onTap: () {
+                Navigator.pop(ctx);
+                _setSortMode(_SpaceSortMode.dateAsc);
+              },
             ),
             ListTile(
               leading: const Icon(Icons.sort_by_alpha_outlined),
               title: const Text('Name A → Z'),
-              trailing: _sortMode == _SpaceSortMode.nameAsc ? const Icon(Icons.check) : null,
-              onTap: () { Navigator.pop(ctx); _setSortMode(_SpaceSortMode.nameAsc); },
+              trailing: _sortMode == _SpaceSortMode.nameAsc
+                  ? const Icon(Icons.check)
+                  : null,
+              onTap: () {
+                Navigator.pop(ctx);
+                _setSortMode(_SpaceSortMode.nameAsc);
+              },
             ),
             ListTile(
               leading: const Icon(Icons.sort_by_alpha_outlined),
               title: const Text('Name Z → A'),
-              trailing: _sortMode == _SpaceSortMode.nameDesc ? const Icon(Icons.check) : null,
-              onTap: () { Navigator.pop(ctx); _setSortMode(_SpaceSortMode.nameDesc); },
+              trailing: _sortMode == _SpaceSortMode.nameDesc
+                  ? const Icon(Icons.check)
+                  : null,
+              onTap: () {
+                Navigator.pop(ctx);
+                _setSortMode(_SpaceSortMode.nameDesc);
+              },
             ),
           ],
         ),
@@ -186,13 +237,25 @@ class _SpaceViewState extends State<SpaceView> {
     super.dispose();
   }
 
-  Future<void> _loadHierarchy([_]) async {
+  /// Resets pagination and reloads from the first page. Called when space
+  /// child state changes so sort/pins remain consistent across all pages.
+  Future<void> _refreshHierarchy() async {
+    _nextBatch = null;
+    _noMoreRooms = false;
+    _discoveredChildren.clear();
+    await _loadHierarchy();
+  }
+
+  /// Loads the next page (or first page when [_nextBatch] is null).
+  /// Deduplicates against already-loaded rooms so loading more never
+  /// corrupts the list that sort and pins operate on.
+  Future<void> _loadHierarchy() async {
     final matrix = Matrix.of(context);
     final room = matrix.client.getRoomById(widget.spaceId);
     if (room == null) return;
 
     final cacheKey = 'spaces_history_cache${room.id}';
-    if (_discoveredChildren.isEmpty) {
+    if (_discoveredChildren.isEmpty && _nextBatch == null) {
       final cachedChildren = matrix.store.getStringList(cacheKey);
       if (cachedChildren != null) {
         try {
@@ -222,17 +285,22 @@ class _SpaceViewState extends State<SpaceView> {
       );
       if (!mounted) return;
       setState(() {
-        if (_nextBatch == null) _discoveredChildren.clear();
         _nextBatch = hierarchy.nextBatch;
-        if (hierarchy.nextBatch == null) {
-          _noMoreRooms = true;
-        }
+        if (hierarchy.nextBatch == null) _noMoreRooms = true;
+
+        // Deduplicate: rooms already in the list stay where they are
+        // (preserving any in-memory order before sort is applied).
+        final existingIds =
+            _discoveredChildren.map((c) => c.roomId).toSet();
         _discoveredChildren.addAll(
-          hierarchy.rooms.where((room) => room.roomId != widget.spaceId),
+          hierarchy.rooms.where(
+            (r) => r.roomId != widget.spaceId && !existingIds.contains(r.roomId),
+          ),
         );
         _isLoading = false;
       });
 
+      // Cache only when we have a complete first-page load.
       if (_nextBatch == null) {
         matrix.store.setStringList(
           cacheKey,
@@ -244,9 +312,9 @@ class _SpaceViewState extends State<SpaceView> {
     } catch (e, s) {
       Logs().w('Unable to load hierarchy', e, s);
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(e.toLocalizedString(context))));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.toLocalizedString(context))),
+      );
       setState(() {
         _isLoading = false;
       });
@@ -337,18 +405,37 @@ class _SpaceViewState extends State<SpaceView> {
       Offset.zero & overlay.size,
     );
 
+    final isArchived = _archived.contains(roomId);
+    final isPinned = _pins.contains(roomId);
+
     final action = await showMenu<SpaceChildAction>(
       context: posContext,
       position: position,
       items: [
         PopupMenuItem(
-          value: _pins.contains(roomId) ? SpaceChildAction.unpin : SpaceChildAction.pin,
+          value: isPinned ? SpaceChildAction.unpin : SpaceChildAction.pin,
           child: Row(
             mainAxisSize: .min,
             children: [
-              Icon(_pins.contains(roomId) ? Icons.push_pin : Icons.push_pin_outlined),
+              Icon(isPinned ? Icons.push_pin : Icons.push_pin_outlined),
               const SizedBox(width: 12),
-              Text(_pins.contains(roomId) ? 'Unpin' : 'Pin'),
+              Text(isPinned ? 'Unpin' : 'Pin'),
+            ],
+          ),
+        ),
+        PopupMenuItem(
+          value:
+              isArchived ? SpaceChildAction.unarchive : SpaceChildAction.archive,
+          child: Row(
+            mainAxisSize: .min,
+            children: [
+              Icon(
+                isArchived
+                    ? Icons.unarchive_outlined
+                    : Icons.archive_outlined,
+              ),
+              const SizedBox(width: 12),
+              Text(isArchived ? 'Unarchive' : 'Archive'),
             ],
           ),
         ),
@@ -454,7 +541,7 @@ class _SpaceViewState extends State<SpaceView> {
         );
         if (result.isError) return;
         if (!mounted) return;
-        _nextBatch = null;
+        await _refreshHierarchy();
         return;
       case SpaceChildAction.mute:
         await showFutureLoadingDialog(
@@ -484,13 +571,16 @@ class _SpaceViewState extends State<SpaceView> {
       case SpaceChildAction.pin:
       case SpaceChildAction.unpin:
         await _togglePin(roomId);
+      case SpaceChildAction.archive:
+      case SpaceChildAction.unarchive:
+        await _toggleArchive(roomId);
     }
   }
 
   IconData get _sortModeIcon => switch (_sortMode) {
     _SpaceSortMode.dateDesc => Icons.arrow_downward_outlined,
-    _SpaceSortMode.dateAsc  => Icons.arrow_upward_outlined,
-    _SpaceSortMode.nameAsc  => Icons.sort_by_alpha_outlined,
+    _SpaceSortMode.dateAsc => Icons.arrow_upward_outlined,
+    _SpaceSortMode.nameAsc => Icons.sort_by_alpha_outlined,
     _SpaceSortMode.nameDesc => Icons.sort_by_alpha_outlined,
   };
 
@@ -503,6 +593,15 @@ class _SpaceViewState extends State<SpaceView> {
         room?.getLocalizedDisplayname() ?? L10n.of(context).nothingFound;
     const avatarSize = Avatar.defaultSize / 1.5;
     final isAdmin = room?.canChangeStateEvent(EventTypes.SpaceChild) == true;
+
+    // Rooms that are archived but have unread messages still count.
+    final archivedUnread = _archived
+        .where(
+          (id) =>
+              room?.client.getRoomById(id)?.isUnread == true,
+        )
+        .length;
+
     return Scaffold(
       appBar: AppBar(
         leading:
@@ -540,9 +639,26 @@ class _SpaceViewState extends State<SpaceView> {
             tooltip: 'Sort',
             onPressed: () => _showSortMenu(context),
           ),
+          if (_archived.isNotEmpty)
+            IconButton(
+              icon: Badge(
+                isLabelVisible: archivedUnread > 0,
+                label: Text('$archivedUnread'),
+                child: Icon(
+                  _showArchived
+                      ? Icons.inventory_2
+                      : Icons.inventory_2_outlined,
+                ),
+              ),
+              tooltip: _showArchived
+                  ? 'Hide archived'
+                  : 'Show archived (${_archived.length})',
+              onPressed: () =>
+                  setState(() => _showArchived = !_showArchived),
+            ),
           if (isAdmin)
             IconButton(
-              icon: Icon(Icons.add_outlined),
+              icon: const Icon(Icons.add_outlined),
               tooltip: L10n.of(context).addChatOrSubSpace,
               onPressed: () =>
                   context.go('/rooms/newgroup?space_id=${widget.spaceId}'),
@@ -611,7 +727,10 @@ class _SpaceViewState extends State<SpaceView> {
                   .rateLimit(const Duration(seconds: 1)),
               builder: (context, snapshot) {
                 final filter = _filterController.text.trim().toLowerCase();
-                final sortedChildren = _applySortAndPin(_discoveredChildren, room.client);
+                final sortedChildren = _applySortAndPin(
+                  _discoveredChildren,
+                  room.client,
+                );
                 return CustomScrollView(
                   slivers: [
                     SliverAppBar(
@@ -668,9 +787,15 @@ class _SpaceViewState extends State<SpaceView> {
                           );
                         }
                         final item = sortedChildren[i];
+                        final isArchived = _archived.contains(item.roomId);
+
+                        // Hide archived rooms unless the user toggled them on.
+                        if (isArchived && !_showArchived) {
+                          return const SizedBox.shrink();
+                        }
+
                         var joinedRoom = room.client.getRoomById(item.roomId);
-                        // Stories space: only show rooms you're actually in,
-                        // so you never see/join others' story rooms.
+                        // Stories space: only show rooms you're actually in.
                         final isStoriesSpace =
                             room.client.storiesSpaceId == widget.spaceId ||
                             (room.client.storiesSpaceAlias != null &&
@@ -703,8 +828,9 @@ class _SpaceViewState extends State<SpaceView> {
                               AppConfig.borderRadius,
                             ),
                             clipBehavior: Clip.hardEdge,
-                            color:
-                                joinedRoom != null &&
+                            color: isArchived
+                                ? theme.colorScheme.surfaceContainerLow
+                                : joinedRoom != null &&
                                     widget.activeChat == joinedRoom.id
                                 ? theme.colorScheme.secondaryContainer
                                 : Colors.transparent,
@@ -786,9 +912,24 @@ class _SpaceViewState extends State<SpaceView> {
                                         padding: EdgeInsets.only(right: 4),
                                         child: Icon(Icons.push_pin, size: 14),
                                       ),
+                                    if (isArchived)
+                                      Padding(
+                                        padding: const EdgeInsets.only(
+                                          right: 4,
+                                        ),
+                                        child: Icon(
+                                          Icons.archive_outlined,
+                                          size: 14,
+                                          color: theme.colorScheme.outline,
+                                        ),
+                                      ),
                                     Expanded(
                                       child: Opacity(
-                                        opacity: joinedRoom == null ? 0.5 : 1,
+                                        opacity: isArchived
+                                            ? 0.6
+                                            : joinedRoom == null
+                                            ? 0.5
+                                            : 1,
                                         child: Text(
                                           displayname,
                                           maxLines: 1,
@@ -810,7 +951,8 @@ class _SpaceViewState extends State<SpaceView> {
                                       UnreadBubble(room: joinedRoom)
                                     else
                                       TextButton(
-                                        onPressed: () => _joinChildRoom(item),
+                                        onPressed: () =>
+                                            _joinChildRoom(item),
                                         child: Text(L10n.of(context).join),
                                       ),
                                   ],
