@@ -42,15 +42,17 @@ extension MatrixFileExtension on MatrixFile {
 
   /// Save image/video to the device gallery without any UI interaction.
   /// Returns true on success. Throws on failure — caller decides how to handle.
+  static const _galAlbum = 'tjenachat';
+
   Future<bool> saveToGallery() async {
     if (this is MatrixImageFile) {
-      await Gal.putImageBytes(bytes);
+      await Gal.putImageBytes(bytes, album: _galAlbum);
       return true;
     } else if (this is MatrixVideoFile) {
       final tempDir = await getTemporaryDirectory();
       final tempFile = File('${tempDir.path}/$name');
       await tempFile.writeAsBytes(bytes);
-      await Gal.putVideo(tempFile.path);
+      await Gal.putVideo(tempFile.path, album: _galAlbum);
       await tempFile.delete();
       return true;
     }
@@ -59,13 +61,13 @@ extension MatrixFileExtension on MatrixFile {
     const imageExts = {'jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'heic', 'heif', 'avif'};
     const videoExts = {'mp4', 'mov', 'avi', 'mkv', 'webm', '3gp', 'm4v'};
     if (imageExts.contains(ext)) {
-      await Gal.putImageBytes(bytes);
+      await Gal.putImageBytes(bytes, album: _galAlbum);
       return true;
     } else if (videoExts.contains(ext)) {
       final tempDir = await getTemporaryDirectory();
       final tempFile = File('${tempDir.path}/$name');
       await tempFile.writeAsBytes(bytes);
-      await Gal.putVideo(tempFile.path);
+      await Gal.putVideo(tempFile.path, album: _galAlbum);
       await tempFile.delete();
       return true;
     }

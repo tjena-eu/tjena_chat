@@ -33,6 +33,7 @@ class Settings extends StatefulWidget {
 class SettingsController extends State<Settings> {
   Future<Profile>? profileFuture;
   bool profileUpdated = false;
+  late final Future<String> versionFuture = PlatformInfos.getVersion();
 
   void updateProfile() => setState(() {
     profileUpdated = true;

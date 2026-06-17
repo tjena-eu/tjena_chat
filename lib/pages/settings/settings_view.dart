@@ -241,6 +241,11 @@ class SettingsView extends StatelessWidget {
             ListTile(
               leading: const Icon(Icons.info_outline_rounded),
               title: Text(L10n.of(context).about),
+              subtitle: FutureBuilder<String>(
+                future: controller.versionFuture,
+                builder: (_, snapshot) =>
+                    Text(snapshot.data ?? '...'),
+              ),
               onTap: () => PlatformInfos.showDialog(context),
             ),
             Divider(color: theme.dividerColor),

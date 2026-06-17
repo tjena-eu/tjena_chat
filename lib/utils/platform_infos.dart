@@ -49,7 +49,8 @@ abstract class PlatformInfos {
   static Future<String> getVersion() async {
     var version = kIsWeb ? 'Web' : 'Unknown';
     try {
-      version = (await PackageInfo.fromPlatform()).version;
+      final info = await PackageInfo.fromPlatform();
+      version = '${info.version} (build ${info.buildNumber})';
     } catch (_) {}
     return version;
   }
@@ -60,6 +61,7 @@ abstract class PlatformInfos {
     if (!context.mounted) return;
     showAboutDialog(
       context: context,
+      applicationVersion: version,
       children: [
         Text(l10n.versionWithNumber(version)),
         TextButton.icon(

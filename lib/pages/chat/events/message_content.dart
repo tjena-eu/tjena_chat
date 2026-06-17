@@ -152,7 +152,7 @@ class MessageContent extends StatelessWidget {
               borderRadius: borderRadius,
               timeline: timeline,
               textColor: textColor,
-              onTap: () => Navigator.of(context, rootNavigator: true).push(
+              onTap: () => Navigator.of(context).push(
                 PageRouteBuilder(
                   opaque: false,
                   barrierColor: Colors.transparent,
