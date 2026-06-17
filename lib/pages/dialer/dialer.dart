@@ -19,7 +19,6 @@ import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart' hide VideoRenderer;
 import 'package:just_audio/just_audio.dart';
 import 'package:matrix/matrix.dart';
-import 'package:proximity_sensor/proximity_sensor.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
 import 'pip/pip_view.dart';
@@ -159,8 +158,7 @@ class MyCallingPage extends State<Calling> {
   EdgeInsetsGeometry? _localVideoMargin;
   CallState? _state;
 
-  bool _isProximityNear = false;
-  StreamSubscription<int>? _proximitySub;
+  static const _callManager = MethodChannel('tjena.chat/call_manager');
 
   Future<void> _playCallSound() async {
     const path = 'assets/sounds/call.ogg';
@@ -176,11 +174,11 @@ class MyCallingPage extends State<Calling> {
   @override
   void initState() {
     super.initState();
-    initialize();
+    unawaited(initialize());
     _playCallSound();
   }
 
-  void initialize() {
+  Future<void> initialize() async {
     final call = this.call;
     call.onCallStateChanged.stream.listen(_handleCallState);
     call.onCallEventChanged.stream.listen((event) {
@@ -203,14 +201,9 @@ class MyCallingPage extends State<Calling> {
       } catch (_) {}
     }
 
-    if (call.type == CallType.kVoice && PlatformInfos.isMobile) {
+    if (call.type == CallType.kVoice && PlatformInfos.isAndroid) {
       try {
-        _proximitySub = ProximitySensor.events.listen((int event) {
-          final near = event == 0;
-          if (mounted && near != _isProximityNear) {
-            setState(() => _isProximityNear = near);
-          }
-        });
+        await _callManager.invokeMethod('acquireProximityWakeLock');
       } catch (_) {}
     }
   }
@@ -226,7 +219,9 @@ class MyCallingPage extends State<Calling> {
 
   @override
   void dispose() {
-    _proximitySub?.cancel();
+    if (call.type == CallType.kVoice && PlatformInfos.isAndroid) {
+      _callManager.invokeMethod('releaseProximityWakeLock').ignore();
+    }
     super.dispose();
     call.cleanUp.call();
   }
@@ -596,12 +591,6 @@ class MyCallingPage extends State<Calling> {
                           onPressed: () {
                             PIPView.of(context)?.setFloating(true);
                           },
-                        ),
-                      ),
-                    if (_isProximityNear && voiceonly && !isFloating)
-                      Positioned.fill(
-                        child: AbsorbPointer(
-                          child: Container(color: Colors.black),
                         ),
                       ),
                   ],

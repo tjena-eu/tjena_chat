@@ -152,9 +152,8 @@ class VoipPlugin with WidgetsBindingObserver implements WebRTCDelegate {
       for (final track in tracks) {
         await remoteStream.addTrack(track);
       }
-      // addReconstructedRemoteStream was a custom patch not in released SDK;
-      // onTrack recovery is Android-only and not needed for web builds.
-      Logs().i('[VOIP] remote stream reconstructed (recovery not applied on web)');
+      await call.addReconstructedRemoteStream(remoteStream);
+      Logs().i('[VOIP] recovered remote stream from receivers (onTrack missed)');
     } catch (e, s) {
       Logs().e('[VOIP] remote stream recovery failed', e, s);
     }
