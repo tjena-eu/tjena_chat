@@ -40,31 +40,44 @@ extension MatrixFileExtension on MatrixFile {
     );
   }
 
+  /// Save image/video to the device gallery without any UI interaction.
+  /// Returns true on success. Throws on failure — caller decides how to handle.
+  Future<bool> saveToGallery() async {
+    if (this is MatrixImageFile) {
+      await Gal.putImageBytes(bytes);
+      return true;
+    } else if (this is MatrixVideoFile) {
+      final tempDir = await getTemporaryDirectory();
+      final tempFile = File('${tempDir.path}/$name');
+      await tempFile.writeAsBytes(bytes);
+      await Gal.putVideo(tempFile.path);
+      await tempFile.delete();
+      return true;
+    }
+    return false;
+  }
+
   Future<void> saveToDevice(BuildContext context) async {
     if (kIsWeb || !PlatformInfos.isMobile) {
       return save(context);
     }
     final scaffoldMessenger = ScaffoldMessenger.of(context);
     final l10n = L10n.of(context);
+    bool saved;
     try {
-      if (this is MatrixImageFile) {
-        await Gal.putImageBytes(bytes);
-      } else if (this is MatrixVideoFile) {
-        final tempDir = await getTemporaryDirectory();
-        final tempFile = File('${tempDir.path}/$name');
-        await tempFile.writeAsBytes(bytes);
-        await Gal.putVideo(tempFile.path);
-        await tempFile.delete();
-      } else {
-        return save(context);
-      }
-      if (!context.mounted) return;
-      scaffoldMessenger.showSnackBar(
-        SnackBar(content: Text(l10n.savedToGallery)),
-      );
+      saved = await saveToGallery();
     } catch (_) {
+      if (!context.mounted) return;
       return save(context);
     }
+    if (!saved) {
+      if (!context.mounted) return;
+      return save(context);
+    }
+    if (!context.mounted) return;
+    scaffoldMessenger.showSnackBar(
+      SnackBar(content: Text(l10n.savedToGallery)),
+    );
   }
 
   FileType get filePickerFileType {

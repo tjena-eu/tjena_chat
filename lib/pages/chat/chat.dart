@@ -503,7 +503,11 @@ class ChatController extends State<ChatPageWithRoom>
 
   void _insert(int index) {
     if (index > 0) return;
-    animateInEventId = timeline?.events.firstOrNull?.eventId;
+    final event = timeline?.events.firstOrNull;
+    animateInEventId = event?.eventId;
+    if (event != null && mounted) {
+      event.autoSaveToDevice(context);
+    }
   }
 
   void updateView() {

@@ -61,10 +61,7 @@ extension LocalizedBody on Event {
 
     try {
       final file = await downloadAndDecryptAttachment();
-      if (!context.mounted) return;
-      if (file is MatrixImageFile || file is MatrixVideoFile) {
-        await file.saveToDevice(context);
-      }
+      await file.saveToGallery();
     } catch (_) {
       // silently fail — auto-save is best-effort
     }
