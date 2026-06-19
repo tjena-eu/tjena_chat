@@ -21,6 +21,13 @@
     <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+    <!-- Keeps the WhatsApp bridge socket alive while the app is backgrounded
+         (e.g. when the user switches to WhatsApp to enter the pairing code). -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- Lets us prompt to disable battery optimization for the pairing socket.
+         Without the exemption, aggressive OEM power management kills the
+         WhatsApp websocket ~40s in and pairing never completes. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.READ_CONTACTS" />
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.BLUETOOTH" />
@@ -127,7 +134,7 @@
         </service>
 
         <service android:name="com.pravera.flutter_foreground_task.service.ForegroundService"
-             android:foregroundServiceType="camera|microphone|mediaProjection">
+             android:foregroundServiceType="camera|microphone|mediaProjection|dataSync">
         </service>
 
         <!-- From flutter_local_notifications package for notification actions -->

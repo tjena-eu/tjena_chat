@@ -1,0 +1,3 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- No special permissions here; host app already has INTERNET, WAKE_LOCK, etc. -->
+</manifest>

@@ -9,7 +9,7 @@ publish_to: none
 # On version bump please also increase:
 # 1. The build number (for F-Droid)
 # 2. The version in /snap/snapcraft.yaml
-version: 2.6.0+3556
+version: 2.6.0+3578
 
 environment:
   sdk: ">=3.11.1 <4.0.0"
@@ -90,6 +90,8 @@ dependencies:
   video_compress: ^3.1.4
   video_player: ^2.11.1
   proximity_sensor: ^1.4.0
+  tjena_bridge:
+    path: packages/tjena_bridge
   wakelock_plus: ^1.5.2
   webrtc_interface: ^1.5.1
 

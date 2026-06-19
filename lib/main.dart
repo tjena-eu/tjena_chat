@@ -17,6 +17,8 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_vodozemac/flutter_vodozemac.dart' as vod;
 import 'package:matrix/matrix.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:tjena_bridge/bridge_room_store.dart' as tjena_bridge show BridgeRoomStore;
+import 'package:tjena_bridge/tjena_bridge.dart' as tjena_bridge show TjenaBridge;
 import 'package:universal_html/universal_html.dart' as web;
 
 import 'config/setting_keys.dart';
@@ -113,7 +115,23 @@ Future<void> startGui(List<Client> clients, SharedPreferences store) async {
   await firstClient?.roomsLoading;
   await firstClient?.accountDataLoading;
 
+  // Start on-device WhatsApp bridge (non-blocking; errors are non-fatal).
+  if (PlatformInfos.isAndroid) {
+    _startBridge();
+  }
+
   runApp(FluffyChatApp(clients: clients, pincode: pin, store: store));
+}
+
+void _startBridge() {
+  try {
+    tjena_bridge.BridgeRoomStore.instance.startListening();
+    tjena_bridge.TjenaBridge.instance.start().catchError(
+      (e) => Logs().w('[Bridge] start failed: $e'),
+    );
+  } catch (e) {
+    Logs().w('[Bridge] init failed: $e');
+  }
 }
 
 /// Watches the lifecycle changes to start the application when it
