@@ -17,6 +17,8 @@ import (
 	"go.mau.fi/whatsmeow/appstate"
 	"go.mau.fi/whatsmeow/proto/waCompanionReg"
 	"go.mau.fi/whatsmeow/proto/waE2E"
+	"go.mau.fi/whatsmeow/proto/waHistorySync"
+	"go.mau.fi/whatsmeow/proto/waWeb"
 	"go.mau.fi/whatsmeow/store"
 	"go.mau.fi/whatsmeow/store/sqlstore"
 	"go.mau.fi/whatsmeow/types"
@@ -61,6 +63,13 @@ type Bridge struct {
 
 	knownRooms  map[string]bool   // JID room IDs we've already emitted room_created for
 	goodNames   map[string]bool   // rooms whose name is a real name (not a bare number)
+
+	// On-demand backfill state. oldestMsg tracks the oldest message info we have
+	// per chat (the anchor for the next history request); backfillCutoff is the
+	// unix-seconds target a chat is currently backfilling towards (continue
+	// requesting older batches until the oldest message predates it).
+	oldestMsg      map[string]*types.MessageInfo
+	backfillCutoff map[string]int64
 
 	logMu  sync.Mutex
 	logBuf []string // ring buffer, last 100 lines
@@ -890,6 +899,9 @@ func (b *Bridge) handleWAEvent(rawEvt any) {
 		if evt.Name == appstate.WAPatchRegularLow || evt.Name == appstate.WAPatchRegular {
 			go b.postConnectNameScan()
 		}
+
+	case *waevents.HistorySync:
+		go b.handleHistorySync(evt.Data)
 	}
 }
 
@@ -1078,34 +1090,7 @@ func (b *Bridge) handleWAMessage(evt *waevents.Message) {
 
 	b.ensureRoom(evt.Info.Chat)
 
-	body := ""
-	msgtype := "m.text"
-	if c := msg.GetConversation(); c != "" {
-		body = c
-	} else if ext := msg.GetExtendedTextMessage(); ext != nil {
-		body = ext.GetText()
-	} else if img := msg.GetImageMessage(); img != nil {
-		body = img.GetCaption()
-		if body == "" {
-			body = "🖼 Image"
-		}
-		msgtype = "m.image"
-	} else if doc := msg.GetDocumentMessage(); doc != nil {
-		body = doc.GetFileName()
-		msgtype = "m.file"
-	} else if vid := msg.GetVideoMessage(); vid != nil {
-		body = vid.GetCaption()
-		if body == "" {
-			body = "📹 Video"
-		}
-		msgtype = "m.video"
-	} else if aud := msg.GetAudioMessage(); aud != nil {
-		body = "🎵 Audio"
-		msgtype = "m.audio"
-	} else if sticker := msg.GetStickerMessage(); sticker != nil {
-		body = "🌀 Sticker"
-		msgtype = "m.sticker"
-	} else if react := msg.GetReactionMessage(); react != nil {
+	if react := msg.GetReactionMessage(); react != nil {
 		b.emitter.Emit(map[string]any{
 			"type":      "reaction",
 			"room_id":   evt.Info.Chat.User + "@" + string(evt.Info.Chat.Server),
@@ -1116,13 +1101,19 @@ func (b *Bridge) handleWAMessage(evt *waevents.Message) {
 		})
 		return
 	}
+	body, msgtype := messageBodyType(msg)
 
 	isOwn := evt.Info.IsFromMe
 	roomID := evt.Info.Chat.User + "@" + string(evt.Info.Chat.Server)
 
-	// If this is a DM and the room still has only a bare phone-number name,
-	// promote it to the sender's push name as soon as we see it.
-	if !isOwn && evt.Info.PushName != "" {
+	// Track the oldest message we've seen per chat — the anchor for on-demand
+	// history requests.
+	b.recordOldest(roomID, &evt.Info)
+
+	// For DMs only: promote the room name from bare phone number to the
+	// sender's push name when we first see it.
+	isDMRoom := evt.Info.Chat.Server == types.DefaultUserServer
+	if isDMRoom && !isOwn && evt.Info.PushName != "" {
 		b.mu.Lock()
 		if b.goodNames == nil {
 			b.goodNames = make(map[string]bool)
@@ -1156,50 +1147,275 @@ func (b *Bridge) handleWAMessage(evt *waevents.Message) {
 
 	// For media messages, download asynchronously and emit media_ready.
 	if msgtype != "m.text" {
-		b.mu.Lock()
-		client := b.waClient
-		b.mu.Unlock()
-		if client != nil {
-			eventID := "$wa_" + evt.Info.ID
-			capturedMsg := msg
-			capturedRoomID := roomID
-			go func() {
-				data, err := client.DownloadAny(context.Background(), capturedMsg)
-				if err != nil {
-					b.appendLog(fmt.Sprintf("[Bridge] media download failed for %s: %v", eventID, err))
-					return
-				}
-				tmpPath := b.dataDir + "/media_" + evt.Info.ID
-				if werr := os.WriteFile(tmpPath, data, 0600); werr != nil {
-					b.appendLog(fmt.Sprintf("[Bridge] media write failed: %v", werr))
-					return
-				}
-				mimeType := ""
-				switch {
-				case capturedMsg.GetImageMessage() != nil:
-					mimeType = capturedMsg.GetImageMessage().GetMimetype()
-				case capturedMsg.GetVideoMessage() != nil:
-					mimeType = capturedMsg.GetVideoMessage().GetMimetype()
-				case capturedMsg.GetAudioMessage() != nil:
-					mimeType = capturedMsg.GetAudioMessage().GetMimetype()
-				case capturedMsg.GetDocumentMessage() != nil:
-					mimeType = capturedMsg.GetDocumentMessage().GetMimetype()
-				case capturedMsg.GetStickerMessage() != nil:
-					mimeType = capturedMsg.GetStickerMessage().GetMimetype()
-				}
-				if mimeType == "" {
-					mimeType = "application/octet-stream"
-				}
-				b.emitter.Emit(map[string]any{
-					"type":      "media_ready",
-					"room_id":   capturedRoomID,
-					"event_id":  eventID,
-					"file_path": tmpPath,
-					"mimetype":  mimeType,
-					"size":      len(data),
-				})
-			}()
+		b.downloadMedia(
+			"$wa_"+evt.Info.ID, evt.Info.ID, roomID, msgtype, body,
+			"@wa_"+evt.Info.Sender.User+":tjena.local", evt.Info.PushName,
+			evt.Info.Timestamp.Unix(), isOwn, msg,
+		)
+	}
+}
+
+// messageBodyType maps a WhatsApp message to a Matrix body string and msgtype.
+// Returns ("", "m.text") for messages with no recognised renderable content.
+func messageBodyType(msg *waE2E.Message) (body, msgtype string) {
+	msgtype = "m.text"
+	switch {
+	case msg.GetConversation() != "":
+		body = msg.GetConversation()
+	case msg.GetExtendedTextMessage() != nil:
+		body = msg.GetExtendedTextMessage().GetText()
+	case msg.GetImageMessage() != nil:
+		body = msg.GetImageMessage().GetCaption()
+		if body == "" {
+			body = "🖼 Image"
 		}
+		msgtype = "m.image"
+	case msg.GetDocumentMessage() != nil:
+		body = msg.GetDocumentMessage().GetFileName()
+		msgtype = "m.file"
+	case msg.GetVideoMessage() != nil:
+		body = msg.GetVideoMessage().GetCaption()
+		if body == "" {
+			body = "📹 Video"
+		}
+		msgtype = "m.video"
+	case msg.GetAudioMessage() != nil:
+		body = "🎵 Audio"
+		msgtype = "m.audio"
+	case msg.GetStickerMessage() != nil:
+		body = "🌀 Sticker"
+		msgtype = "m.sticker"
+	}
+	return body, msgtype
+}
+
+// downloadMedia downloads a message's attachment in the background and emits a
+// media_ready event carrying the full event payload. Shared by live messages
+// and on-demand backfill.
+func (b *Bridge) downloadMedia(
+	eventID, msgID, roomID, msgtype, body, sender, senderName string,
+	ts int64, isOwn bool, msg *waE2E.Message,
+) {
+	b.mu.Lock()
+	client := b.waClient
+	b.mu.Unlock()
+	if client == nil {
+		return
+	}
+	go func() {
+		data, err := client.DownloadAny(context.Background(), msg)
+		if err != nil {
+			b.appendLog(fmt.Sprintf("[Bridge] media download failed for %s: %v", eventID, err))
+			return
+		}
+		tmpPath := b.dataDir + "/media_" + msgID
+		if werr := os.WriteFile(tmpPath, data, 0600); werr != nil {
+			b.appendLog(fmt.Sprintf("[Bridge] media write failed: %v", werr))
+			return
+		}
+		mimeType := ""
+		switch {
+		case msg.GetImageMessage() != nil:
+			mimeType = msg.GetImageMessage().GetMimetype()
+		case msg.GetVideoMessage() != nil:
+			mimeType = msg.GetVideoMessage().GetMimetype()
+		case msg.GetAudioMessage() != nil:
+			mimeType = msg.GetAudioMessage().GetMimetype()
+		case msg.GetDocumentMessage() != nil:
+			mimeType = msg.GetDocumentMessage().GetMimetype()
+		case msg.GetStickerMessage() != nil:
+			mimeType = msg.GetStickerMessage().GetMimetype()
+		}
+		if mimeType == "" {
+			mimeType = "application/octet-stream"
+		}
+		b.emitter.Emit(map[string]any{
+			"type":        "media_ready",
+			"room_id":     roomID,
+			"event_id":    eventID,
+			"file_path":   tmpPath,
+			"mimetype":    mimeType,
+			"size":        len(data),
+			"msgtype":     msgtype,
+			"body":        body,
+			"sender":      sender,
+			"sender_name": senderName,
+			"ts":          ts,
+			"is_own":      isOwn,
+		})
+	}()
+}
+
+// recordOldest remembers the oldest MessageInfo seen for a chat, used as the
+// anchor for on-demand history requests.
+func (b *Bridge) recordOldest(roomID string, info *types.MessageInfo) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.oldestMsg == nil {
+		b.oldestMsg = make(map[string]*types.MessageInfo)
+	}
+	prev := b.oldestMsg[roomID]
+	if prev == nil || info.Timestamp.Before(prev.Timestamp) {
+		cp := *info
+		b.oldestMsg[roomID] = &cp
+	}
+}
+
+// RequestBackfill starts an on-demand history pull for a chat (roomID is the WA
+// JID, e.g. "1234@s.whatsapp.net"), fetching messages back to `days` ago. WA's
+// on-demand API is count-based, so we request batches of 50 and keep going (via
+// handleHistorySync) until the oldest fetched message predates the cutoff.
+func (b *Bridge) RequestBackfill(roomID string, days int) error {
+	jid, err := types.ParseJID(roomID)
+	if err != nil {
+		return fmt.Errorf("invalid JID: %w", err)
+	}
+	if days < 1 {
+		days = 1
+	}
+	cutoff := time.Now().AddDate(0, 0, -days).Unix()
+	b.mu.Lock()
+	if b.backfillCutoff == nil {
+		b.backfillCutoff = make(map[string]int64)
+	}
+	b.backfillCutoff[roomID] = cutoff
+	b.mu.Unlock()
+	b.appendLog(fmt.Sprintf("[Bridge] backfill requested for %s (%d days, cutoff=%d)", roomID, days, cutoff))
+	return b.sendHistoryRequest(jid)
+}
+
+// sendHistoryRequest asks WA's primary device for older messages preceding the
+// oldest message we currently have for the chat.
+func (b *Bridge) sendHistoryRequest(chat types.JID) error {
+	roomID := chat.User + "@" + string(chat.Server)
+	b.mu.Lock()
+	client := b.waClient
+	oldest := b.oldestMsg[roomID]
+	b.mu.Unlock()
+	if client == nil {
+		return fmt.Errorf("not connected")
+	}
+	if oldest == nil {
+		return fmt.Errorf("no anchor message for %s — open the chat first", roomID)
+	}
+	req := client.BuildHistorySyncRequest(oldest, 50)
+	_, err := client.SendPeerMessage(context.Background(), req)
+	return err
+}
+
+// handleHistorySync processes an incoming HistorySync (live initial sync or an
+// on-demand response) and emits each historical message as a backfill event.
+func (b *Bridge) handleHistorySync(data *waHistorySync.HistorySync) {
+	if data == nil {
+		return
+	}
+	onDemand := data.GetSyncType() == waHistorySync.HistorySync_ON_DEMAND
+	for _, conv := range data.GetConversations() {
+		jid, err := types.ParseJID(conv.GetID())
+		if err != nil {
+			continue
+		}
+		roomID := jid.User + "@" + string(jid.Server)
+		msgs := conv.GetMessages()
+		var oldestTS int64
+		for _, hm := range msgs {
+			ts := b.emitHistoricalMessage(roomID, jid, hm.GetMessage())
+			if ts > 0 && (oldestTS == 0 || ts < oldestTS) {
+				oldestTS = ts
+			}
+		}
+		if onDemand {
+			b.maybeContinueBackfill(roomID, jid, oldestTS, len(msgs))
+		}
+	}
+}
+
+// emitHistoricalMessage emits a single backfilled message and returns its unix
+// timestamp (0 if it was skipped).
+func (b *Bridge) emitHistoricalMessage(roomID string, chat types.JID, wmi *waWeb.WebMessageInfo) int64 {
+	if wmi == nil {
+		return 0
+	}
+	key := wmi.GetKey()
+	msg := wmi.GetMessage()
+	if key == nil || msg == nil {
+		return 0
+	}
+	if msg.GetReactionMessage() != nil {
+		return 0 // reactions aren't backfilled as messages
+	}
+	body, msgtype := messageBodyType(msg)
+	if body == "" && msgtype == "m.text" {
+		return 0 // nothing renderable (protocol/system message)
+	}
+	msgID := key.GetID()
+	if msgID == "" {
+		return 0
+	}
+	isOwn := key.GetFromMe()
+	ts := int64(wmi.GetMessageTimestamp())
+
+	// Resolve the sender: group messages carry a Participant; DMs use the chat.
+	senderUser := chat.User
+	if p := key.GetParticipant(); p != "" {
+		if pj, perr := types.ParseJID(p); perr == nil {
+			senderUser = pj.User
+		}
+	}
+	sender := "@wa_" + senderUser + ":tjena.local"
+	eventID := "$wa_" + msgID
+
+	// Track this as a candidate oldest anchor for further backfill requests.
+	b.recordOldest(roomID, &types.MessageInfo{
+		ID:            msgID,
+		MessageSource: types.MessageSource{Chat: chat, IsFromMe: isOwn},
+		Timestamp:     time.Unix(ts, 0),
+	})
+
+	b.emitter.Emit(map[string]any{
+		"type":    "message",
+		"room_id": roomID,
+		"event": map[string]any{
+			"id":          eventID,
+			"sender":      sender,
+			"sender_name": wmi.GetPushName(),
+			"ts":          ts,
+			"body":        body,
+			"msgtype":     msgtype,
+			"is_own":      isOwn,
+			"is_backfill": true,
+		},
+	})
+
+	if msgtype != "m.text" {
+		b.downloadMedia(eventID, msgID, roomID, msgtype, body, sender, wmi.GetPushName(), ts, isOwn, msg)
+	}
+	return ts
+}
+
+// maybeContinueBackfill requests the next older batch if the chat hasn't yet
+// reached its backfill cutoff, otherwise clears the in-progress marker.
+func (b *Bridge) maybeContinueBackfill(roomID string, chat types.JID, oldestTS int64, gotCount int) {
+	b.mu.Lock()
+	cutoff, active := b.backfillCutoff[roomID]
+	b.mu.Unlock()
+	if !active {
+		return
+	}
+	// Stop when there's no more history, or we've gone back past the cutoff.
+	if gotCount == 0 || oldestTS == 0 || oldestTS <= cutoff {
+		b.mu.Lock()
+		delete(b.backfillCutoff, roomID)
+		b.mu.Unlock()
+		b.appendLog(fmt.Sprintf("[Bridge] backfill complete for %s", roomID))
+		return
+	}
+	b.appendLog(fmt.Sprintf("[Bridge] backfill continuing for %s (oldest=%d cutoff=%d)", roomID, oldestTS, cutoff))
+	if err := b.sendHistoryRequest(chat); err != nil {
+		b.appendLog("[Bridge] backfill continuation failed: " + err.Error())
+		b.mu.Lock()
+		delete(b.backfillCutoff, roomID)
+		b.mu.Unlock()
 	}
 }
 

@@ -142,6 +142,12 @@ class TjenaBridgePlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamH
                     bridge!!.sendLocation(portalID, lat, lon)
                     result.success(null)
                 }
+                "requestBackfill" -> {
+                    val roomID = call.argument<String>("roomID") ?: ""
+                    val days = call.argument<Int>("days") ?: 7
+                    bridge!!.requestBackfill(roomID, days.toLong())
+                    result.success(null)
+                }
                 "getLogs" -> result.success(bridge?.getLogs() ?: "(no bridge)")
                 "onForeground" -> { bridge?.onForeground(); result.success(null) }
                 "onBackground" -> { bridge?.onBackground(); result.success(null) }
@@ -150,15 +156,23 @@ class TjenaBridgePlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamH
                 "syncRoom" -> result.success(null)
                 "clearPersistedRooms" -> result.success(null)
                 "setBackfillConfig" -> result.success(null)
-                "startSignal" -> result.success(null)
-                "stopSignal" -> result.success(null)
-                "getSignalStateJSON" -> result.success("{\"linked\":false,\"connected\":false,\"phone\":\"\"}")
-                "requestSignalQR" -> result.success(null)
-                "signalLogout" -> result.success(null)
-                "signalManualSync" -> result.success(null)
-                "signalSyncRoom" -> result.success(null)
-                "clearSignalRooms" -> result.success(null)
-                "getSignalLogs" -> result.success("(signal bridge not in current build)")
+                // ---- Signal bridge ----
+                "startSignal" -> { bridge!!.startSignal(); result.success(null) }
+                "stopSignal" -> { bridge?.stopSignal(); result.success(null) }
+                "getSignalStateJSON" -> result.success(
+                    bridge?.getSignalStateJSON()
+                        ?: "{\"linked\":false,\"connected\":false,\"phone\":\"\"}"
+                )
+                "requestSignalQR" -> { bridge!!.requestSignalQR(); result.success(null) }
+                "signalLogout" -> { bridge!!.signalLogout(); result.success(null) }
+                "signalManualSync" -> { bridge!!.signalManualSync(); result.success(null) }
+                "signalSyncRoom" -> {
+                    val chatID = call.argument<String>("chatID") ?: call.argument<String>("portalID") ?: ""
+                    bridge!!.signalSyncRoom(chatID)
+                    result.success(null)
+                }
+                "clearSignalRooms" -> { bridge?.clearSignalRooms(); result.success(null) }
+                "getSignalLogs" -> result.success(bridge?.getSignalLogs() ?: "(no bridge)")
                 else -> result.notImplemented()
             }
         } catch (e: Exception) {

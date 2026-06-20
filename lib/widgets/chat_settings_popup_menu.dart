@@ -25,6 +25,7 @@ enum ChatPopupMenuActions {
   search,
   media,
   syncWaRoom,
+  loadWaBackfill,
 }
 
 class ChatSettingsPopupMenu extends StatefulWidget {
@@ -132,6 +133,9 @@ class ChatSettingsPopupMenuState extends State<ChatSettingsPopupMenu> {
                   );
                 }
                 break;
+              case ChatPopupMenuActions.loadWaBackfill:
+                await _loadWaBackfill();
+                break;
             }
           },
           itemBuilder: (BuildContext context) => [
@@ -220,6 +224,18 @@ class ChatSettingsPopupMenuState extends State<ChatSettingsPopupMenu> {
                   ],
                 ),
               ),
+            if (PlatformInfos.isAndroid &&
+                WaMatrixBridge.instance.isWaRoom(widget.room.id))
+              PopupMenuItem<ChatPopupMenuActions>(
+                value: ChatPopupMenuActions.loadWaBackfill,
+                child: const Row(
+                  children: [
+                    Icon(Icons.history_outlined),
+                    SizedBox(width: 12),
+                    Text('Load history'),
+                  ],
+                ),
+              ),
             PopupMenuItem<ChatPopupMenuActions>(
               value: ChatPopupMenuActions.leave,
               child: Row(
@@ -234,6 +250,61 @@ class ChatSettingsPopupMenuState extends State<ChatSettingsPopupMenu> {
         ),
       ],
     );
+  }
+
+  Future<void> _loadWaBackfill() async {
+    final controller = TextEditingController(text: '7');
+    final days = await showDialog<int>(
+      context: context,
+      useRootNavigator: true,
+      builder: (context) => AlertDialog(
+        title: const Text('Load history'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text('How many days of history should be loaded?'),
+            const SizedBox(height: 16),
+            TextField(
+              controller: controller,
+              keyboardType: TextInputType.number,
+              autofocus: true,
+              decoration: const InputDecoration(
+                labelText: 'Days',
+                border: OutlineInputBorder(),
+                suffixText: 'days',
+              ),
+              onSubmitted: (v) =>
+                  Navigator.of(context).pop(int.tryParse(v.trim())),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () =>
+                Navigator.of(context).pop(int.tryParse(controller.text.trim())),
+            child: const Text('Load'),
+          ),
+        ],
+      ),
+    );
+    if (days == null || days < 1) return;
+    if (!mounted) return;
+    try {
+      await WaMatrixBridge.instance.requestBackfill(widget.room.id, days);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Loading the last $days days of history…')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Load history failed: $e')),
+      );
+    }
   }
 
   void _showChatDetails() {

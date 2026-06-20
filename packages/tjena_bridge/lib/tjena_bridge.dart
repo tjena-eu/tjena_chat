@@ -267,6 +267,14 @@ class TjenaBridge {
     'days': days,
   });
 
+  /// Pull on-demand WhatsApp message history for [roomID] (the WA JID) going
+  /// back [days] days. Messages arrive as backfill events on the event stream.
+  Future<void> requestBackfill(String roomID, int days) =>
+      _method.invokeMethod<void>('requestBackfill', {
+        'roomID': roomID,
+        'days': days,
+      });
+
   Future<void> startSignal() => _method.invokeMethod<void>('startSignal');
   Future<void> stopSignal() => _method.invokeMethod<void>('stopSignal');
 

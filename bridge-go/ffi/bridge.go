@@ -10,6 +10,7 @@ import (
 
 	"tjena.eu/tjena-bridge/internal/core"
 	"tjena.eu/tjena-bridge/internal/emitter"
+	signalpkg "tjena.eu/tjena-bridge/internal/signal"
 )
 
 // EventListener receives JSON-encoded events from the Go bridge.
@@ -23,11 +24,13 @@ type EventListener interface {
 // Bridge is the main entry point exposed to the Flutter plugin via gomobile.
 // Create with New; call SetListener before Start.
 type Bridge struct {
-	mu       sync.Mutex
-	em       *emitter.Emitter
-	core     *core.Bridge
-	startErr string // last Start() error message; non-empty means start failed
-	dataDir  string
+	mu        sync.Mutex
+	em        *emitter.Emitter
+	core      *core.Bridge
+	signal    *signalpkg.Bridge
+	startErr  string // last Start() error message; non-empty means start failed
+	signalErr string // last signal Start() error message
+	dataDir   string
 }
 
 // New allocates a Bridge for the given data directory.
@@ -63,6 +66,20 @@ func (b *Bridge) Start() error {
 	}
 	b.core = br
 	b.startErr = ""
+
+	// Start the Signal bridge too, sharing the same event emitter. Failure here
+	// is non-fatal: WhatsApp must keep working even if Signal can't start.
+	if b.signal == nil {
+		sb, serr := signalpkg.New(b.dataDir+"/signal", b.em)
+		if serr != nil {
+			b.signalErr = serr.Error()
+		} else if serr := sb.Start(context.Background()); serr != nil {
+			b.signalErr = serr.Error()
+		} else {
+			b.signal = sb
+			b.signalErr = ""
+		}
+	}
 	return nil
 }
 
@@ -73,6 +90,10 @@ func (b *Bridge) Stop() {
 	if b.core != nil {
 		b.core.Stop()
 		b.core = nil
+	}
+	if b.signal != nil {
+		b.signal.Stop()
+		b.signal = nil
 	}
 }
 
@@ -161,6 +182,12 @@ func (b *Bridge) RefreshRoom(roomID string) error {
 	return b.withCore(func(c *core.Bridge) error { return c.RefreshRoom(roomID) })
 }
 
+// RequestBackfill pulls on-demand message history for a chat (roomID is the WA
+// JID) going back `days` days. Messages arrive as backfill `message` events.
+func (b *Bridge) RequestBackfill(roomID string, days int) error {
+	return b.withCore(func(c *core.Bridge) error { return c.RequestBackfill(roomID, days) })
+}
+
 // GetLogs returns recent bridge log lines (up to 100) as a single string.
 func (b *Bridge) GetLogs() string {
 	b.mu.Lock()
@@ -192,7 +219,107 @@ func (b *Bridge) OnBackground() {
 	}
 }
 
+// --- Signal bridge ---
+
+// StartSignal ensures the Signal bridge is started (it normally auto-starts with
+// Start). Idempotent.
+func (b *Bridge) StartSignal() error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.signal != nil {
+		return nil
+	}
+	sb, err := signalpkg.New(b.dataDir+"/signal", b.em)
+	if err != nil {
+		b.signalErr = err.Error()
+		return err
+	}
+	if err := sb.Start(context.Background()); err != nil {
+		b.signalErr = err.Error()
+		return err
+	}
+	b.signal = sb
+	b.signalErr = ""
+	return nil
+}
+
+// StopSignal disconnects the Signal bridge.
+func (b *Bridge) StopSignal() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.signal != nil {
+		b.signal.Stop()
+		b.signal = nil
+	}
+}
+
+// GetSignalStateJSON returns {"linked":bool,"connected":bool,"phone":"..."}.
+func (b *Bridge) GetSignalStateJSON() string {
+	b.mu.Lock()
+	s := b.signal
+	b.mu.Unlock()
+	if s == nil {
+		return `{"linked":false,"connected":false,"phone":""}`
+	}
+	return s.GetStateJSON()
+}
+
+// RequestSignalQR starts async provisioning; emits signal_qr events with the URL.
+func (b *Bridge) RequestSignalQR() error {
+	return b.withSignal(func(s *signalpkg.Bridge) error { return s.RequestQRLink() })
+}
+
+// SignalLogout unlinks the Signal account.
+func (b *Bridge) SignalLogout() error {
+	return b.withSignal(func(s *signalpkg.Bridge) error { return s.Logout() })
+}
+
+// SignalManualSync triggers a manual contact/room sync.
+func (b *Bridge) SignalManualSync() error {
+	return b.withSignal(func(s *signalpkg.Bridge) error { return s.ManualSync() })
+}
+
+// SignalSyncRoom re-fetches metadata for a single Signal chat.
+func (b *Bridge) SignalSyncRoom(chatID string) error {
+	return b.withSignal(func(s *signalpkg.Bridge) error { return s.SyncRoom(chatID) })
+}
+
+// ClearSignalRooms wipes the persisted Signal room cache.
+func (b *Bridge) ClearSignalRooms() {
+	b.mu.Lock()
+	s := b.signal
+	b.mu.Unlock()
+	if s != nil {
+		s.ClearPersistedRooms()
+	}
+}
+
+// GetSignalLogs returns recent Signal bridge log lines.
+func (b *Bridge) GetSignalLogs() string {
+	b.mu.Lock()
+	s := b.signal
+	b.mu.Unlock()
+	if s == nil {
+		return "(signal bridge not started)"
+	}
+	return s.GetLogs()
+}
+
 // --- internal helpers ---
+
+func (b *Bridge) withSignal(fn func(*signalpkg.Bridge) error) error {
+	b.mu.Lock()
+	s := b.signal
+	signalErr := b.signalErr
+	b.mu.Unlock()
+	if s == nil {
+		if signalErr != "" {
+			return fmt.Errorf("signal bridge start failed: %s", signalErr)
+		}
+		return fmt.Errorf("signal bridge not started")
+	}
+	return fn(s)
+}
 
 func (b *Bridge) withCore(fn func(*core.Bridge) error) error {
 	b.mu.Lock()

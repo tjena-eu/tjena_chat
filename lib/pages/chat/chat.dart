@@ -50,6 +50,7 @@ import 'package:universal_html/universal_html.dart' as web;
 import '../../utils/account_bundles.dart';
 import '../../utils/localized_exception_extension.dart';
 import '../../utils/wa_matrix_bridge.dart';
+import '../../utils/signal_matrix_bridge.dart';
 import 'send_file_dialog.dart';
 import 'send_live_location_dialog.dart';
 import 'send_location_dialog.dart';
@@ -566,6 +567,13 @@ class ChatController extends State<ChatPageWithRoom>
 
   void setReadMarker({String? eventId}) {
     if (eventId?.isValidMatrixId == false) return;
+    // Virtual bridge rooms (WhatsApp/Signal) have no homeserver; calling the
+    // read-marker API throws "Could not find event ... in room". Route read
+    // state through the bridge instead and skip the Matrix API entirely.
+    if (WaMatrixBridge.instance.isWaRoom(room.id) ||
+        SignalMatrixBridge.instance.isSigRoom(room.id)) {
+      return;
+    }
     if (_setReadMarkerFuture != null) return;
     if (_scrolledUp) return;
     if (scrollUpBannerEventId != null) return;

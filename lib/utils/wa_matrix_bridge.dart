@@ -36,6 +36,14 @@ class WaMatrixBridge {
 
   StreamSubscription<BridgeEvent>? _sub;
 
+  // Serializes all handleSync injections. The SDK's handleSync is NOT internally
+  // serialized, so concurrent unawaited calls interleave at every await and the
+  // last DB writer wins — which let a URL-less media placeholder clobber the
+  // media_ready re-injection that carries the attachment URL. Chaining every
+  // injection through this future guarantees submission-order application, so a
+  // placeholder always lands before its media_ready URL update.
+  Future<void> _injectChain = Future.value();
+
   String? _spaceId;
   String? _connectedPhone;
 
@@ -299,6 +307,18 @@ class WaMatrixBridge {
     }
   }
 
+  /// Pull WhatsApp message history for a chat going back [days] days. Messages
+  /// arrive asynchronously as backfill events.
+  Future<void> requestBackfill(String matrixRoomId, int days) async {
+    final waId = _matrixToWa[matrixRoomId];
+    if (waId == null) return;
+    try {
+      await TjenaBridge.instance.requestBackfill(waId, days);
+    } catch (e) {
+      Logs().w('[WaBridge] requestBackfill failed: $e');
+    }
+  }
+
   /// Call when the user opens a WA room to clear unread count and send WA receipt.
   Future<void> markRoomRead(Client client, String matrixRoomId) async {
     final waId = _matrixToWa[matrixRoomId];
@@ -485,14 +505,19 @@ class WaMatrixBridge {
         final waRoomId = evt.data['room_id'] as String? ?? '';
         final eventData = evt.data['event'] as Map<String, dynamic>;
         if (!_waToMatrix.containsKey(waRoomId)) {
+          final isGroup = waRoomId.endsWith('@g.us');
           final senderName = eventData['sender_name'] as String?;
-          final fallbackName = senderName?.isNotEmpty == true
+          // Only seed a DM room with the sender's push name — for a group the
+          // sender is a member, not the room, so naming the group after them is
+          // wrong. Groups get a temporary JID-based name until room_updated
+          // delivers the real group name (via Go GetGroupInfo).
+          final fallbackName = (!isGroup && senderName?.isNotEmpty == true)
               ? senderName!
               : waRoomId.split('@').first;
           _ensureRoom(
             waRoomId,
             fallbackName,
-            isDM: !waRoomId.endsWith('@g.us'),
+            isDM: !isGroup,
           );
         }
         _pushMessage(waRoomId, eventData);
@@ -510,9 +535,12 @@ class WaMatrixBridge {
         final eventId = evt.data['event_id'] as String? ?? '';
         final filePath = evt.data['file_path'] as String? ?? '';
         final mimetype = evt.data['mimetype'] as String? ?? 'application/octet-stream';
-        final size = evt.data['size'] as int? ?? 0;
+        final size = (evt.data['size'] as num?)?.toInt() ?? 0;
+        Logs().d('[WaBridge] media_ready: room=$waRoomId ev=$eventId fp=$filePath size=$size knownRoom=${_waToMatrix.containsKey(waRoomId)}');
         if (filePath.isNotEmpty && eventId.isNotEmpty && _waToMatrix.containsKey(waRoomId)) {
-          _pushMediaReady(waRoomId, eventId, filePath, mimetype, size);
+          _pushMediaReady(waRoomId, eventId, filePath, mimetype, size, evt.data);
+        } else {
+          Logs().w('[WaBridge] media_ready SKIPPED: fp.empty=${filePath.isEmpty} ev.empty=${eventId.isEmpty} noRoom=${!_waToMatrix.containsKey(waRoomId)}');
         }
 
       case BridgeEventType.reaction:
@@ -546,7 +574,7 @@ class WaMatrixBridge {
     final now = DateTime.now();
 
     // ignore: unawaited_futures
-    client.handleSync(SyncUpdate(
+    _inject(SyncUpdate(
       nextBatch: client.prevBatch ?? '',
       rooms: RoomsUpdate(join: {
         _spaceRoomId: JoinedRoomUpdate(
@@ -603,8 +631,8 @@ class WaMatrixBridge {
     if (spaceId == null || client?.userID == null) return;
     final ts = DateTime.now();
     // ignore: unawaited_futures
-    client!.handleSync(SyncUpdate(
-      nextBatch: client.prevBatch ?? '',
+    _inject(SyncUpdate(
+      nextBatch: client!.prevBatch ?? '',
       rooms: RoomsUpdate(join: {
         spaceId: JoinedRoomUpdate(
           state: [
@@ -672,7 +700,7 @@ class WaMatrixBridge {
     final sid = _safe(waId);
 
     // ignore: unawaited_futures
-    client.handleSync(SyncUpdate(
+    _inject(SyncUpdate(
       nextBatch: token,
       rooms: RoomsUpdate(join: {
         matrixId: JoinedRoomUpdate(
@@ -722,8 +750,8 @@ class WaMatrixBridge {
     if (matrixId == null || client?.userID == null) return;
     final ts = DateTime.now().millisecondsSinceEpoch;
     // ignore: unawaited_futures
-    client!.handleSync(SyncUpdate(
-      nextBatch: client.prevBatch ?? '',
+    _inject(SyncUpdate(
+      nextBatch: client!.prevBatch ?? '',
       rooms: RoomsUpdate(join: {
         matrixId: JoinedRoomUpdate(
           state: [
@@ -760,7 +788,7 @@ class WaMatrixBridge {
       );
       final ts = DateTime.now();
       // ignore: unawaited_futures
-      client.handleSync(SyncUpdate(
+      _inject(SyncUpdate(
         nextBatch: client.prevBatch ?? '',
         rooms: RoomsUpdate(join: {
           matrixId: JoinedRoomUpdate(
@@ -783,6 +811,19 @@ class WaMatrixBridge {
   }
 
   // ── Event injection ───────────────────────────────────────────────────────────
+
+  // Enqueue a handleSync so it runs strictly after all previously-enqueued
+  // injections complete. Returns a future that completes when this update has
+  // been applied. Errors are swallowed so one bad update can't stall the chain.
+  Future<void> _inject(SyncUpdate update) {
+    final client = _client;
+    if (client == null) return Future.value();
+    final next = _injectChain.then((_) => client.handleSync(update));
+    _injectChain = next.catchError((Object e, StackTrace s) {
+      Logs().w('[WaBridge] inject failed', e, s);
+    });
+    return _injectChain;
+  }
 
   void _pushMessage(String waRoomId, Map<String, dynamic> eventData) {
     final matrixId = _waToMatrix[waRoomId];
@@ -824,22 +865,31 @@ class WaMatrixBridge {
       };
     }
 
-    // Inject/update the sender's display name so the chat shows the WA
-    // nickname instead of the raw Matrix user ID. Re-inject only when the
-    // name changes so we don't spam the sync handler.
+    // Ensure the sender has a RoomMember(join) state event. This is essential:
+    // without it the SDK treats the ghost user as "not in the room" and calls
+    // getUserProfile against the fake tjena.local homeserver, which always fails
+    // ("http error response"). A join member — even with no displayname — stops
+    // that server round-trip. We add the displayname when the push name is known.
     final senderName = eventData['sender_name'] as String?;
-    if (!isOwn && senderName != null && senderName.isNotEmpty) {
+    final hasName = senderName != null && senderName.isNotEmpty;
+    if (!isOwn) {
       final nameKey = '$matrixId/$rawSender';
-      if (_senderNames[nameKey] != senderName) {
-        _senderNames[nameKey] = senderName;
-        client.handleSync(SyncUpdate(
+      final memberExists =
+          client.getRoomById(matrixId)?.getState(EventTypes.RoomMember, rawSender) != null;
+      final nameChanged = hasName && _senderNames[nameKey] != senderName;
+      if (!memberExists || nameChanged) {
+        if (hasName) _senderNames[nameKey] = senderName;
+        final memberContent = <String, dynamic>{'membership': 'join'};
+        if (hasName) memberContent['displayname'] = senderName;
+        // ignore: unawaited_futures
+        _inject(SyncUpdate(
           nextBatch: client.prevBatch ?? '',
           rooms: RoomsUpdate(join: {
             matrixId: JoinedRoomUpdate(
               state: [
                 MatrixEvent(
                   type: EventTypes.RoomMember,
-                  content: {'membership': 'join', 'displayname': senderName},
+                  content: memberContent,
                   senderId: rawSender,
                   eventId: '\$wamember_${_safe(rawSender)}_${_safe(matrixId)}',
                   originServerTs: DateTime.fromMillisecondsSinceEpoch(tsSeconds * 1000),
@@ -850,10 +900,29 @@ class WaMatrixBridge {
           }),
         ));
       }
+
+      // For DM rooms, also promote the ROOM name from the sender's push name.
+      // The contacts-store lookup that RefreshRoom/WA-sync uses is often empty
+      // for un-saved contacts, leaving the room stuck on a bare phone number —
+      // but the push name carried by each message is reliable (it's the same
+      // data that names the ghost user above). Only set it when the room has no
+      // real name yet, so a saved contact name from room_updated still wins.
+      final isDM = !waRoomId.endsWith('@g.us') && !waRoomId.endsWith('@broadcast');
+      if (hasName && isDM) {
+        final currentName = client.getRoomById(matrixId)?.name ?? '';
+        if (!_looksLikeName(currentName)) {
+          _pushNameUpdate(waRoomId, senderName);
+        }
+      }
     }
 
+    // Always inject the event now (media gets a URL-less placeholder so the
+    // message is immediately visible). For media, media_ready re-injects the
+    // same event ID with content['url'] added. Because every injection is
+    // serialized through _inject, this placeholder is guaranteed to be applied
+    // before the media_ready update, so the URL is never clobbered.
     // ignore: unawaited_futures
-    client.handleSync(SyncUpdate(
+    _inject(SyncUpdate(
       nextBatch: client.prevBatch ?? '',
       rooms: RoomsUpdate(join: {
         matrixId: JoinedRoomUpdate(
@@ -886,29 +955,53 @@ class WaMatrixBridge {
     String filePath,
     String mimetype,
     int size,
+    Map<String, dynamic> payload,
   ) async {
+    // Use event data embedded in the payload (primary), fall back to pending map.
     final pending = _pendingMediaEvents.remove(eventId);
     final matrixId = _waToMatrix[waRoomId];
     final client = _client;
-    if (matrixId == null || client?.userID == null) return;
+    if (matrixId == null || client?.userID == null) {
+      Logs().w('[WaBridge] _pushMediaReady ABORT: matrixId=$matrixId userID=${client?.userID}');
+      return;
+    }
     try {
+      Logs().d('[WaBridge] _pushMediaReady reading $filePath');
       final bytes = await File(filePath).readAsBytes();
+      Logs().d('[WaBridge] _pushMediaReady read ${bytes.length} bytes');
       final mxcUri = Uri.parse('mxc://wa-media/${eventId.replaceAll(r'$', '')}');
       await client!.database.storeFile(
         mxcUri,
         bytes,
         DateTime.now().millisecondsSinceEpoch ~/ 1000,
       );
-      final sender = pending?['sender'] as String? ?? '@wa_unknown:local';
-      final ts = pending?['ts'] as int? ?? (DateTime.now().millisecondsSinceEpoch ~/ 1000);
-      final body = pending?['body'] as String? ?? '';
-      final msgtype = pending?['msgtype'] as String? ?? 'm.file';
+      Logs().d('[WaBridge] _pushMediaReady storeFile done for $mxcUri');
+
+      // Prefer data embedded in the media_ready payload; fall back to pending.
+      final sender = payload['sender'] as String?
+          ?? pending?['sender'] as String?
+          ?? '@wa_unknown:local';
+      final rawTs = payload['ts'] ?? pending?['ts'];
+      final ts = (rawTs as num?)?.toInt()
+          ?? (DateTime.now().millisecondsSinceEpoch ~/ 1000);
+      final body = payload['body'] as String?
+          ?? pending?['body'] as String?
+          ?? '';
+      final msgtype = payload['msgtype'] as String?
+          ?? pending?['msgtype'] as String?
+          ?? 'm.image';
+      final isOwn = payload['is_own'] as bool?
+          ?? pending?['is_own'] as bool?
+          ?? false;
+      final myUserId = client.userID!;
 
       _autoSaveMedia(bytes, body, msgtype);
 
-      // Re-inject the event with the same ID to update content with media URL.
-      // ignore: unawaited_futures
-      client.handleSync(SyncUpdate(
+      Logs().d('[WaBridge] _pushMediaReady injecting $eventId into $matrixId url=$mxcUri size=$size');
+      // Re-inject the same event ID with content['url'] added. Serialized via
+      // _inject so it always lands AFTER the _pushMessage placeholder, never
+      // before — so the URL can't be clobbered.
+      await _inject(SyncUpdate(
         nextBatch: client.prevBatch ?? '',
         rooms: RoomsUpdate(join: {
           matrixId: JoinedRoomUpdate(
@@ -922,7 +1015,7 @@ class WaMatrixBridge {
                     'url': mxcUri.toString(),
                     'info': {'mimetype': mimetype, 'size': size},
                   },
-                  senderId: sender,
+                  senderId: isOwn ? myUserId : sender,
                   eventId: eventId,
                   originServerTs: DateTime.fromMillisecondsSinceEpoch(ts * 1000),
                   roomId: matrixId,
@@ -930,13 +1023,17 @@ class WaMatrixBridge {
               ],
               limited: false,
             ),
+            unreadNotifications: isOwn
+                ? null
+                : UnreadNotificationCounts(notificationCount: 1),
           ),
         }),
       ));
+      Logs().d('[WaBridge] _pushMediaReady injected $eventId ok');
       // Clean up the temp file written by the Go bridge.
       try { await File(filePath).delete(); } catch (_) {}
     } catch (e, s) {
-      Logs().d('[WaBridge] media_ready inject failed for $eventId', e, s);
+      Logs().w('[WaBridge] media_ready inject failed for $eventId', e, s);
     }
   }
 

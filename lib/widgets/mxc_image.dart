@@ -99,6 +99,14 @@ class _MxcImageState extends State<MxcImage> {
     }
 
     if (event != null) {
+      // Guard: a virtual bridge (WhatsApp/Signal) media event may still be a
+      // placeholder with no attachment URL yet. Calling
+      // downloadAndDecryptAttachment in that state throws an uncaught error
+      // during build, which can break timeline rendering. Bail out quietly;
+      // didUpdateWidget retries once the URL is injected.
+      if (!event.hasAttachment && !event.hasThumbnail) {
+        return;
+      }
       final data = await event.downloadAndDecryptAttachment(
         getThumbnail: widget.isThumbnail,
       );
@@ -129,6 +137,20 @@ class _MxcImageState extends State<MxcImage> {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) => _tryLoad());
+  }
+
+  @override
+  void didUpdateWidget(MxcImage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Re-trigger load when the event's attachment URL becomes available
+    // (e.g., after media_ready re-injects the event with a URL).
+    final hadAttachment = oldWidget.event?.hasAttachment ?? (oldWidget.uri != null);
+    final hasAttachment = widget.event?.hasAttachment ?? (widget.uri != null);
+    Logs().d('[MxcImage] didUpdateWidget: hadAttachment=$hadAttachment hasAttachment=$hasAttachment imageData=${_imageData != null}');
+    if (!hadAttachment && hasAttachment && _imageData == null) {
+      Logs().d('[MxcImage] didUpdateWidget: triggering _tryLoad for ${widget.event?.eventId}');
+      _tryLoad();
+    }
   }
 
   @override
