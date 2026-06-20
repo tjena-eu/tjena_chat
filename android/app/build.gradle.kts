@@ -73,7 +73,7 @@ android {
 
     defaultConfig {
         applicationId = "tjena.tjenachat"
-        minSdk = flutter.minSdkVersion
+        minSdk = 26 // WhatsApp bridge AAR requires API 26
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName

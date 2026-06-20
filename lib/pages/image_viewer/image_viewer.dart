@@ -33,6 +33,8 @@ class ImageViewer extends StatefulWidget {
 class ImageViewerController extends State<ImageViewer> {
   final FocusNode focusNode = FocusNode();
 
+  bool backgroundVisible = false;
+
   @override
   void initState() {
     super.initState();
@@ -56,6 +58,7 @@ class ImageViewerController extends State<ImageViewer> {
     pageController = PageController(initialPage: index);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       currentEvent.autoSaveToDevice(widget.outerContext);
+      if (mounted) setState(() => backgroundVisible = true);
     });
   }
 

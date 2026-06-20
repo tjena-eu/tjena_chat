@@ -49,6 +49,7 @@ import 'package:universal_html/universal_html.dart' as web;
 
 import '../../utils/account_bundles.dart';
 import '../../utils/localized_exception_extension.dart';
+import '../../utils/wa_matrix_bridge.dart';
 import 'send_file_dialog.dart';
 import 'send_live_location_dialog.dart';
 import 'send_location_dialog.dart';
@@ -481,6 +482,10 @@ class ChatController extends State<ChatPageWithRoom>
 
       // Mark room as read on first visit if requirements are fulfilled
       setReadMarker();
+      if (WaMatrixBridge.instance.isWaRoom(room.id)) {
+        // ignore: unawaited_futures
+        WaMatrixBridge.instance.markRoomRead(sendingClient, room.id);
+      }
 
       if (!mounted) return;
     } catch (e, s) {
@@ -597,7 +602,13 @@ class ChatController extends State<ChatPageWithRoom>
     timeline = null;
     inputFocus.removeListener(_inputFocusListener);
     web.window.removeEventListener('paste', _handleClipboardFilePasteWeb);
-    if (currentlyTyping) room.setTyping(false);
+    if (currentlyTyping) {
+      if (WaMatrixBridge.instance.isWaRoom(room.id)) {
+        WaMatrixBridge.instance.notifyTyping(room.id, false);
+      } else {
+        room.setTyping(false);
+      }
+    }
     super.dispose();
   }
 
@@ -609,7 +620,11 @@ class ChatController extends State<ChatPageWithRoom>
       // no need to have the setting typing to false be blocking
       typingCoolDown?.cancel();
       typingCoolDown = null;
-      room.setTyping(false);
+      if (WaMatrixBridge.instance.isWaRoom(room.id)) {
+        WaMatrixBridge.instance.notifyTyping(room.id, false);
+      } else {
+        room.setTyping(false);
+      }
       currentlyTyping = false;
     }
     // then cancel the old timeline
@@ -651,6 +666,31 @@ class ChatController extends State<ChatPageWithRoom>
       );
       if (dialogResult == OkCancelResult.cancel) return;
       parseCommands = false;
+    }
+
+    // Route to on-device WhatsApp bridge instead of the homeserver.
+    final waId = WaMatrixBridge.instance.waRoomId(room.id);
+    if (waId != null) {
+      if (editEvent != null) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Editing not supported for WhatsApp messages')),
+        );
+        return;
+      }
+      // ignore: unawaited_futures
+      WaMatrixBridge.instance.sendText(room.id, sendController.text);
+      sendController.value = TextEditingValue(
+        text: pendingText,
+        selection: const TextSelection.collapsed(offset: 0),
+      );
+      setState(() {
+        sendController.text = pendingText;
+        _inputTextIsEmpty = pendingText.isEmpty;
+        replyEvent = null;
+        pendingText = '';
+      });
+      return;
     }
 
     // ignore: unawaited_futures
@@ -1024,7 +1064,10 @@ class ChatController extends State<ChatPageWithRoom>
         for (final (i, event) in selectedEvents.indexed) {
           onProgress(i / count);
           if (event.status.isSent) {
-            if (event.canRedact) {
+            if (WaMatrixBridge.instance.isWaRoom(room.id)) {
+              await WaMatrixBridge.instance
+                  .redactMessage(room.id, event.eventId);
+            } else if (event.canRedact) {
               await event.redactEvent(reason: reason);
             } else {
               final client = currentRoomBundle.firstWhere(
@@ -1034,10 +1077,10 @@ class ChatController extends State<ChatPageWithRoom>
               if (client == null) {
                 return;
               }
-              final room = client.getRoomById(roomId)!;
+              final altRoom = client.getRoomById(roomId)!;
               await Event.fromJson(
                 event.toJson(),
-                room,
+                altRoom,
               ).redactEvent(reason: reason);
             }
           } else {
@@ -1481,7 +1524,11 @@ class ChatController extends State<ChatPageWithRoom>
         if (!mounted) return;
         typingCoolDown = null;
         currentlyTyping = false;
-        room.setTyping(false);
+        if (WaMatrixBridge.instance.isWaRoom(room.id)) {
+          WaMatrixBridge.instance.notifyTyping(room.id, false);
+        } else {
+          room.setTyping(false);
+        }
       });
       typingTimeout ??= Timer(const Duration(seconds: 30), () {
         typingTimeout = null;
@@ -1489,10 +1536,14 @@ class ChatController extends State<ChatPageWithRoom>
       });
       if (!currentlyTyping) {
         currentlyTyping = true;
-        room.setTyping(
-          true,
-          timeout: const Duration(seconds: 30).inMilliseconds,
-        );
+        if (WaMatrixBridge.instance.isWaRoom(room.id)) {
+          WaMatrixBridge.instance.notifyTyping(room.id, true);
+        } else {
+          room.setTyping(
+            true,
+            timeout: const Duration(seconds: 30).inMilliseconds,
+          );
+        }
       }
     }
   }

@@ -202,10 +202,71 @@ class SettingsView extends StatelessWidget {
                       ? theme.colorScheme.surfaceContainerHigh
                       : null,
             ),
+            Divider(color: theme.dividerColor),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 2),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.smartphone_outlined,
+                    size: 14,
+                    color: theme.colorScheme.primary,
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    'On-Device Bridges',
+                    style: theme.textTheme.labelMedium?.copyWith(
+                      color: theme.colorScheme.primary,
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: 0.5,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            ListTile(
+              leading: const Icon(Icons.chat_rounded),
+              title: const Text('WhatsApp Direct'),
+              subtitle: const Text('Runs locally — no cloud required'),
+              onTap: () => context.go('/rooms/settings/bridge-local'),
+              tileColor: activeRoute.startsWith('/rooms/settings/bridge-local')
+                  ? theme.colorScheme.surfaceContainerHigh
+                  : null,
+            ),
+            ListTile(
+              leading: const Icon(Icons.signal_cellular_alt),
+              title: const Text('Signal Direct'),
+              subtitle: const Text('Runs locally — no cloud required'),
+              onTap: () => context.go('/rooms/settings/signal'),
+              tileColor: activeRoute.startsWith('/rooms/settings/signal')
+                  ? theme.colorScheme.surfaceContainerHigh
+                  : null,
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 2),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.cloud_outlined,
+                    size: 14,
+                    color: theme.colorScheme.secondary,
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    'Homeserver Bridges',
+                    style: theme.textTheme.labelMedium?.copyWith(
+                      color: theme.colorScheme.secondary,
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: 0.5,
+                    ),
+                  ),
+                ],
+              ),
+            ),
             ListTile(
               leading: const Icon(Icons.swap_horiz_outlined),
               title: const Text('Messaging Bridges'),
-              subtitle: const Text('WhatsApp · Signal'),
+              subtitle: const Text('WhatsApp · Signal via homeserver'),
               onTap: () => context.go('/rooms/settings/bridges'),
               tileColor: activeRoute.startsWith('/rooms/settings/bridges')
                   ? theme.colorScheme.surfaceContainerHigh
@@ -217,6 +278,15 @@ class SettingsView extends StatelessWidget {
               subtitle: const Text('Export chats to a ZIP file'),
               onTap: () => context.go('/rooms/settings/local-backup'),
               tileColor: activeRoute.startsWith('/rooms/settings/local-backup')
+                  ? theme.colorScheme.surfaceContainerHigh
+                  : null,
+            ),
+            ListTile(
+              leading: const Icon(Icons.bug_report_outlined),
+              title: const Text('Debug Tools'),
+              subtitle: const Text('Bulk delete rooms, multi-select'),
+              onTap: () => context.go('/rooms/settings/debug'),
+              tileColor: activeRoute.startsWith('/rooms/settings/debug')
                   ? theme.colorScheme.surfaceContainerHigh
                   : null,
             ),

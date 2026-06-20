@@ -21,7 +21,6 @@ import 'package:matrix/matrix.dart';
 import '../../config/themes.dart';
 import '../../widgets/adaptive_dialogs/user_dialog.dart';
 import '../../widgets/matrix.dart';
-import '../bridge/bridge_room_section.dart';
 import 'chat_list_header.dart';
 
 class ChatListViewBody extends StatelessWidget {
@@ -130,8 +129,6 @@ class ChatListViewBody extends StatelessWidget {
                           ),
                   ),
                 ],
-                if (!controller.isSearchMode)
-                  const BridgeRoomSection(),
                 if (!controller.isSearchMode &&
                     AppSettings.showPresences.value)
                   GestureDetector(

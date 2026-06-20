@@ -125,6 +125,20 @@ class TjenaBridgePlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamH
                 "getLogs" -> result.success(bridge?.getLogs() ?: "(no bridge)")
                 "onForeground" -> { bridge?.onForeground(); result.success(null) }
                 "onBackground" -> { bridge?.onBackground(); result.success(null) }
+                // ---- stubs: not in current AAR, return safe no-ops ----
+                "manualSync" -> result.success(null)
+                "syncRoom" -> result.success(null)
+                "clearPersistedRooms" -> result.success(null)
+                "setBackfillConfig" -> result.success(null)
+                "startSignal" -> result.success(null)
+                "stopSignal" -> result.success(null)
+                "getSignalStateJSON" -> result.success("{\"linked\":false,\"connected\":false,\"phone\":\"\"}")
+                "requestSignalQR" -> result.success(null)
+                "signalLogout" -> result.success(null)
+                "signalManualSync" -> result.success(null)
+                "signalSyncRoom" -> result.success(null)
+                "clearSignalRooms" -> result.success(null)
+                "getSignalLogs" -> result.success("(signal bridge not in current build)")
                 else -> result.notImplemented()
             }
         } catch (e: Exception) {

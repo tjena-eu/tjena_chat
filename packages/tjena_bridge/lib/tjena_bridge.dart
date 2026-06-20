@@ -27,6 +27,18 @@ enum BridgeEventType {
   roomMuted,
   unread,
   pairError,
+  mediaReady,
+  signalQr,
+  signalLinked,
+  signalState,
+  signalRoomCreated,
+  signalRoomUpdated,
+  signalMessage,
+  signalReaction,
+  signalRedaction,
+  signalTyping,
+  signalEdit,
+  signalMediaReady,
   unknown,
 }
 
@@ -64,6 +76,18 @@ class BridgeEvent {
     'room_muted': BridgeEventType.roomMuted,
     'unread': BridgeEventType.unread,
     'pair_error': BridgeEventType.pairError,
+    'media_ready': BridgeEventType.mediaReady,
+    'signal_qr': BridgeEventType.signalQr,
+    'signal_linked': BridgeEventType.signalLinked,
+    'signal_state': BridgeEventType.signalState,
+    'signal_room_created': BridgeEventType.signalRoomCreated,
+    'signal_room_updated': BridgeEventType.signalRoomUpdated,
+    'signal_message': BridgeEventType.signalMessage,
+    'signal_reaction': BridgeEventType.signalReaction,
+    'signal_redaction': BridgeEventType.signalRedaction,
+    'signal_typing': BridgeEventType.signalTyping,
+    'signal_edit': BridgeEventType.signalEdit,
+    'signal_media_ready': BridgeEventType.signalMediaReady,
   };
 }
 
@@ -93,6 +117,26 @@ class BridgeState {
     phone: '',
     pushName: '',
   );
+}
+
+class SignalBridgeState {
+  final bool linked;
+  final bool connected;
+  final String phone;
+
+  const SignalBridgeState({
+    required this.linked,
+    required this.connected,
+    required this.phone,
+  });
+
+  factory SignalBridgeState.fromJson(Map<String, dynamic> m) => SignalBridgeState(
+        linked: m['linked'] as bool? ?? false,
+        connected: m['connected'] as bool? ?? false,
+        phone: m['phone'] as String? ?? '',
+      );
+
+  static const empty = SignalBridgeState(linked: false, connected: false, phone: '');
 }
 
 /// Singleton facade for the Go bridge.
@@ -176,6 +220,42 @@ class TjenaBridge {
 
   /// Wipe local device credentials and prepare for fresh linking.
   Future<void> forceReset() => _method.invokeMethod<void>('forceReset');
+
+  Future<void> clearPersistedRooms() =>
+      _method.invokeMethod<void>('clearPersistedRooms');
+
+  Future<void> clearSignalRooms() =>
+      _method.invokeMethod<void>('clearSignalRooms');
+
+  Future<void> manualSync() => _method.invokeMethod<void>('manualSync');
+
+  Future<void> syncRoom(String jid) =>
+      _method.invokeMethod<void>('syncRoom', {'jid': jid});
+
+  Future<void> setBackfillConfig({
+    required bool seedOnConnect,
+    required int days,
+  }) => _method.invokeMethod<void>('setBackfillConfig', {
+    'seedOnConnect': seedOnConnect,
+    'days': days,
+  });
+
+  Future<void> startSignal() => _method.invokeMethod<void>('startSignal');
+  Future<void> stopSignal() => _method.invokeMethod<void>('stopSignal');
+
+  Future<SignalBridgeState> getSignalState() async {
+    final raw =
+        await _method.invokeMethod<String>('getSignalStateJSON') ?? '{}';
+    return SignalBridgeState.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+  }
+
+  Future<void> requestSignalQR() =>
+      _method.invokeMethod<void>('requestSignalQR');
+
+  Future<void> signalLogout() => _method.invokeMethod<void>('signalLogout');
+
+  Future<void> signalManualSync() =>
+      _method.invokeMethod<void>('signalManualSync');
 
   /// Returns the last 100 bridge log lines (WARN/ERROR/INFO from whatsmeow).
   Future<String> getLogs() async =>

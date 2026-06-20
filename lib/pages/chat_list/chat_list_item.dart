@@ -8,6 +8,8 @@ import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/pages/chat_list/unread_bubble.dart';
 import 'package:fluffychat/utils/matrix_sdk_extensions/matrix_locals.dart';
 import 'package:fluffychat/utils/room_status_extension.dart';
+import 'package:fluffychat/utils/signal_matrix_bridge.dart';
+import 'package:fluffychat/utils/wa_matrix_bridge.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.dart';
 import 'package:fluffychat/widgets/future_loading_dialog.dart';
 import 'package:fluffychat/widgets/hover_builder.dart';
@@ -45,6 +47,8 @@ class ChatListItem extends StatelessWidget {
     final isMuted = room.pushRuleState != PushRuleState.notify;
     final typingText = room.getLocalizedTypingText(context);
     final lastEvent = room.lastEvent;
+    final isWaRoom = WaMatrixBridge.instance.isWaRoom(room.id);
+    final isSigRoom = !isWaRoom && SignalMatrixBridge.instance.isSigRoom(room.id);
     final ownMessage = lastEvent?.senderId == room.client.userID;
     final directChatMatrixId = room.directChatMatrixID;
     final isDirectChat = directChatMatrixId != null;
@@ -175,6 +179,35 @@ class ChatListItem extends StatelessWidget {
                             ),
                           ),
                         ),
+                        if (isWaRoom || isSigRoom)
+                          Positioned(
+                            bottom: 0,
+                            left: 0,
+                            child: Container(
+                              width: 18,
+                              height: 18,
+                              decoration: BoxDecoration(
+                                color: isWaRoom
+                                    ? const Color(0xFF25D366)
+                                    : const Color(0xFF3A76F0),
+                                shape: BoxShape.circle,
+                                border: Border.all(
+                                  color:
+                                      backgroundColor ??
+                                      theme.colorScheme.surface,
+                                  width: 1.5,
+                                ),
+                              ),
+                              alignment: Alignment.center,
+                              child: Icon(
+                                isWaRoom
+                                    ? Icons.chat_rounded
+                                    : Icons.signal_cellular_alt,
+                                size: 10,
+                                color: Colors.white,
+                              ),
+                            ),
+                          ),
                       ],
                     ),
                   ),

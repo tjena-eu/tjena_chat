@@ -47,7 +47,11 @@ extension LocalizedBody on Event {
     }
   }
 
-  Future<void> autoSaveToDevice(BuildContext context) async {
+  Future<void> autoSaveToDevice(BuildContext context) async =>
+      autoSaveBackground();
+
+  /// Auto-save image/video to gallery without requiring a BuildContext.
+  Future<void> autoSaveBackground() async {
     if (kIsWeb || !PlatformInfos.isMobile) return;
     if (!AppSettings.autoSaveMedia.value) return;
     if (messageType != MessageTypes.Image &&

@@ -161,8 +161,10 @@ class MessageContent extends StatelessWidget {
                     timeline: timeline,
                     outerContext: context,
                   ),
-                  transitionsBuilder: (_, animation, _, child) =>
-                      FadeTransition(opacity: animation, child: child),
+                  // No FadeTransition: Hero already provides a smooth
+                  // animation from bubble to fullscreen. A fade on top
+                  // of Hero causes the "double-open flash".
+                  transitionsBuilder: (_, _, _, child) => child,
                 ),
               ),
             );

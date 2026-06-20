@@ -13,6 +13,8 @@ import 'package:fluffychat/pages/new_private_chat/qr_scanner_modal.dart';
 import 'package:fluffychat/pages/settings_bridges/bridge_definition.dart';
 import 'package:fluffychat/utils/adaptive_bottom_sheet.dart';
 import 'package:fluffychat/utils/fluffy_share.dart';
+import 'package:fluffychat/utils/signal_matrix_bridge.dart';
+import 'package:fluffychat/utils/wa_matrix_bridge.dart';
 import 'package:fluffychat/utils/identity_server_lookup.dart';
 import 'package:fluffychat/utils/platform_infos.dart';
 import 'package:fluffychat/utils/url_launcher.dart';
@@ -154,6 +156,31 @@ class NewPrivateChatController extends State<NewPrivateChat> {
         (r) => r.isDirectChat && r.directChatMatrixID == botId,
       );
     }).toList();
+  }
+
+  Future<void> openLocalBridgeChat({required bool isSig}) async {
+    final phone = await _showPhoneDialog(
+      isSig ? 'Signal chat' : 'WhatsApp chat',
+    );
+    if (phone == null || phone.isEmpty || !mounted) return;
+    final roomId = isSig
+        ? SignalMatrixBridge.instance.matrixRoomIdForPhone(phone)
+        : WaMatrixBridge.instance.matrixRoomIdForPhone(phone);
+    if (roomId != null && mounted) {
+      context.go('/rooms/$roomId');
+    } else if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            isSig
+                ? 'No Signal chat found for $phone. '
+                    'Send or receive a message via Signal first.'
+                : 'No WhatsApp chat found for $phone. '
+                    'A chat opens automatically when you exchange messages.',
+          ),
+        ),
+      );
+    }
   }
 
   Future<void> openBridgeNewChat(BridgeDef def) async {

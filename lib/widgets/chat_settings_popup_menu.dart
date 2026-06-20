@@ -6,11 +6,14 @@
 import 'dart:async';
 
 import 'package:fluffychat/l10n/l10n.dart';
+import 'package:fluffychat/utils/platform_infos.dart';
+import 'package:fluffychat/utils/wa_matrix_bridge.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.dart';
 import 'package:fluffychat/widgets/future_loading_dialog.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:matrix/matrix.dart';
+import 'package:tjena_bridge/tjena_bridge.dart';
 
 import 'matrix.dart';
 
@@ -22,6 +25,8 @@ enum ChatPopupMenuActions {
   emote,
   leave,
   search,
+  media,
+  syncWaRoom,
 }
 
 class ChatSettingsPopupMenu extends StatefulWidget {
@@ -107,10 +112,30 @@ class ChatSettingsPopupMenuState extends State<ChatSettingsPopupMenu> {
               case ChatPopupMenuActions.search:
                 context.go('/rooms/${widget.room.id}/search');
                 break;
+              case ChatPopupMenuActions.media:
+                context.go('/rooms/${widget.room.id}/search?tab=1');
+                break;
               case ChatPopupMenuActions.emote:
                 goToEmoteSettings();
               case ChatPopupMenuActions.encryption:
                 context.go('/rooms/${widget.room.id}/encryption');
+                break;
+              case ChatPopupMenuActions.syncWaRoom:
+                final waId = WaMatrixBridge.instance.waRoomId(widget.room.id);
+                if (waId != null) {
+                  try {
+                    await TjenaBridge.instance.syncRoom(waId);
+                    if (!context.mounted) return;
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Sync gestartet')),
+                    );
+                  } catch (e) {
+                    if (!context.mounted) return;
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text('Sync fehlgeschlagen: $e')),
+                    );
+                  }
+                }
                 break;
             }
           },
@@ -159,6 +184,16 @@ class ChatSettingsPopupMenuState extends State<ChatSettingsPopupMenu> {
               ),
             ),
             PopupMenuItem<ChatPopupMenuActions>(
+              value: ChatPopupMenuActions.media,
+              child: const Row(
+                children: [
+                  Icon(Icons.photo_library_outlined),
+                  SizedBox(width: 12),
+                  Text('Media'),
+                ],
+              ),
+            ),
+            PopupMenuItem<ChatPopupMenuActions>(
               value: ChatPopupMenuActions.encryption,
               child: Row(
                 children: [
@@ -178,6 +213,18 @@ class ChatSettingsPopupMenuState extends State<ChatSettingsPopupMenu> {
                 ],
               ),
             ),
+            if (PlatformInfos.isAndroid &&
+                WaMatrixBridge.instance.isWaRoom(widget.room.id))
+              PopupMenuItem<ChatPopupMenuActions>(
+                value: ChatPopupMenuActions.syncWaRoom,
+                child: const Row(
+                  children: [
+                    Icon(Icons.sync_outlined),
+                    SizedBox(width: 12),
+                    Text('WA sync'),
+                  ],
+                ),
+              ),
             PopupMenuItem<ChatPopupMenuActions>(
               value: ChatPopupMenuActions.leave,
               child: Row(

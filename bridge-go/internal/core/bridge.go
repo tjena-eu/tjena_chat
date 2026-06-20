@@ -672,6 +672,21 @@ func (b *Bridge) handleWAEvent(rawEvt any) {
 		b.linked = false
 		b.connected = false
 		b.pairingPhone = false
+		// Automatically purge stale credentials so the next QR attempt
+		// starts with a fresh (unregistered) device identity. Without this
+		// Connect() reuses the revoked session and WhatsApp immediately
+		// closes the WebSocket, killing the QR channel before a code renders.
+		if b.waStore != nil {
+			devices, _ := b.waStore.GetAllDevices(context.Background())
+			for _, dev := range devices {
+				_ = dev.Delete(context.Background())
+			}
+			if deviceStore, err := b.waStore.GetFirstDevice(context.Background()); err == nil {
+				clientLog := &bridgeLogger{prefix: "WA-Client", br: b}
+				b.waClient = whatsmeow.NewClient(deviceStore, clientLog)
+				b.waClient.AddEventHandler(b.handleWAEvent)
+			}
+		}
 		b.mu.Unlock()
 		b.emitter.Emit(map[string]any{
 			"type": "disconnected", "reason": "logged_out",
