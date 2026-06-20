@@ -165,7 +165,7 @@ class NewPrivateChatController extends State<NewPrivateChat> {
     if (phone == null || phone.isEmpty || !mounted) return;
     final roomId = isSig
         ? SignalMatrixBridge.instance.matrixRoomIdForPhone(phone)
-        : WaMatrixBridge.instance.matrixRoomIdForPhone(phone);
+        : WaMatrixBridge.instance.ensureChatForPhone(phone);
     if (roomId != null && mounted) {
       context.go('/rooms/$roomId');
     } else if (mounted) {
@@ -175,8 +175,7 @@ class NewPrivateChatController extends State<NewPrivateChat> {
             isSig
                 ? 'No Signal chat found for $phone. '
                     'Send or receive a message via Signal first.'
-                : 'No WhatsApp chat found for $phone. '
-                    'A chat opens automatically when you exchange messages.',
+                : 'WhatsApp bridge not connected yet. Try again in a moment.',
           ),
         ),
       );

@@ -1153,6 +1153,54 @@ func (b *Bridge) handleWAMessage(evt *waevents.Message) {
 			"is_backfill": false,
 		},
 	})
+
+	// For media messages, download asynchronously and emit media_ready.
+	if msgtype != "m.text" {
+		b.mu.Lock()
+		client := b.waClient
+		b.mu.Unlock()
+		if client != nil {
+			eventID := "$wa_" + evt.Info.ID
+			capturedMsg := msg
+			capturedRoomID := roomID
+			go func() {
+				data, err := client.DownloadAny(context.Background(), capturedMsg)
+				if err != nil {
+					b.appendLog(fmt.Sprintf("[Bridge] media download failed for %s: %v", eventID, err))
+					return
+				}
+				tmpPath := b.dataDir + "/media_" + evt.Info.ID
+				if werr := os.WriteFile(tmpPath, data, 0600); werr != nil {
+					b.appendLog(fmt.Sprintf("[Bridge] media write failed: %v", werr))
+					return
+				}
+				mimeType := ""
+				switch {
+				case capturedMsg.GetImageMessage() != nil:
+					mimeType = capturedMsg.GetImageMessage().GetMimetype()
+				case capturedMsg.GetVideoMessage() != nil:
+					mimeType = capturedMsg.GetVideoMessage().GetMimetype()
+				case capturedMsg.GetAudioMessage() != nil:
+					mimeType = capturedMsg.GetAudioMessage().GetMimetype()
+				case capturedMsg.GetDocumentMessage() != nil:
+					mimeType = capturedMsg.GetDocumentMessage().GetMimetype()
+				case capturedMsg.GetStickerMessage() != nil:
+					mimeType = capturedMsg.GetStickerMessage().GetMimetype()
+				}
+				if mimeType == "" {
+					mimeType = "application/octet-stream"
+				}
+				b.emitter.Emit(map[string]any{
+					"type":      "media_ready",
+					"room_id":   capturedRoomID,
+					"event_id":  eventID,
+					"file_path": tmpPath,
+					"mimetype":  mimeType,
+					"size":      len(data),
+				})
+			}()
+		}
+	}
 }
 
 func (b *Bridge) handleWAReceipt(evt *waevents.Receipt) {

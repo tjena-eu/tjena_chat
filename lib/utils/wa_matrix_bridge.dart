@@ -121,6 +121,18 @@ class WaMatrixBridge {
   bool isWaRoom(String matrixRoomId) => _matrixToWa.containsKey(matrixRoomId);
   String? waRoomId(String matrixRoomId) => _matrixToWa[matrixRoomId];
   String? matrixRoomId(String waRoomId) => _waToMatrix[waRoomId];
+
+  /// Returns the Matrix room ID for [rawPhone], creating a virtual WA room
+  /// if one doesn't exist yet. Returns null only if the bridge is not linked.
+  String? ensureChatForPhone(String rawPhone) {
+    if (!isLinked) return null;
+    final phone = rawPhone.replaceAll(RegExp(r'[\s+\-()]'), '');
+    final jid = '$phone@s.whatsapp.net';
+    if (!_waToMatrix.containsKey(jid)) {
+      _ensureRoom(jid, '+$phone', isDM: true);
+    }
+    return _waToMatrix[jid];
+  }
   // True if connected now, OR if rooms from a previous session still exist —
   // the latter means the bridge was linked before but the state event hasn't
   // fired yet this session (bridge still connecting at app start).
@@ -456,15 +468,14 @@ class WaMatrixBridge {
         );
 
       case BridgeEventType.roomUpdated:
+        // room_updated only refreshes existing rooms — never creates new ones.
+        // (Creating from room_updated would cause spurious DM rooms for every
+        // group-chat member whose PushName event fires.)
         final waId = evt.data['room_id'] as String? ?? '';
         final name = evt.data['name'] as String? ?? '';
         final avatarUrl = evt.data['avatar_url'] as String? ?? '';
-        if (name.isNotEmpty && _looksLikeName(name)) {
-          if (!_waToMatrix.containsKey(waId)) {
-            _ensureRoom(waId, name, isDM: true);
-          } else {
-            _pushNameUpdate(waId, name);
-          }
+        if (name.isNotEmpty && _looksLikeName(name) && _waToMatrix.containsKey(waId)) {
+          _pushNameUpdate(waId, name);
         }
         if (avatarUrl.isNotEmpty && _waToMatrix.containsKey(waId)) {
           _pushAvatarUpdate(waId, avatarUrl);
@@ -922,6 +933,8 @@ class WaMatrixBridge {
           ),
         }),
       ));
+      // Clean up the temp file written by the Go bridge.
+      try { await File(filePath).delete(); } catch (_) {}
     } catch (e, s) {
       Logs().d('[WaBridge] media_ready inject failed for $eventId', e, s);
     }
