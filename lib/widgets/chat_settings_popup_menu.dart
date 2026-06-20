@@ -13,8 +13,6 @@ import 'package:fluffychat/widgets/future_loading_dialog.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:matrix/matrix.dart';
-import 'package:tjena_bridge/tjena_bridge.dart';
-
 import 'matrix.dart';
 
 enum ChatPopupMenuActions {
@@ -121,20 +119,17 @@ class ChatSettingsPopupMenuState extends State<ChatSettingsPopupMenu> {
                 context.go('/rooms/${widget.room.id}/encryption');
                 break;
               case ChatPopupMenuActions.syncWaRoom:
-                final waId = WaMatrixBridge.instance.waRoomId(widget.room.id);
-                if (waId != null) {
-                  try {
-                    await TjenaBridge.instance.syncRoom(waId);
-                    if (!context.mounted) return;
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Sync gestartet')),
-                    );
-                  } catch (e) {
-                    if (!context.mounted) return;
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('Sync fehlgeschlagen: $e')),
-                    );
-                  }
+                try {
+                  await WaMatrixBridge.instance.refreshRoom(widget.room.id);
+                  if (!context.mounted) return;
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Refreshing name and photo…')),
+                  );
+                } catch (e) {
+                  if (!context.mounted) return;
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('Refresh failed: $e')),
+                  );
                 }
                 break;
             }

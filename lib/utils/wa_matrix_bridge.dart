@@ -29,6 +29,9 @@ class WaMatrixBridge {
   // eventId → original event data, kept until media_ready allows re-injection
   final _pendingMediaEvents = <String, Map<String, dynamic>>{};
 
+  // "$matrixRoomId/$senderId" → last display name we injected, avoids re-injecting unchanged names
+  final _senderNames = <String, String>{};
+
   StreamSubscription<BridgeEvent>? _sub;
 
   String? _spaceId;
@@ -250,6 +253,7 @@ class WaMatrixBridge {
     _waToMatrix.clear();
     _matrixToWa.clear();
     _pendingMediaEvents.clear();
+    _senderNames.clear();
     try {
       await TjenaBridge.instance.clearPersistedRooms();
     } catch (e) {
@@ -617,6 +621,34 @@ class WaMatrixBridge {
         'body': body,
         'msgtype': msgtype,
       };
+    }
+
+    // Inject/update the sender's display name so the chat shows the WA
+    // nickname instead of the raw Matrix user ID. Re-inject only when the
+    // name changes so we don't spam the sync handler.
+    final senderName = eventData['sender_name'] as String?;
+    if (!isOwn && senderName != null && senderName.isNotEmpty) {
+      final nameKey = '$matrixId/$rawSender';
+      if (_senderNames[nameKey] != senderName) {
+        _senderNames[nameKey] = senderName;
+        client.handleSync(SyncUpdate(
+          nextBatch: client.prevBatch ?? '',
+          rooms: RoomsUpdate(join: {
+            matrixId: JoinedRoomUpdate(
+              state: [
+                MatrixEvent(
+                  type: EventTypes.RoomMember,
+                  content: {'membership': 'join', 'displayname': senderName},
+                  senderId: rawSender,
+                  eventId: '\$wamember_${_safe(rawSender)}_${_safe(matrixId)}',
+                  originServerTs: DateTime.fromMillisecondsSinceEpoch(tsSeconds * 1000),
+                  stateKey: rawSender,
+                ),
+              ],
+            ),
+          }),
+        ));
+      }
     }
 
     // ignore: unawaited_futures
