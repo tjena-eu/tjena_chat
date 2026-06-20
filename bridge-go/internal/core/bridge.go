@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"go.mau.fi/whatsmeow"
+	"go.mau.fi/whatsmeow/appstate"
 	"go.mau.fi/whatsmeow/proto/waCompanionReg"
 	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/store"
@@ -838,6 +839,62 @@ func (b *Bridge) handleWAEvent(rawEvt any) {
 			}
 			b.goodNames[roomID] = true
 			b.mu.Unlock()
+			b.emitter.Emit(map[string]any{
+				"type": "room_updated", "room_id": roomID, "name": name,
+			})
+		}
+
+	case *waevents.AppStateSyncComplete:
+		// After regular_low sync completes the local contact DB is fully populated.
+		// Scan all contacts and emit room_updated for any room whose name is still
+		// a bare phone number (ensureRoom ran before the contacts DB was ready).
+		if evt.Name == appstate.WAPatchRegularLow || evt.Name == appstate.WAPatchRegular {
+			go b.postConnectNameScan()
+		}
+	}
+}
+
+// postConnectNameScan scans all stored contacts after app-state sync completes
+// and emits room_updated for any rooms that still have a bare phone-number name.
+// This fixes the case where restart fires ensureRoom before the contacts DB is
+// populated, leaving rooms with a phone-number name until the next message.
+func (b *Bridge) postConnectNameScan() {
+	b.mu.Lock()
+	client := b.waClient
+	b.mu.Unlock()
+	if client == nil {
+		return
+	}
+	contacts, err := client.Store.Contacts.GetAllContacts(context.Background())
+	if err != nil {
+		return
+	}
+	for jid, contact := range contacts {
+		if jid.Server != types.DefaultUserServer {
+			continue
+		}
+		var name string
+		switch {
+		case contact.FullName != "":
+			name = contact.FullName
+		case contact.PushName != "":
+			name = contact.PushName
+		case contact.BusinessName != "":
+			name = contact.BusinessName
+		default:
+			continue
+		}
+		roomID := jid.User + "@" + string(jid.Server)
+		b.mu.Lock()
+		if b.goodNames == nil {
+			b.goodNames = make(map[string]bool)
+		}
+		alreadyGood := b.goodNames[roomID]
+		if !alreadyGood {
+			b.goodNames[roomID] = true
+		}
+		b.mu.Unlock()
+		if !alreadyGood {
 			b.emitter.Emit(map[string]any{
 				"type": "room_updated", "room_id": roomID, "name": name,
 			})

@@ -45,6 +45,20 @@ class WaMatrixBridge {
 
   // ── Init ─────────────────────────────────────────────────────────────────────
 
+  // Reconstruct the WA JID from a virtual Matrix room ID produced by _toMatrixId.
+  // Returns null if the room ID doesn't look like a WA virtual room.
+  static String? _waIdFromRoomId(String roomId) {
+    if (!roomId.startsWith('!wa_') || !roomId.endsWith(':local')) return null;
+    final inner = roomId.substring(4, roomId.length - 6);
+    for (final server in ['s.whatsapp.net', 'g.us', 'broadcast']) {
+      if (inner.endsWith('_$server')) {
+        final user = inner.substring(0, inner.length - server.length - 1);
+        return '$user@$server';
+      }
+    }
+    return null;
+  }
+
   void init(Client client) {
     _client = client;
     // Rebuild mapping from rooms already in local DB.
@@ -53,9 +67,10 @@ class WaMatrixBridge {
         _spaceId = _spaceRoomId;
         continue;
       }
-      final state = room.getState(_bridgeStateType);
-      if (state == null) continue;
-      final waId = state.content['wa_room_id'] as String?;
+      // Primary: read the bridge state event that was stored when the room was created.
+      var waId = room.getState(_bridgeStateType)?.content['wa_room_id'] as String?;
+      // Fallback: if the state event wasn't loaded (e.g. lazy loading), derive from room ID.
+      waId ??= _waIdFromRoomId(room.id);
       if (waId != null) {
         _waToMatrix[waId] = room.id;
         _matrixToWa[room.id] = waId;
@@ -408,7 +423,7 @@ class WaMatrixBridge {
         final waId = evt.data['room_id'] as String? ?? '';
         final name = evt.data['name'] as String? ?? '';
         final avatarUrl = evt.data['avatar_url'] as String? ?? '';
-        if (name.isNotEmpty) {
+        if (name.isNotEmpty && _looksLikeName(name)) {
           if (!_waToMatrix.containsKey(waId)) {
             _ensureRoom(waId, name, isDM: true);
           } else {
@@ -562,12 +577,33 @@ class WaMatrixBridge {
 
   // ── Room lifecycle ────────────────────────────────────────────────────────────
 
+  // Returns true if [s] looks like a real display name (contains at least one
+  // letter). Phone numbers contain only digits, '+', '-', spaces and '(' ')';
+  // they will return false, preventing the bridge from overwriting a good
+  // name persisted in the DB with a bare number on restart.
+  static bool _looksLikeName(String s) =>
+      s.contains(RegExp(r'[A-Za-zÀ-žЀ-ӿ؀-ۿ]'));
+
   void _ensureRoom(String waId, String name, {required bool isDM}) {
     if (_waToMatrix.containsKey(waId)) {
-      if (name.isNotEmpty) _pushNameUpdate(waId, name);
+      // Only overwrite the stored name when the incoming name looks like a
+      // real contact name.  On restart the contacts DB is often empty, so
+      // ensureRoom arrives with a bare phone number; we must not clobber the
+      // good name that was persisted from the previous session.
+      if (name.isNotEmpty && _looksLikeName(name)) _pushNameUpdate(waId, name);
       return;
     }
     final matrixId = _toMatrixId(waId);
+    // Safety: if the room already exists in the SDK's room list (e.g. init
+    // missed it because the bridge state event wasn't loaded), register the
+    // mapping without re-creating the room — that would re-inject a member
+    // event and show a spurious "joined" indicator in the UI.
+    if (_client?.getRoomById(matrixId) != null) {
+      _waToMatrix[waId] = matrixId;
+      _matrixToWa[matrixId] = waId;
+      if (name.isNotEmpty && _looksLikeName(name)) _pushNameUpdate(waId, name);
+      return;
+    }
     _waToMatrix[waId] = matrixId;
     _matrixToWa[matrixId] = waId;
     _createRoom(matrixId, waId, name, isDM);
