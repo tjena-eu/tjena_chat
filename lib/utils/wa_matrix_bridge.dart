@@ -72,7 +72,10 @@ class WaMatrixBridge {
   bool isWaRoom(String matrixRoomId) => _matrixToWa.containsKey(matrixRoomId);
   String? waRoomId(String matrixRoomId) => _matrixToWa[matrixRoomId];
   String? matrixRoomId(String waRoomId) => _waToMatrix[waRoomId];
-  bool get isLinked => _connectedPhone != null;
+  // True if connected now, OR if rooms from a previous session still exist —
+  // the latter means the bridge was linked before but the state event hasn't
+  // fired yet this session (bridge still connecting at app start).
+  bool get isLinked => _connectedPhone != null || _waToMatrix.isNotEmpty;
   String? get connectedPhone => _connectedPhone;
   String? matrixRoomIdForPhone(String phone) {
     final jid = '${phone.replaceAll('+', '').replaceAll(' ', '')}@s.whatsapp.net';
@@ -110,6 +113,118 @@ class WaMatrixBridge {
       ));
     }
     await TjenaBridge.instance.sendText(waId, eventId, text);
+  }
+
+  /// Send a media file through WhatsApp. Injects a local Matrix event immediately
+  /// for instant display, then uploads and delivers via the Go bridge.
+  Future<void> sendFile(
+    String matrixRoomId,
+    Uint8List bytes,
+    String mimeType,
+    String fileName,
+  ) async {
+    final waId = _matrixToWa[matrixRoomId];
+    if (waId == null) return;
+    final client = _client;
+    if (client?.userID == null) return;
+
+    final eventId = '\$wa_out_media_${DateTime.now().millisecondsSinceEpoch}';
+    final msgtype = mimeType.startsWith('image/')
+        ? 'm.image'
+        : mimeType.startsWith('video/')
+            ? 'm.video'
+            : mimeType.startsWith('audio/')
+                ? 'm.audio'
+                : 'm.file';
+    final c = client!;
+
+    // Store bytes locally so the outgoing bubble can render them.
+    final mxcUri = Uri.parse('mxc://wa-media/${eventId.replaceAll(r'$', '')}');
+    await c.database.storeFile(
+      mxcUri,
+      bytes,
+      DateTime.now().millisecondsSinceEpoch ~/ 1000,
+    );
+
+    // Inject immediately for optimistic display.
+    c.handleSync(SyncUpdate(
+      nextBatch: c.prevBatch ?? '',
+      rooms: RoomsUpdate(join: {
+        matrixRoomId: JoinedRoomUpdate(
+          timeline: TimelineUpdate(
+            events: [
+              MatrixEvent(
+                type: EventTypes.Message,
+                content: {
+                  'msgtype': msgtype,
+                  'body': fileName,
+                  'url': mxcUri.toString(),
+                  'info': {'mimetype': mimeType, 'size': bytes.length},
+                },
+                senderId: c.userID!,
+                eventId: eventId,
+                originServerTs: DateTime.now(),
+                roomId: matrixRoomId,
+              ),
+            ],
+            limited: false,
+          ),
+        ),
+      }),
+    ));
+
+    try {
+      await TjenaBridge.instance.sendMedia(waId, eventId, mimeType, bytes);
+    } catch (e) {
+      Logs().w('[WaBridge] sendFile failed: $e');
+    }
+  }
+
+  /// Send a location through WhatsApp. Injects a local Matrix event immediately.
+  Future<void> sendLocation(
+    String matrixRoomId,
+    double lat,
+    double lon,
+  ) async {
+    final waId = _matrixToWa[matrixRoomId];
+    if (waId == null) return;
+    final client = _client;
+    if (client?.userID == null) return;
+
+    final eventId = '\$wa_out_loc_${DateTime.now().millisecondsSinceEpoch}';
+    final geoUri = 'geo:$lat,$lon';
+    final c = client!;
+
+    c.handleSync(SyncUpdate(
+      nextBatch: c.prevBatch ?? '',
+      rooms: RoomsUpdate(join: {
+        matrixRoomId: JoinedRoomUpdate(
+          timeline: TimelineUpdate(
+            events: [
+              MatrixEvent(
+                type: EventTypes.Message,
+                content: {
+                  'msgtype': 'm.location',
+                  'body': geoUri,
+                  'geo_uri': geoUri,
+                },
+                senderId: c.userID!,
+                eventId: eventId,
+                originServerTs: DateTime.now(),
+                roomId: matrixRoomId,
+              ),
+            ],
+            limited: false,
+          ),
+        ),
+      }),
+    ));
+
+    try {
+      await TjenaBridge.instance.sendLocation(waId, lat, lon);
+    } catch (e) {
+      Logs().w('[WaBridge] sendLocation failed: $e');
+    }
   }
 
   /// Refresh name and avatar for a room from the Go bridge (live network fetch).

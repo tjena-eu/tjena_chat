@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 
@@ -236,6 +237,27 @@ class TjenaBridge {
   /// a room_updated event so the UI refreshes name and avatar.
   Future<void> refreshRoom(String jid) =>
       _method.invokeMethod<void>('refreshRoom', {'jid': jid});
+
+  /// Upload and send media (image/video/audio/document) through WhatsApp.
+  Future<void> sendMedia(
+    String portalID,
+    String msgID,
+    String mimeType,
+    Uint8List data,
+  ) => _method.invokeMethod<void>('sendMedia', {
+        'portalID': portalID,
+        'msgID': msgID,
+        'mimeType': mimeType,
+        'data': data,
+      });
+
+  /// Send a location through WhatsApp.
+  Future<void> sendLocation(String portalID, double lat, double lon) =>
+      _method.invokeMethod<void>('sendLocation', {
+        'portalID': portalID,
+        'lat': lat,
+        'lon': lon,
+      });
 
   Future<void> setBackfillConfig({
     required bool seedOnConnect,

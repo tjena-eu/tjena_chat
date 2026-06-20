@@ -127,6 +127,21 @@ class TjenaBridgePlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamH
                     bridge?.refreshRoom(jid)
                     result.success(null)
                 }
+                "sendMedia" -> {
+                    val portalID = call.argument<String>("portalID") ?: ""
+                    val msgID = call.argument<String>("msgID") ?: ""
+                    val mimeType = call.argument<String>("mimeType") ?: ""
+                    val data = call.argument<ByteArray>("data") ?: ByteArray(0)
+                    bridge!!.sendMedia(portalID, msgID, mimeType, data)
+                    result.success(null)
+                }
+                "sendLocation" -> {
+                    val portalID = call.argument<String>("portalID") ?: ""
+                    val lat = call.argument<Double>("lat") ?: 0.0
+                    val lon = call.argument<Double>("lon") ?: 0.0
+                    bridge!!.sendLocation(portalID, lat, lon)
+                    result.success(null)
+                }
                 "getLogs" -> result.success(bridge?.getLogs() ?: "(no bridge)")
                 "onForeground" -> { bridge?.onForeground(); result.success(null) }
                 "onBackground" -> { bridge?.onBackground(); result.success(null) }

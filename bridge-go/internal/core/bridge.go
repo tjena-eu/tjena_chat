@@ -8,6 +8,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"strings"
 	"os"
 	"sync"
 	"time"
@@ -420,6 +421,95 @@ func (b *Bridge) SendText(portalID, _ string, text string) error {
 	return err
 }
 
+// SendMedia uploads a file/image/video/audio and sends it through WhatsApp.
+func (b *Bridge) SendMedia(portalID, _ string, mimeType string, data []byte) error {
+	b.mu.Lock()
+	client := b.waClient
+	b.mu.Unlock()
+	if client == nil {
+		return fmt.Errorf("bridge not started")
+	}
+	jid, err := types.ParseJID(portalID)
+	if err != nil {
+		return err
+	}
+
+	var mediaType whatsmeow.MediaType
+	switch {
+	case strings.HasPrefix(mimeType, "image/"):
+		mediaType = whatsmeow.MediaImage
+	case strings.HasPrefix(mimeType, "video/"):
+		mediaType = whatsmeow.MediaVideo
+	case strings.HasPrefix(mimeType, "audio/"):
+		mediaType = whatsmeow.MediaAudio
+	default:
+		mediaType = whatsmeow.MediaDocument
+	}
+
+	up, err := client.Upload(context.Background(), data, mediaType)
+	if err != nil {
+		return fmt.Errorf("upload failed: %w", err)
+	}
+
+	var msg *waE2E.Message
+	size := uint64(len(data))
+	switch mediaType {
+	case whatsmeow.MediaImage:
+		msg = &waE2E.Message{ImageMessage: &waE2E.ImageMessage{
+			Mimetype: proto.String(mimeType), URL: proto.String(up.URL),
+			DirectPath: proto.String(up.DirectPath), MediaKey: up.MediaKey,
+			FileEncSHA256: up.FileEncSHA256, FileSHA256: up.FileSHA256,
+			FileLength: proto.Uint64(size),
+		}}
+	case whatsmeow.MediaVideo:
+		msg = &waE2E.Message{VideoMessage: &waE2E.VideoMessage{
+			Mimetype: proto.String(mimeType), URL: proto.String(up.URL),
+			DirectPath: proto.String(up.DirectPath), MediaKey: up.MediaKey,
+			FileEncSHA256: up.FileEncSHA256, FileSHA256: up.FileSHA256,
+			FileLength: proto.Uint64(size),
+		}}
+	case whatsmeow.MediaAudio:
+		msg = &waE2E.Message{AudioMessage: &waE2E.AudioMessage{
+			Mimetype: proto.String(mimeType), URL: proto.String(up.URL),
+			DirectPath: proto.String(up.DirectPath), MediaKey: up.MediaKey,
+			FileEncSHA256: up.FileEncSHA256, FileSHA256: up.FileSHA256,
+			FileLength: proto.Uint64(size),
+		}}
+	default:
+		msg = &waE2E.Message{DocumentMessage: &waE2E.DocumentMessage{
+			Mimetype: proto.String(mimeType), URL: proto.String(up.URL),
+			DirectPath: proto.String(up.DirectPath), MediaKey: up.MediaKey,
+			FileEncSHA256: up.FileEncSHA256, FileSHA256: up.FileSHA256,
+			FileLength: proto.Uint64(size),
+		}}
+	}
+
+	_, err = client.SendMessage(context.Background(), jid, msg)
+	return err
+}
+
+// SendLocation sends a location message through WhatsApp.
+func (b *Bridge) SendLocation(portalID string, lat, lon float64) error {
+	b.mu.Lock()
+	client := b.waClient
+	b.mu.Unlock()
+	if client == nil {
+		return fmt.Errorf("bridge not started")
+	}
+	jid, err := types.ParseJID(portalID)
+	if err != nil {
+		return err
+	}
+	_, err = client.SendMessage(context.Background(), jid, &waE2E.Message{
+		LocationMessage: &waE2E.LocationMessage{
+			DegreesLatitude:  proto.Float64(lat),
+			DegreesLongitude: proto.Float64(lon),
+			IsLive:           proto.Bool(false),
+		},
+	})
+	return err
+}
+
 // SendReaction sends a reaction through WhatsApp.
 func (b *Bridge) SendReaction(portalID, targetEventID, emoji string) error {
 	b.mu.Lock()
@@ -715,6 +805,43 @@ func (b *Bridge) handleWAEvent(rawEvt any) {
 			"user_id": "@wa_" + evt.Sender.User + ":tjena.local",
 			"typing":  typing,
 		})
+
+	case *waevents.PushName:
+		// WA sends push-name updates during the initial contact sync. Use them
+		// to update any room name that still shows a bare phone number.
+		if evt.NewPushName != "" {
+			roomID := evt.JID.User + "@" + string(evt.JID.Server)
+			b.mu.Lock()
+			if b.goodNames == nil {
+				b.goodNames = make(map[string]bool)
+			}
+			b.goodNames[roomID] = true
+			b.mu.Unlock()
+			b.emitter.Emit(map[string]any{
+				"type": "room_updated", "room_id": roomID, "name": evt.NewPushName,
+			})
+		}
+
+	case *waevents.Contact:
+		// Contact list update — refresh name for the matching room.
+		name := ""
+		if evt.Action != nil {
+			if n := evt.Action.GetFullName(); n != "" {
+				name = n
+			}
+		}
+		if name != "" {
+			roomID := evt.JID.User + "@" + string(evt.JID.Server)
+			b.mu.Lock()
+			if b.goodNames == nil {
+				b.goodNames = make(map[string]bool)
+			}
+			b.goodNames[roomID] = true
+			b.mu.Unlock()
+			b.emitter.Emit(map[string]any{
+				"type": "room_updated", "room_id": roomID, "name": name,
+			})
+		}
 	}
 }
 
@@ -800,6 +927,19 @@ func (b *Bridge) fetchRoomMeta(chat types.JID, roomID string, isDM, fetchGroupNa
 		gi, err := client.GetGroupInfo(context.Background(), chat)
 		if err == nil && gi.Name != "" {
 			update["name"] = gi.Name
+		}
+	} else if isDM {
+		// Re-check the local contacts store — it may have been populated since
+		// the room was first created (WA contact sync happens asynchronously).
+		if c, err := client.Store.Contacts.GetContact(context.Background(), chat); err == nil {
+			switch {
+			case c.FullName != "":
+				update["name"] = c.FullName
+			case c.PushName != "":
+				update["name"] = c.PushName
+			case c.BusinessName != "":
+				update["name"] = c.BusinessName
+			}
 		}
 	}
 

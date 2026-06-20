@@ -107,6 +107,19 @@ func (b *Bridge) SendText(portalID, msgID, text string) error {
 	return b.withCore(func(c *core.Bridge) error { return c.SendText(portalID, msgID, text) })
 }
 
+// SendMedia uploads and sends a file/image/video/audio through WhatsApp.
+// mimeType determines the WA message type (image/*, video/*, audio/*, other→document).
+func (b *Bridge) SendMedia(portalID, msgID, mimeType string, data []byte) error {
+	return b.withCore(func(c *core.Bridge) error {
+		return c.SendMedia(portalID, msgID, mimeType, data)
+	})
+}
+
+// SendLocation sends a location message through WhatsApp.
+func (b *Bridge) SendLocation(portalID string, lat, lon float64) error {
+	return b.withCore(func(c *core.Bridge) error { return c.SendLocation(portalID, lat, lon) })
+}
+
 // SendReaction sends an emoji reaction.
 func (b *Bridge) SendReaction(portalID, targetEventID, emoji string) error {
 	return b.withCore(func(c *core.Bridge) error {
