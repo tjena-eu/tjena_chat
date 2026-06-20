@@ -142,6 +142,12 @@ func (b *Bridge) ForceReset() error {
 	return b.withCore(func(c *core.Bridge) error { return c.ForceReset() })
 }
 
+// RefreshRoom re-fetches the name and profile picture for a room (JID string
+// like "15551234567@s.whatsapp.net") and emits a room_updated event.
+func (b *Bridge) RefreshRoom(roomID string) error {
+	return b.withCore(func(c *core.Bridge) error { return c.RefreshRoom(roomID) })
+}
+
 // GetLogs returns recent bridge log lines (up to 100) as a single string.
 func (b *Bridge) GetLogs() string {
 	b.mu.Lock()

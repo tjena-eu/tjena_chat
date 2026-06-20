@@ -232,6 +232,11 @@ class TjenaBridge {
   Future<void> syncRoom(String jid) =>
       _method.invokeMethod<void>('syncRoom', {'jid': jid});
 
+  /// Re-fetches name and profile picture for the given WA room JID and emits
+  /// a room_updated event so the UI refreshes name and avatar.
+  Future<void> refreshRoom(String jid) =>
+      _method.invokeMethod<void>('refreshRoom', {'jid': jid});
+
   Future<void> setBackfillConfig({
     required bool seedOnConnect,
     required int days,

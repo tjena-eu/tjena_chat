@@ -90,10 +90,17 @@ class _SettingsBridgeLocalState extends State<SettingsBridgeLocal> {
     if (_syncing) return;
     setState(() => _syncing = true);
     try {
-      await TjenaBridge.instance.manualSync();
+      // Refresh name and avatar for every known WA room.
+      final client = Matrix.of(context).client;
+      final waRooms = client.rooms.where(
+        (r) => WaMatrixBridge.instance.isWaRoom(r.id),
+      );
+      for (final room in waRooms) {
+        await WaMatrixBridge.instance.refreshRoom(room.id);
+      }
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Sync started — chats will appear shortly')),
+        const SnackBar(content: Text('Refreshing names and avatars…')),
       );
     } catch (e) {
       if (!mounted) return;

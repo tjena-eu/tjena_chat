@@ -122,6 +122,11 @@ class TjenaBridgePlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamH
                 }
                 "logout" -> { bridge!!.logout(); result.success(null) }
                 "forceReset" -> { bridge!!.forceReset(); result.success(null) }
+                "refreshRoom" -> {
+                    val jid = call.argument<String>("jid") ?: ""
+                    bridge?.refreshRoom(jid)
+                    result.success(null)
+                }
                 "getLogs" -> result.success(bridge?.getLogs() ?: "(no bridge)")
                 "onForeground" -> { bridge?.onForeground(); result.success(null) }
                 "onBackground" -> { bridge?.onBackground(); result.success(null) }

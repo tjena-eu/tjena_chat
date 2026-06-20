@@ -81,8 +81,43 @@ class WaMatrixBridge {
   Future<void> sendText(String matrixRoomId, String text) async {
     final waId = _matrixToWa[matrixRoomId];
     if (waId == null) return;
-    final txnId = 'wa_${DateTime.now().millisecondsSinceEpoch}';
-    await TjenaBridge.instance.sendText(waId, txnId, text);
+    final eventId = '\$wa_out_${DateTime.now().millisecondsSinceEpoch}';
+    // Inject locally first so the message appears immediately in the chat.
+    final client = _client;
+    if (client?.userID != null) {
+      client!.handleSync(SyncUpdate(
+        nextBatch: client.prevBatch ?? '',
+        rooms: RoomsUpdate(join: {
+          matrixRoomId: JoinedRoomUpdate(
+            timeline: TimelineUpdate(
+              events: [
+                MatrixEvent(
+                  type: EventTypes.Message,
+                  content: {'msgtype': 'm.text', 'body': text},
+                  senderId: client.userID!,
+                  eventId: eventId,
+                  originServerTs: DateTime.now(),
+                  roomId: matrixRoomId,
+                ),
+              ],
+              limited: false,
+            ),
+          ),
+        }),
+      ));
+    }
+    await TjenaBridge.instance.sendText(waId, eventId, text);
+  }
+
+  /// Refresh name and avatar for a room from the Go bridge (live network fetch).
+  Future<void> refreshRoom(String matrixRoomId) async {
+    final waId = _matrixToWa[matrixRoomId];
+    if (waId == null) return;
+    try {
+      await TjenaBridge.instance.refreshRoom(waId);
+    } catch (e) {
+      Logs().w('[WaBridge] refreshRoom failed: $e');
+    }
   }
 
   /// Call when the user opens a WA room to clear unread count and send WA receipt.

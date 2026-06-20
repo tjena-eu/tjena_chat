@@ -57,7 +57,8 @@ type Bridge struct {
 	pairingPhone bool // true while phone-link handshake is in progress
 	dnsDialer    *dnsCachingDialer
 
-	knownRooms map[string]bool // JID room IDs we've already emitted room_created for
+	knownRooms  map[string]bool   // JID room IDs we've already emitted room_created for
+	goodNames   map[string]bool   // rooms whose name is a real name (not a bare number)
 
 	logMu  sync.Mutex
 	logBuf []string // ring buffer, last 100 lines
@@ -729,6 +730,9 @@ func (b *Bridge) ensureRoom(chat types.JID) {
 	if b.knownRooms == nil {
 		b.knownRooms = make(map[string]bool)
 	}
+	if b.goodNames == nil {
+		b.goodNames = make(map[string]bool)
+	}
 	if b.knownRooms[roomID] {
 		b.mu.Unlock()
 		return
@@ -740,6 +744,7 @@ func (b *Bridge) ensureRoom(chat types.JID) {
 	isDM := chat.Server == types.DefaultUserServer
 	name := chat.User
 	otherUser := ""
+	hasGoodName := false
 
 	if isDM {
 		otherUser = "@wa_" + chat.User + ":tjena.local"
@@ -748,13 +753,22 @@ func (b *Bridge) ensureRoom(chat types.JID) {
 				switch {
 				case c.FullName != "":
 					name = c.FullName
+					hasGoodName = true
 				case c.PushName != "":
 					name = c.PushName
+					hasGoodName = true
 				case c.BusinessName != "":
 					name = c.BusinessName
+					hasGoodName = true
 				}
 			}
 		}
+	}
+
+	if hasGoodName {
+		b.mu.Lock()
+		b.goodNames[roomID] = true
+		b.mu.Unlock()
 	}
 
 	b.emitter.Emit(map[string]any{
@@ -764,18 +778,60 @@ func (b *Bridge) ensureRoom(chat types.JID) {
 		},
 	})
 
-	// Group names require a network round-trip; fetch off the handler queue and
-	// refine the room name when it arrives.
-	if !isDM && chat.Server == types.GroupServer && client != nil {
-		go func() {
-			gi, err := client.GetGroupInfo(context.Background(), chat)
-			if err == nil && gi.Name != "" {
-				b.emitter.Emit(map[string]any{
-					"type": "room_updated", "room_id": roomID, "name": gi.Name,
-				})
-			}
-		}()
+	// Fetch profile picture and group name asynchronously.
+	if client != nil {
+		go b.fetchRoomMeta(chat, roomID, isDM, !isDM && chat.Server == types.GroupServer)
 	}
+}
+
+// fetchRoomMeta fetches the profile picture (and group name if needed) and
+// emits room_updated so the UI can display real avatars and corrected names.
+func (b *Bridge) fetchRoomMeta(chat types.JID, roomID string, isDM, fetchGroupName bool) {
+	b.mu.Lock()
+	client := b.waClient
+	b.mu.Unlock()
+	if client == nil {
+		return
+	}
+
+	update := map[string]any{"type": "room_updated", "room_id": roomID}
+
+	if fetchGroupName {
+		gi, err := client.GetGroupInfo(context.Background(), chat)
+		if err == nil && gi.Name != "" {
+			update["name"] = gi.Name
+		}
+	}
+
+	// Profile picture works for both DMs and groups.
+	pic, err := client.GetProfilePictureInfo(context.Background(), chat, &whatsmeow.GetProfilePictureParams{Preview: false})
+	if err == nil && pic != nil && pic.URL != "" {
+		update["avatar_url"] = pic.URL
+	}
+
+	// Only emit if there's something to update.
+	if _, hasName := update["name"]; hasName {
+		b.emitter.Emit(update)
+	} else if _, hasAvatar := update["avatar_url"]; hasAvatar {
+		b.emitter.Emit(update)
+	}
+}
+
+// RefreshRoom re-fetches the name and avatar for a room and emits room_updated.
+func (b *Bridge) RefreshRoom(roomID string) error {
+	b.mu.Lock()
+	client := b.waClient
+	b.mu.Unlock()
+	if client == nil {
+		return fmt.Errorf("bridge not connected")
+	}
+	jid, err := types.ParseJID(roomID)
+	if err != nil {
+		return fmt.Errorf("invalid JID: %w", err)
+	}
+	isDM := jid.Server == types.DefaultUserServer
+	go b.fetchRoomMeta(jid, roomID, isDM, !isDM && jid.Server == types.GroupServer)
+	return nil
 }
 
 func (b *Bridge) handleWAMessage(evt *waevents.Message) {
@@ -827,6 +883,25 @@ func (b *Bridge) handleWAMessage(evt *waevents.Message) {
 
 	isOwn := evt.Info.IsFromMe
 	roomID := evt.Info.Chat.User + "@" + string(evt.Info.Chat.Server)
+
+	// If this is a DM and the room still has only a bare phone-number name,
+	// promote it to the sender's push name as soon as we see it.
+	if !isOwn && evt.Info.PushName != "" {
+		b.mu.Lock()
+		if b.goodNames == nil {
+			b.goodNames = make(map[string]bool)
+		}
+		alreadyGood := b.goodNames[roomID]
+		if !alreadyGood {
+			b.goodNames[roomID] = true
+		}
+		b.mu.Unlock()
+		if !alreadyGood {
+			b.emitter.Emit(map[string]any{
+				"type": "room_updated", "room_id": roomID, "name": evt.Info.PushName,
+			})
+		}
+	}
 
 	b.emitter.Emit(map[string]any{
 		"type":    "message",
