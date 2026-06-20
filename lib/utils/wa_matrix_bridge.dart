@@ -2,11 +2,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:matrix/matrix.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:tjena_bridge/tjena_bridge.dart';
 
 import 'matrix_sdk_extensions/matrix_file_extension.dart';
@@ -59,23 +61,55 @@ class WaMatrixBridge {
     return null;
   }
 
-  void init(Client client) {
+  static const _roomMappingsKey = 'wa_bridge_room_mappings';
+
+  // Persist the current WA↔Matrix room mapping to SharedPreferences so it
+  // survives process restarts without relying on Matrix SDK state-event loading.
+  Future<void> _saveRoomMappings() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_roomMappingsKey, jsonEncode(Map.of(_waToMatrix)));
+    } catch (e) {
+      Logs().w('[WaBridge] save room mappings failed: $e');
+    }
+  }
+
+  Future<void> init(Client client) async {
     _client = client;
-    // Rebuild mapping from rooms already in local DB.
+
+    // ① Load from SharedPreferences — fast, reliable, survives process kills.
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final str = prefs.getString(_roomMappingsKey);
+      if (str != null) {
+        final raw = jsonDecode(str) as Map<String, dynamic>;
+        for (final e in raw.entries) {
+          _waToMatrix[e.key] = e.value as String;
+          _matrixToWa[e.value as String] = e.key;
+        }
+      }
+    } catch (e) {
+      Logs().w('[WaBridge] load room mappings failed: $e');
+    }
+
+    // ② Supplement from client.rooms (covers first-ever install and space room).
     for (final room in client.rooms) {
       if (room.id == _spaceRoomId) {
         _spaceId = _spaceRoomId;
         continue;
       }
-      // Primary: read the bridge state event that was stored when the room was created.
       var waId = room.getState(_bridgeStateType)?.content['wa_room_id'] as String?;
-      // Fallback: if the state event wasn't loaded (e.g. lazy loading), derive from room ID.
       waId ??= _waIdFromRoomId(room.id);
-      if (waId != null) {
+      if (waId != null && !_waToMatrix.containsKey(waId)) {
         _waToMatrix[waId] = room.id;
         _matrixToWa[room.id] = waId;
       }
     }
+
+    // ③ Persist the complete mapping back so next restart is instantaneous.
+    // ignore: unawaited_futures
+    _saveRoomMappings();
+
     _sub?.cancel();
     _sub = TjenaBridge.instance.events.listen(
       _onBridgeEvent,
@@ -360,6 +394,7 @@ class WaMatrixBridge {
   Future<void> removeRoom(Client client, String matrixRoomId) async {
     final waId = _matrixToWa.remove(matrixRoomId);
     if (waId != null) _waToMatrix.remove(waId);
+    await _saveRoomMappings();
     try { await client.database.forgetRoom(matrixRoomId); } catch (_) {}
     client.rooms.removeWhere((r) => r.id == matrixRoomId);
     client.archivedRooms.removeWhere((r) => r.room.id == matrixRoomId);
@@ -384,6 +419,7 @@ class WaMatrixBridge {
     _matrixToWa.clear();
     _pendingMediaEvents.clear();
     _senderNames.clear();
+    await _saveRoomMappings();
     try {
       await TjenaBridge.instance.clearPersistedRooms();
     } catch (e) {
@@ -606,6 +642,9 @@ class WaMatrixBridge {
     }
     _waToMatrix[waId] = matrixId;
     _matrixToWa[matrixId] = waId;
+    // Persist so the mapping survives the next process restart.
+    // ignore: unawaited_futures
+    _saveRoomMappings();
     _createRoom(matrixId, waId, name, isDM);
     if (_spaceId == null && _connectedPhone != null) {
       _initSpace(_connectedPhone!);

@@ -133,7 +133,7 @@ Future<void> startGui(List<Client> clients, SharedPreferences store) async {
   // Start on-device bridges (non-blocking; errors are non-fatal).
   if (PlatformInfos.isAndroid) {
     if (firstClient != null) {
-      WaMatrixBridge.instance.init(firstClient);
+      await WaMatrixBridge.instance.init(firstClient);
       SignalMatrixBridge.instance.init(firstClient);
       _subscribeAutoSave(firstClient);
     }

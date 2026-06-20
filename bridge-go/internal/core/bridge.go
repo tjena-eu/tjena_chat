@@ -627,8 +627,47 @@ func (b *Bridge) Logout() error {
 	return err
 }
 
-func (b *Bridge) OnForeground() {}
+// OnForeground is called when the app returns to foreground.
+// If the WebSocket was dropped while in background, reconnect immediately.
+func (b *Bridge) OnForeground() {
+	b.mu.Lock()
+	client := b.waClient
+	linked := b.linked
+	b.mu.Unlock()
+	if client != nil && linked && !client.IsConnected() {
+		go func() {
+			if err := client.Connect(); err != nil {
+				b.appendLog(fmt.Sprintf("[Bridge] foreground reconnect failed: %v", err))
+			}
+		}()
+	}
+}
+
 func (b *Bridge) OnBackground() {}
+
+// autoReconnect retries the WebSocket connection with increasing delays
+// after an unexpected disconnect (i.e. not during pairing).
+func (b *Bridge) autoReconnect(client *whatsmeow.Client) {
+	delays := []time.Duration{3, 7, 15, 30, 60}
+	for i, d := range delays {
+		time.Sleep(d * time.Second)
+		b.mu.Lock()
+		linked := b.linked
+		b.mu.Unlock()
+		if !linked {
+			return
+		}
+		if client.IsConnected() {
+			return
+		}
+		if err := client.Connect(); err != nil {
+			b.appendLog(fmt.Sprintf("[Bridge] auto-reconnect attempt %d/%d failed: %v", i+1, len(delays), err))
+			continue
+		}
+		return
+	}
+	b.appendLog("[Bridge] auto-reconnect exhausted all retries")
+}
 
 // --- WhatsApp event handler ---
 
@@ -751,12 +790,12 @@ func (b *Bridge) handleWAEvent(rawEvt any) {
 			"type": "state", "linked": b.linked, "connected": false,
 			"reason": "disconnected",
 		})
-		// The WA server repeatedly disconnects the companion during phone linking:
-		//   1. after issuing the pairing code  (we need to reconnect to get the notification)
-		//   2. after sending pair-success       (normal post-pair disconnect)
-		// Reconnect with retry/backoff so transient DNS failures don't block us.
 		if pairingPhone && client != nil {
+			// Reconnect during phone-link handshake (special retry logic).
 			go b.phonePairingReconnect(client)
+		} else if client != nil && b.linked {
+			// Normal disconnect — reconnect automatically with backoff.
+			go b.autoReconnect(client)
 		}
 
 	case *waevents.LoggedOut:
