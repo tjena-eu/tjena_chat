@@ -267,12 +267,31 @@ class TjenaBridge {
     'days': days,
   });
 
+  /// List all known WhatsApp chats (saved contacts + joined groups) for the
+  /// chat-picker UI. Each map has keys: jid, name, is_group, phone.
+  Future<List<Map<String, dynamic>>> listChats() async {
+    final raw = await _method.invokeMethod<String>('listChats') ?? '[]';
+    final list = jsonDecode(raw) as List<dynamic>;
+    return list.cast<Map<String, dynamic>>();
+  }
+
   /// Pull on-demand WhatsApp message history for [roomID] (the WA JID) going
   /// back [days] days. Messages arrive as backfill events on the event stream.
-  Future<void> requestBackfill(String roomID, int days) =>
+  /// The anchor describes the oldest message currently loaded (the Go bridge
+  /// keeps no history, so the client supplies the starting point).
+  Future<void> requestBackfill(
+    String roomID,
+    int days, {
+    required String anchorMsgID,
+    required bool anchorFromMe,
+    required int anchorTS,
+  }) =>
       _method.invokeMethod<void>('requestBackfill', {
         'roomID': roomID,
         'days': days,
+        'anchorMsgID': anchorMsgID,
+        'anchorFromMe': anchorFromMe,
+        'anchorTS': anchorTS,
       });
 
   Future<void> startSignal() => _method.invokeMethod<void>('startSignal');

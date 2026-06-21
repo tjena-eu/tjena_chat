@@ -12,6 +12,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:tjena_bridge/tjena_bridge.dart';
 
 import '../bridge/bridge_link_screen.dart';
+import 'wa_chat_picker_screen.dart';
 
 class SettingsBridgeLocal extends StatefulWidget {
   const SettingsBridgeLocal({super.key});
@@ -214,6 +215,17 @@ class _SettingsBridgeLocalState extends State<SettingsBridgeLocal> {
                         )
                       : const Icon(Icons.sync, size: 18),
                   label: const Text('Sync chats'),
+                ),
+                FilledButton.tonalIcon(
+                  onPressed: _state.connected
+                      ? () => Navigator.of(context).push(
+                            MaterialPageRoute(
+                              builder: (_) => const WaChatPickerScreen(),
+                            ),
+                          )
+                      : null,
+                  icon: const Icon(Icons.checklist_outlined, size: 18),
+                  label: const Text('Choose chats'),
                 ),
                 FilledButton.tonalIcon(
                   onPressed: _clearAllRooms,

@@ -184,8 +184,24 @@ func (b *Bridge) RefreshRoom(roomID string) error {
 
 // RequestBackfill pulls on-demand message history for a chat (roomID is the WA
 // JID) going back `days` days. Messages arrive as backfill `message` events.
-func (b *Bridge) RequestBackfill(roomID string, days int) error {
-	return b.withCore(func(c *core.Bridge) error { return c.RequestBackfill(roomID, days) })
+// The anchor (oldest message the client has) is supplied by the caller since the
+// Go bridge keeps no message history of its own.
+func (b *Bridge) RequestBackfill(roomID string, days int, anchorMsgID string, anchorFromMe bool, anchorTS int64) error {
+	return b.withCore(func(c *core.Bridge) error {
+		return c.RequestBackfill(roomID, days, anchorMsgID, anchorFromMe, anchorTS)
+	})
+}
+
+// ListChatsJSON returns a JSON array of all known WhatsApp chats (contacts +
+// groups) for the chat-picker UI. Returns "[]" if the bridge isn't connected.
+func (b *Bridge) ListChatsJSON() string {
+	b.mu.Lock()
+	c := b.core
+	b.mu.Unlock()
+	if c == nil {
+		return "[]"
+	}
+	return c.ListChatsJSON()
 }
 
 // GetLogs returns recent bridge log lines (up to 100) as a single string.

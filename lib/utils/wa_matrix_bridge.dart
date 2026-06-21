@@ -60,7 +60,7 @@ class WaMatrixBridge {
   static String? _waIdFromRoomId(String roomId) {
     if (!roomId.startsWith('!wa_') || !roomId.endsWith(':local')) return null;
     final inner = roomId.substring(4, roomId.length - 6);
-    for (final server in ['s.whatsapp.net', 'g.us', 'broadcast']) {
+    for (final server in ['s.whatsapp.net', 'g.us', 'broadcast', 'lid']) {
       if (inner.endsWith('_$server')) {
         final user = inner.substring(0, inner.length - server.length - 1);
         return '$user@$server';
@@ -124,6 +124,37 @@ class WaMatrixBridge {
       onError: (e, s) => Logs().w('[WaBridge] stream error', e, s),
       cancelOnError: false,
     );
+
+    // Repair nameless rooms now, and again shortly after (rooms can finish
+    // loading / syncing a moment later). Logged at warning level so it is
+    // visible in release logcat regardless of capture timing.
+    _repairRoomNames('init');
+    Future.delayed(const Duration(seconds: 3), () => _repairRoomNames('delayed'));
+  }
+
+  // Give every WA room a non-empty, non-JID name. An empty name makes the SDK
+  // show "leerer chat" and probe the fake homeserver for the DM partner. We seed
+  // the bare number; a real push/contact name upgrades it later. Idempotent.
+  void _repairRoomNames(String reason) {
+    final client = _client;
+    if (client == null) return;
+    var repaired = 0;
+    for (final room in client.rooms) {
+      if (room.id == _spaceRoomId) continue;
+      var waId = room.getState(_bridgeStateType)?.content['wa_room_id'] as String?;
+      waId ??= _waIdFromRoomId(room.id);
+      if (waId == null) continue;
+      if (!_waToMatrix.containsKey(waId)) {
+        _waToMatrix[waId] = room.id;
+        _matrixToWa[room.id] = waId;
+      }
+      final n = room.name;
+      if (n.isEmpty || n.contains('@') || n == room.id) {
+        _pushNameUpdate(waId, waId.split('@').first);
+        repaired++;
+      }
+    }
+    Logs().w('[WaBridge] name repair ($reason): scanned ${client.rooms.length} rooms, repaired $repaired');
   }
 
   bool isWaRoom(String matrixRoomId) => _matrixToWa.containsKey(matrixRoomId);
@@ -297,9 +328,16 @@ class WaMatrixBridge {
   }
 
   /// Refresh name and avatar for a room from the Go bridge (live network fetch).
+  /// Also immediately repairs a blank/JID title with the bare number so the chat
+  /// never stays "leerer chat" — the real name overwrites it when the Go bridge
+  /// responds (if the contact is resolvable).
   Future<void> refreshRoom(String matrixRoomId) async {
     final waId = _matrixToWa[matrixRoomId];
     if (waId == null) return;
+    final n = _client?.getRoomById(matrixRoomId)?.name ?? '';
+    if (n.isEmpty || n.contains('@') || n == matrixRoomId) {
+      _pushNameUpdate(waId, waId.split('@').first);
+    }
     try {
       await TjenaBridge.instance.refreshRoom(waId);
     } catch (e) {
@@ -308,14 +346,123 @@ class WaMatrixBridge {
   }
 
   /// Pull WhatsApp message history for a chat going back [days] days. Messages
-  /// arrive asynchronously as backfill events.
+  /// arrive asynchronously as backfill events. The oldest currently-loaded WA
+  /// message is used as the anchor (the Go bridge keeps no history of its own),
+  /// so we read it from the room's timeline here.
   Future<void> requestBackfill(String matrixRoomId, int days) async {
     final waId = _matrixToWa[matrixRoomId];
-    if (waId == null) return;
+    final client = _client;
+    if (waId == null || client == null) {
+      throw Exception('not a WhatsApp chat');
+    }
+    final room = client.getRoomById(matrixRoomId);
+    if (room == null) throw Exception('room not loaded');
+
+    final timeline = await room.getTimeline();
+    // Timeline events are newest-first; the oldest WA message is the last one
+    // whose event ID is a bridged WA id ("$wa_<msgID>").
+    Event? anchor;
+    for (final e in timeline.events.reversed) {
+      if (e.eventId.startsWith(r'$wa_') &&
+          !e.eventId.startsWith(r'$wa_react_') &&
+          !e.eventId.startsWith(r'$wa_out_')) {
+        anchor = e;
+        break;
+      }
+    }
+    if (anchor == null) {
+      throw Exception('open the chat and load some messages first');
+    }
+    final anchorMsgID = anchor.eventId.substring(r'$wa_'.length);
+    final anchorFromMe = anchor.senderId == client.userID;
+    final anchorTS = anchor.originServerTs.millisecondsSinceEpoch ~/ 1000;
+
+    await TjenaBridge.instance.requestBackfill(
+      waId,
+      days,
+      anchorMsgID: anchorMsgID,
+      anchorFromMe: anchorFromMe,
+      anchorTS: anchorTS,
+    );
+  }
+
+  // ── Chat picker (sync/unsync chats from the bridge settings) ────────────────
+
+  // waJid → days of history to backfill once an anchor message is available.
+  final _pendingBackfillDays = <String, int>{};
+
+  /// List all WhatsApp chats (contacts + groups) annotated with whether each is
+  /// currently synced into the bridge as a room.
+  Future<List<Map<String, dynamic>>> listChatsWithStatus() async {
+    final chats = await TjenaBridge.instance.listChats();
+    for (final c in chats) {
+      c['synced'] = _waToMatrix.containsKey(c['jid'] as String? ?? '');
+    }
+    // Sort: synced first, then by name.
+    chats.sort((a, b) {
+      final sa = (a['synced'] as bool? ?? false) ? 0 : 1;
+      final sb = (b['synced'] as bool? ?? false) ? 0 : 1;
+      if (sa != sb) return sa - sb;
+      final na = (a['name'] as String? ?? '').toLowerCase();
+      final nb = (b['name'] as String? ?? '').toLowerCase();
+      if (na.isEmpty && nb.isEmpty) return 0;
+      if (na.isEmpty) return 1;
+      if (nb.isEmpty) return -1;
+      return na.compareTo(nb);
+    });
+    return chats;
+  }
+
+  /// Create a room for [jid] and schedule [days] of history backfill (fired once
+  /// a message provides an anchor). Use [days] = 0 to skip backfill.
+  Future<void> syncChat(
+    String jid,
+    String name,
+    bool isGroup,
+    int days,
+  ) async {
+    final displayName = name.isNotEmpty ? name : jid.split('@').first;
+    _ensureRoom(jid, displayName, isDM: !isGroup);
+    if (days > 0) {
+      _pendingBackfillDays[jid] = days;
+      // Try immediately in case the room already has anchor messages.
+      // ignore: unawaited_futures
+      _tryPendingBackfill(jid);
+    }
+    // Fetch the real name + photo from the network.
+    final mid = _waToMatrix[jid];
+    if (mid != null) {
+      // ignore: unawaited_futures
+      refreshRoom(mid);
+    }
+  }
+
+  /// Remove a chat's room from the bridge (keeps WhatsApp linked).
+  Future<void> unsyncChat(String jid) async {
+    final mid = _waToMatrix[jid];
+    _pendingBackfillDays.remove(jid);
+    if (mid == null) return;
+    final client = _client;
+    if (client != null) {
+      try { await client.database.forgetRoom(mid); } catch (_) {}
+      client.rooms.removeWhere((r) => r.id == mid);
+      client.archivedRooms.removeWhere((r) => r.room.id == mid);
+    }
+    _waToMatrix.remove(jid);
+    _matrixToWa.remove(mid);
+    await _saveRoomMappings();
+  }
+
+  // Fire a pending day-based backfill for [jid] if the room now has an anchor.
+  Future<void> _tryPendingBackfill(String jid) async {
+    final days = _pendingBackfillDays[jid];
+    final mid = _waToMatrix[jid];
+    if (days == null || mid == null) return;
     try {
-      await TjenaBridge.instance.requestBackfill(waId, days);
-    } catch (e) {
-      Logs().w('[WaBridge] requestBackfill failed: $e');
+      await requestBackfill(mid, days);
+      _pendingBackfillDays.remove(jid); // success — don't retry
+    } catch (_) {
+      // No anchor yet; keep pending and retry when a message arrives.
     }
   }
 
@@ -507,13 +654,18 @@ class WaMatrixBridge {
         if (!_waToMatrix.containsKey(waRoomId)) {
           final isGroup = waRoomId.endsWith('@g.us');
           final senderName = eventData['sender_name'] as String?;
+          // chat_phone is the resolved phone number (LID chats resolve LID→PN in
+          // Go), a far friendlier fallback than the raw LID ident number.
+          final chatPhone = eventData['chat_phone'] as String?;
           // Only seed a DM room with the sender's push name — for a group the
           // sender is a member, not the room, so naming the group after them is
-          // wrong. Groups get a temporary JID-based name until room_updated
-          // delivers the real group name (via Go GetGroupInfo).
+          // wrong. Groups get a temporary name until room_updated delivers the
+          // real group name (via Go GetGroupInfo).
           final fallbackName = (!isGroup && senderName?.isNotEmpty == true)
               ? senderName!
-              : waRoomId.split('@').first;
+              : (chatPhone?.isNotEmpty == true
+                  ? chatPhone!
+                  : waRoomId.split('@').first);
           _ensureRoom(
             waRoomId,
             fallbackName,
@@ -521,6 +673,12 @@ class WaMatrixBridge {
           );
         }
         _pushMessage(waRoomId, eventData);
+        // If this chat was just synced with a requested backfill, the incoming
+        // message now provides an anchor — fire the deferred day-based backfill.
+        if (_pendingBackfillDays.containsKey(waRoomId)) {
+          // ignore: unawaited_futures
+          _tryPendingBackfill(waRoomId);
+        }
 
       case BridgeEventType.backfill:
         final waRoomId = evt.data['room_id'] as String? ?? '';
@@ -715,7 +873,7 @@ class WaMatrixBridge {
             ),
             MatrixEvent(
               type: EventTypes.RoomName,
-              content: {'name': name.isNotEmpty ? name : waId},
+              content: {'name': name.isNotEmpty ? name : waId.split('@').first},
               senderId: myUserId,
               eventId: '\$waname_$sid',
               originServerTs: now,
@@ -828,7 +986,10 @@ class WaMatrixBridge {
   void _pushMessage(String waRoomId, Map<String, dynamic> eventData) {
     final matrixId = _waToMatrix[waRoomId];
     final client = _client;
-    if (matrixId == null || client?.userID == null) return;
+    if (matrixId == null || client?.userID == null) {
+      Logs().w('[WaBridge] _pushMessage EARLY RETURN: waRoomId=$waRoomId matrixId=$matrixId');
+      return;
+    }
     final myUserId = client!.userID!;
 
     final eventId = eventData['id'] as String? ??
@@ -865,13 +1026,20 @@ class WaMatrixBridge {
       };
     }
 
-    // Ensure the sender has a RoomMember(join) state event. This is essential:
-    // without it the SDK treats the ghost user as "not in the room" and calls
-    // getUserProfile against the fake tjena.local homeserver, which always fails
-    // ("http error response"). A join member — even with no displayname — stops
-    // that server round-trip. We add the displayname when the push name is known.
     final senderName = eventData['sender_name'] as String?;
     final hasName = senderName != null && senderName.isNotEmpty;
+    final isGroup = waRoomId.endsWith('@g.us');
+    final isDM = !isGroup && !waRoomId.endsWith('@broadcast');
+    final eventTs = DateTime.fromMillisecondsSinceEpoch(tsSeconds * 1000);
+
+    // Build a SINGLE atomic sync carrying state (sender member + room name) and
+    // the message timeline event together. Doing it in one handleSync avoids the
+    // ordering/mapping races that previously left new chats nameless ("leerer
+    // chat") and triggered ghost-profile lookups against the fake homeserver.
+    final stateEvents = <MatrixEvent>[];
+
+    // (1) Sender member with a join membership. Essential so the SDK resolves
+    //     the ghost from local state instead of probing the homeserver.
     if (!isOwn) {
       final nameKey = '$matrixId/$rawSender';
       final memberExists =
@@ -881,51 +1049,56 @@ class WaMatrixBridge {
         if (hasName) _senderNames[nameKey] = senderName;
         final memberContent = <String, dynamic>{'membership': 'join'};
         if (hasName) memberContent['displayname'] = senderName;
-        // ignore: unawaited_futures
-        _inject(SyncUpdate(
-          nextBatch: client.prevBatch ?? '',
-          rooms: RoomsUpdate(join: {
-            matrixId: JoinedRoomUpdate(
-              state: [
-                MatrixEvent(
-                  type: EventTypes.RoomMember,
-                  content: memberContent,
-                  senderId: rawSender,
-                  eventId: '\$wamember_${_safe(rawSender)}_${_safe(matrixId)}',
-                  originServerTs: DateTime.fromMillisecondsSinceEpoch(tsSeconds * 1000),
-                  stateKey: rawSender,
-                ),
-              ],
-            ),
-          }),
+        stateEvents.add(MatrixEvent(
+          type: EventTypes.RoomMember,
+          content: memberContent,
+          senderId: rawSender,
+          eventId: '\$wamember_${_safe(rawSender)}_${_safe(matrixId)}',
+          originServerTs: eventTs,
+          stateKey: rawSender,
         ));
-      }
-
-      // For DM rooms, also promote the ROOM name from the sender's push name.
-      // The contacts-store lookup that RefreshRoom/WA-sync uses is often empty
-      // for un-saved contacts, leaving the room stuck on a bare phone number —
-      // but the push name carried by each message is reliable (it's the same
-      // data that names the ghost user above). Only set it when the room has no
-      // real name yet, so a saved contact name from room_updated still wins.
-      final isDM = !waRoomId.endsWith('@g.us') && !waRoomId.endsWith('@broadcast');
-      if (hasName && isDM) {
-        final currentName = client.getRoomById(matrixId)?.name ?? '';
-        if (!_looksLikeName(currentName)) {
-          _pushNameUpdate(waRoomId, senderName);
-        }
       }
     }
 
-    // Always inject the event now (media gets a URL-less placeholder so the
-    // message is immediately visible). For media, media_ready re-injects the
-    // same event ID with content['url'] added. Because every injection is
-    // serialized through _inject, this placeholder is guaranteed to be applied
-    // before the media_ready update, so the URL is never clobbered.
+    // (2) Guarantee a non-empty room name. An empty name makes the SDK show
+    //     "leerer chat" (emptyChat fallback). Prefer the DM partner's push name;
+    //     otherwise fall back to the bare number so the title is never blank. A
+    //     real saved name from room_updated still wins (_looksLikeName guard).
+    final currentName = client.getRoomById(matrixId)?.name ?? '';
+    final chatPhone = eventData['chat_phone'] as String?;
+    String? nameToSet;
+    if (!isOwn && hasName && isDM && !_looksLikeName(currentName)) {
+      nameToSet = senderName;
+    } else if (!_looksLikeName(currentName)) {
+      // No real name yet — prefer the resolved phone number (LID→PN) over the
+      // raw LID ident; fall back to the JID's user part only if unavailable.
+      nameToSet = (chatPhone?.isNotEmpty == true)
+          ? chatPhone!
+          : waRoomId.split('@').first;
+    }
+    if (nameToSet != null && nameToSet.isNotEmpty && nameToSet != currentName) {
+      stateEvents.add(MatrixEvent(
+        type: EventTypes.RoomName,
+        content: {'name': nameToSet},
+        senderId: myUserId,
+        eventId: '\$waname_${_safe(waRoomId)}_${DateTime.now().millisecondsSinceEpoch}',
+        originServerTs: eventTs,
+        stateKey: '',
+      ));
+    }
+    Logs().i('[WaBridge] NAME room=$waRoomId matrixId=$matrixId isDM=$isDM '
+        'hasName=$hasName senderName="$senderName" currentName="$currentName" '
+        'nameToSet="$nameToSet" stateEvents=${stateEvents.length}');
+
+    // (3) The message itself (media gets a URL-less placeholder; media_ready
+    //     re-injects with the URL later). Serialized via _inject so it never
+    //     races the placeholder.
     // ignore: unawaited_futures
     _inject(SyncUpdate(
       nextBatch: client.prevBatch ?? '',
       rooms: RoomsUpdate(join: {
         matrixId: JoinedRoomUpdate(
+          state: stateEvents.isEmpty ? null : stateEvents,
           timeline: TimelineUpdate(
             events: [
               MatrixEvent(
@@ -933,9 +1106,7 @@ class WaMatrixBridge {
                 content: content,
                 senderId: isOwn ? myUserId : rawSender,
                 eventId: eventId,
-                originServerTs: DateTime.fromMillisecondsSinceEpoch(
-                  tsSeconds * 1000,
-                ),
+                originServerTs: eventTs,
                 roomId: matrixId,
               ),
             ],
@@ -947,6 +1118,13 @@ class WaMatrixBridge {
         ),
       }),
     ));
+    // Read back the room name once the sync has applied, to see whether the
+    // RoomName state actually stuck in the SDK.
+    _injectChain.then((_) {
+      final r = client.getRoomById(matrixId);
+      Logs().i('[WaBridge] POST-INJECT room=$waRoomId name="${r?.name}" '
+          'members=${r?.getParticipants().length} displayname="${r?.getLocalizedDisplayname()}"');
+    });
   }
 
   Future<void> _pushMediaReady(

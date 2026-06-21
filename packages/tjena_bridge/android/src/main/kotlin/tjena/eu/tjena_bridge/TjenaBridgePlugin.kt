@@ -145,9 +145,13 @@ class TjenaBridgePlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamH
                 "requestBackfill" -> {
                     val roomID = call.argument<String>("roomID") ?: ""
                     val days = call.argument<Int>("days") ?: 7
-                    bridge!!.requestBackfill(roomID, days.toLong())
+                    val anchorMsgID = call.argument<String>("anchorMsgID") ?: ""
+                    val anchorFromMe = call.argument<Boolean>("anchorFromMe") ?: false
+                    val anchorTS = (call.argument<Number>("anchorTS") ?: 0).toLong()
+                    bridge!!.requestBackfill(roomID, days.toLong(), anchorMsgID, anchorFromMe, anchorTS)
                     result.success(null)
                 }
+                "listChats" -> result.success(bridge?.listChatsJSON() ?: "[]")
                 "getLogs" -> result.success(bridge?.getLogs() ?: "(no bridge)")
                 "onForeground" -> { bridge?.onForeground(); result.success(null) }
                 "onBackground" -> { bridge?.onBackground(); result.success(null) }

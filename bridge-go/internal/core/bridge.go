@@ -1039,7 +1039,19 @@ func (b *Bridge) fetchRoomMeta(chat types.JID, roomID string, isDM, fetchGroupNa
 	} else if isDM {
 		// Re-check the local contacts store — it may have been populated since
 		// the room was first created (WA contact sync happens asynchronously).
-		if c, err := client.Store.Contacts.GetContact(context.Background(), chat); err == nil {
+		// For LID chats the contact entry is keyed by the phone number, so
+		// resolve LID→PN first and look the contact up under both JIDs.
+		lookupJIDs := []types.JID{chat}
+		if chat.Server == types.HiddenUserServer {
+			if pn, err := client.Store.LIDs.GetPNForLID(context.Background(), chat); err == nil && !pn.IsEmpty() {
+				lookupJIDs = append(lookupJIDs, pn)
+			}
+		}
+		for _, lj := range lookupJIDs {
+			c, err := client.Store.Contacts.GetContact(context.Background(), lj)
+			if err != nil {
+				continue
+			}
 			switch {
 			case c.FullName != "":
 				update["name"] = c.FullName
@@ -1047,6 +1059,9 @@ func (b *Bridge) fetchRoomMeta(chat types.JID, roomID string, isDM, fetchGroupNa
 				update["name"] = c.PushName
 			case c.BusinessName != "":
 				update["name"] = c.BusinessName
+			}
+			if _, ok := update["name"]; ok {
+				break
 			}
 		}
 	}
@@ -1102,6 +1117,13 @@ func (b *Bridge) handleWAMessage(evt *waevents.Message) {
 		return
 	}
 	body, msgtype := messageBodyType(msg)
+	// Skip non-renderable messages (protocol/poll/ephemeral/unsupported types):
+	// messageBodyType returns an empty body with m.text for those. Injecting them
+	// shows "Unknown message format" bubbles and clutters chats (the self-chat is
+	// full of such protocol traffic).
+	if body == "" && msgtype == "m.text" {
+		return
+	}
 
 	isOwn := evt.Info.IsFromMe
 	roomID := evt.Info.Chat.User + "@" + string(evt.Info.Chat.Server)
@@ -1112,7 +1134,10 @@ func (b *Bridge) handleWAMessage(evt *waevents.Message) {
 
 	// For DMs only: promote the room name from bare phone number to the
 	// sender's push name when we first see it.
-	isDMRoom := evt.Info.Chat.Server == types.DefaultUserServer
+	// DMs are addressed either by phone number (s.whatsapp.net) or, increasingly,
+	// by LID (lid). Both must count as DMs or LID chats never get their push-name.
+	isDMRoom := evt.Info.Chat.Server == types.DefaultUserServer ||
+		evt.Info.Chat.Server == types.HiddenUserServer
 	if isDMRoom && !isOwn && evt.Info.PushName != "" {
 		b.mu.Lock()
 		if b.goodNames == nil {
@@ -1137,6 +1162,7 @@ func (b *Bridge) handleWAMessage(evt *waevents.Message) {
 			"id":          "$wa_" + evt.Info.ID,
 			"sender":      "@wa_" + evt.Info.Sender.User + ":tjena.local",
 			"sender_name": evt.Info.PushName,
+			"chat_phone":  b.chatPhone(evt.Info.Chat),
 			"ts":          evt.Info.Timestamp.Unix(),
 			"body":        body,
 			"msgtype":     msgtype,
@@ -1246,6 +1272,85 @@ func (b *Bridge) downloadMedia(
 	}()
 }
 
+// ListChatsJSON returns a JSON array of all known WhatsApp chats (saved
+// contacts as DMs + joined groups) so the UI can let the user pick which to
+// sync. Each entry: {"jid","name","is_group","phone"}.
+func (b *Bridge) ListChatsJSON() string {
+	b.mu.Lock()
+	client := b.waClient
+	b.mu.Unlock()
+	if client == nil {
+		return "[]"
+	}
+	ctx := context.Background()
+	type chatEntry struct {
+		JID     string `json:"jid"`
+		Name    string `json:"name"`
+		IsGroup bool   `json:"is_group"`
+		Phone   string `json:"phone"`
+	}
+	var out []chatEntry
+
+	// DMs from the contact store.
+	if contacts, err := client.Store.Contacts.GetAllContacts(ctx); err == nil {
+		for jid, c := range contacts {
+			name := c.FullName
+			if name == "" {
+				name = c.PushName
+			}
+			if name == "" {
+				name = c.BusinessName
+			}
+			out = append(out, chatEntry{
+				JID:     jid.User + "@" + string(jid.Server),
+				Name:    name,
+				IsGroup: false,
+				Phone:   b.chatPhone(jid),
+			})
+		}
+	} else {
+		b.appendLog("[Bridge] ListChats: GetAllContacts failed: " + err.Error())
+	}
+
+	// Groups.
+	if groups, err := client.GetJoinedGroups(ctx); err == nil {
+		for _, g := range groups {
+			out = append(out, chatEntry{
+				JID:     g.JID.User + "@" + string(g.JID.Server),
+				Name:    g.Name,
+				IsGroup: true,
+				Phone:   "",
+			})
+		}
+	} else {
+		b.appendLog("[Bridge] ListChats: GetJoinedGroups failed: " + err.Error())
+	}
+
+	data, err := json.Marshal(out)
+	if err != nil {
+		return "[]"
+	}
+	b.appendLog(fmt.Sprintf("[Bridge] ListChats: returning %d chats", len(out)))
+	return string(data)
+}
+
+// chatPhone returns a human-friendly phone number for a chat. For LID chats it
+// resolves the LID to the underlying phone number; for phone-number chats it
+// returns the number directly. Falls back to the raw user part if unresolvable.
+func (b *Bridge) chatPhone(chat types.JID) string {
+	if chat.Server == types.HiddenUserServer {
+		b.mu.Lock()
+		client := b.waClient
+		b.mu.Unlock()
+		if client != nil {
+			if pn, err := client.Store.LIDs.GetPNForLID(context.Background(), chat); err == nil && !pn.IsEmpty() {
+				return pn.User
+			}
+		}
+	}
+	return chat.User
+}
+
 // recordOldest remembers the oldest MessageInfo seen for a chat, used as the
 // anchor for on-demand history requests.
 func (b *Bridge) recordOldest(roomID string, info *types.MessageInfo) {
@@ -1265,14 +1370,24 @@ func (b *Bridge) recordOldest(roomID string, info *types.MessageInfo) {
 // JID, e.g. "1234@s.whatsapp.net"), fetching messages back to `days` ago. WA's
 // on-demand API is count-based, so we request batches of 50 and keep going (via
 // handleHistorySync) until the oldest fetched message predates the cutoff.
-func (b *Bridge) RequestBackfill(roomID string, days int) error {
+//
+// The anchor (oldest message the client currently has) is supplied by the caller
+// because the Go bridge doesn't persist message history — the Dart timeline is
+// the source of truth. anchorMsgID/anchorFromMe/anchorTS describe that message.
+func (b *Bridge) RequestBackfill(roomID string, days int, anchorMsgID string, anchorFromMe bool, anchorTS int64) error {
 	jid, err := types.ParseJID(roomID)
 	if err != nil {
 		return fmt.Errorf("invalid JID: %w", err)
 	}
+	if anchorMsgID == "" {
+		return fmt.Errorf("no anchor message for %s", roomID)
+	}
 	if days < 1 {
 		days = 1
 	}
+	// Seed the anchor so sendHistoryRequest (and later continuations) can use it.
+	b.recordAnchor(roomID, jid, anchorMsgID, anchorFromMe, anchorTS)
+
 	cutoff := time.Now().AddDate(0, 0, -days).Unix()
 	b.mu.Lock()
 	if b.backfillCutoff == nil {
@@ -1280,8 +1395,23 @@ func (b *Bridge) RequestBackfill(roomID string, days int) error {
 	}
 	b.backfillCutoff[roomID] = cutoff
 	b.mu.Unlock()
-	b.appendLog(fmt.Sprintf("[Bridge] backfill requested for %s (%d days, cutoff=%d)", roomID, days, cutoff))
+	b.appendLog(fmt.Sprintf("[Bridge] backfill requested for %s (%d days, cutoff=%d, anchor=%s)", roomID, days, cutoff, anchorMsgID))
 	return b.sendHistoryRequest(jid)
+}
+
+// recordAnchor stores a caller-supplied anchor message as the oldest known
+// message for a chat (overwrites, since the caller knows the true oldest).
+func (b *Bridge) recordAnchor(roomID string, chat types.JID, msgID string, fromMe bool, ts int64) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.oldestMsg == nil {
+		b.oldestMsg = make(map[string]*types.MessageInfo)
+	}
+	b.oldestMsg[roomID] = &types.MessageInfo{
+		ID:            msgID,
+		MessageSource: types.MessageSource{Chat: chat, IsFromMe: fromMe},
+		Timestamp:     time.Unix(ts, 0),
+	}
 }
 
 // sendHistoryRequest asks WA's primary device for older messages preceding the
@@ -1300,6 +1430,8 @@ func (b *Bridge) sendHistoryRequest(chat types.JID) error {
 	}
 	req := client.BuildHistorySyncRequest(oldest, 50)
 	_, err := client.SendPeerMessage(context.Background(), req)
+	b.appendLog(fmt.Sprintf("[Bridge] sendHistoryRequest chat=%s anchor=%s ts=%d err=%v",
+		roomID, oldest.ID, oldest.Timestamp.Unix(), err))
 	return err
 }
 
@@ -1310,6 +1442,8 @@ func (b *Bridge) handleHistorySync(data *waHistorySync.HistorySync) {
 		return
 	}
 	onDemand := data.GetSyncType() == waHistorySync.HistorySync_ON_DEMAND
+	b.appendLog(fmt.Sprintf("[Bridge] handleHistorySync type=%s onDemand=%v conversations=%d",
+		data.GetSyncType().String(), onDemand, len(data.GetConversations())))
 	for _, conv := range data.GetConversations() {
 		jid, err := types.ParseJID(conv.GetID())
 		if err != nil {
@@ -1318,12 +1452,17 @@ func (b *Bridge) handleHistorySync(data *waHistorySync.HistorySync) {
 		roomID := jid.User + "@" + string(jid.Server)
 		msgs := conv.GetMessages()
 		var oldestTS int64
+		var emitted int
 		for _, hm := range msgs {
 			ts := b.emitHistoricalMessage(roomID, jid, hm.GetMessage())
-			if ts > 0 && (oldestTS == 0 || ts < oldestTS) {
-				oldestTS = ts
+			if ts > 0 {
+				emitted++
+				if oldestTS == 0 || ts < oldestTS {
+					oldestTS = ts
+				}
 			}
 		}
+		b.appendLog(fmt.Sprintf("[Bridge] history conv=%s msgs=%d emitted=%d", roomID, len(msgs), emitted))
 		if onDemand {
 			b.maybeContinueBackfill(roomID, jid, oldestTS, len(msgs))
 		}
