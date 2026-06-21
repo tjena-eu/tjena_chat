@@ -204,6 +204,17 @@ func (b *Bridge) ListChatsJSON() string {
 	return c.ListChatsJSON()
 }
 
+// GetChatAvatarURL returns the https URL of a chat's profile picture, or "".
+func (b *Bridge) GetChatAvatarURL(roomID string) string {
+	b.mu.Lock()
+	c := b.core
+	b.mu.Unlock()
+	if c == nil {
+		return ""
+	}
+	return c.GetChatAvatarURL(roomID)
+}
+
 // GetLogs returns recent bridge log lines (up to 100) as a single string.
 func (b *Bridge) GetLogs() string {
 	b.mu.Lock()

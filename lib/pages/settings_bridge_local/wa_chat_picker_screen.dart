@@ -5,6 +5,8 @@ import 'package:flutter/material.dart';
 
 import 'package:fluffychat/utils/wa_matrix_bridge.dart';
 
+enum _SortMode { recent, name }
+
 /// Lists every WhatsApp chat (saved contacts + joined groups) and lets the user
 /// pick which ones to sync into the bridge as rooms. Newly-checked chats get a
 /// room created and (optionally) N days of history backfilled; unchecked chats
@@ -24,6 +26,18 @@ class _WaChatPickerScreenState extends State<WaChatPickerScreen> {
   bool _saving = false;
   String? _error;
   String _filter = '';
+  _SortMode _sort = _SortMode.recent;
+
+  // jid → resolved avatar URL ('' = none, missing = not yet fetched).
+  final _avatarUrls = <String, String>{};
+
+  Future<String> _avatarUrl(String jid) async {
+    final cached = _avatarUrls[jid];
+    if (cached != null) return cached;
+    final url = await WaMatrixBridge.instance.chatAvatarUrl(jid);
+    _avatarUrls[jid] = url;
+    return url;
+  }
 
   @override
   void initState() {
@@ -157,20 +171,53 @@ class _WaChatPickerScreenState extends State<WaChatPickerScreen> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final filtered = _filter.isEmpty
-        ? _chats
+    final filtered = (_filter.isEmpty
+        ? List<Map<String, dynamic>>.from(_chats)
         : _chats.where((c) {
             final name = (c['name'] as String? ?? '').toLowerCase();
             final phone = (c['phone'] as String? ?? '').toLowerCase();
             final jid = (c['jid'] as String? ?? '').toLowerCase();
             final f = _filter.toLowerCase();
             return name.contains(f) || phone.contains(f) || jid.contains(f);
-          }).toList();
+          }).toList());
+
+    String displayName(Map<String, dynamic> c) {
+      final n = (c['name'] as String? ?? '');
+      if (n.isNotEmpty) return n;
+      final p = (c['phone'] as String? ?? '');
+      return p.isNotEmpty ? p : (c['jid'] as String? ?? '').split('@').first;
+    }
+
+    filtered.sort((a, b) {
+      if (_sort == _SortMode.recent) {
+        final la = a['last_activity'] as int? ?? 0;
+        final lb = b['last_activity'] as int? ?? 0;
+        if (la != lb) return lb.compareTo(la); // most recent first
+        // chats with no activity (unsynced) fall back to name order
+      }
+      return displayName(a).toLowerCase().compareTo(displayName(b).toLowerCase());
+    });
 
     return Scaffold(
       appBar: AppBar(
         title: const Text('Choose WhatsApp chats'),
         actions: [
+          PopupMenuButton<_SortMode>(
+            tooltip: 'Sort',
+            icon: const Icon(Icons.sort),
+            initialValue: _sort,
+            onSelected: (m) => setState(() => _sort = m),
+            itemBuilder: (context) => const [
+              PopupMenuItem(
+                value: _SortMode.recent,
+                child: Text('Sort: Recent activity'),
+              ),
+              PopupMenuItem(
+                value: _SortMode.name,
+                child: Text('Sort: Name (A–Z)'),
+              ),
+            ],
+          ),
           IconButton(
             tooltip: 'Reload',
             onPressed: _loading ? null : _load,
@@ -247,10 +294,10 @@ class _WaChatPickerScreenState extends State<WaChatPickerScreen> {
                                 _selected.remove(jid);
                               }
                             }),
-                            secondary: CircleAvatar(
-                              child: Icon(
-                                isGroup ? Icons.group : Icons.person,
-                              ),
+                            secondary: _ChatAvatar(
+                              jid: jid,
+                              isGroup: isGroup,
+                              urlFuture: _avatarUrl(jid),
                             ),
                             title: Text(title),
                             subtitle: name.isNotEmpty ? Text(subtitle) : null,
@@ -260,6 +307,40 @@ class _WaChatPickerScreenState extends State<WaChatPickerScreen> {
                     ),
                   ],
                 ),
+    );
+  }
+}
+
+/// Lazily-loaded circular WhatsApp profile picture for a chat, with a
+/// person/group icon fallback while loading or when no picture exists.
+class _ChatAvatar extends StatelessWidget {
+  final String jid;
+  final bool isGroup;
+  final Future<String> urlFuture;
+
+  const _ChatAvatar({
+    required this.jid,
+    required this.isGroup,
+    required this.urlFuture,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final fallback = CircleAvatar(
+      child: Icon(isGroup ? Icons.group : Icons.person),
+    );
+    return FutureBuilder<String>(
+      future: urlFuture,
+      builder: (context, snapshot) {
+        final url = snapshot.data ?? '';
+        if (url.isEmpty) return fallback;
+        return CircleAvatar(
+          backgroundColor: Colors.transparent,
+          backgroundImage: NetworkImage(url),
+          onBackgroundImageError: (_, __) {},
+          child: null,
+        );
+      },
     );
   }
 }

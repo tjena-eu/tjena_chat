@@ -1334,6 +1334,28 @@ func (b *Bridge) ListChatsJSON() string {
 	return string(data)
 }
 
+// GetChatAvatarURL returns the direct https URL of a chat's profile picture
+// (small preview), or "" if none/unavailable. Called lazily per list item so the
+// chat picker doesn't fetch every avatar up front.
+func (b *Bridge) GetChatAvatarURL(roomID string) string {
+	b.mu.Lock()
+	client := b.waClient
+	b.mu.Unlock()
+	if client == nil {
+		return ""
+	}
+	jid, err := types.ParseJID(roomID)
+	if err != nil {
+		return ""
+	}
+	pic, err := client.GetProfilePictureInfo(context.Background(), jid,
+		&whatsmeow.GetProfilePictureParams{Preview: true})
+	if err != nil || pic == nil {
+		return ""
+	}
+	return pic.URL
+}
+
 // chatPhone returns a human-friendly phone number for a chat. For LID chats it
 // resolves the LID to the underlying phone number; for phone-number chats it
 // returns the number directly. Falls back to the raw user part if unresolvable.
@@ -1379,13 +1401,16 @@ func (b *Bridge) RequestBackfill(roomID string, days int, anchorMsgID string, an
 	if err != nil {
 		return fmt.Errorf("invalid JID: %w", err)
 	}
-	if anchorMsgID == "" {
-		return fmt.Errorf("no anchor message for %s", roomID)
-	}
 	if days < 1 {
 		days = 1
 	}
+	if anchorTS == 0 {
+		anchorTS = time.Now().Unix()
+	}
 	// Seed the anchor so sendHistoryRequest (and later continuations) can use it.
+	// An empty anchorMsgID means the chat has no local messages — we still send a
+	// request (anchored at the given/now timestamp); WhatsApp may or may not
+	// return recent history for an empty message anchor.
 	b.recordAnchor(roomID, jid, anchorMsgID, anchorFromMe, anchorTS)
 
 	cutoff := time.Now().AddDate(0, 0, -days).Unix()

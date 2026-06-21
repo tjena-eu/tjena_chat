@@ -275,6 +275,11 @@ class TjenaBridge {
     return list.cast<Map<String, dynamic>>();
   }
 
+  /// Returns the https URL of a chat's WhatsApp profile picture, or '' if none.
+  Future<String> getChatAvatarUrl(String roomID) async =>
+      await _method.invokeMethod<String>('getChatAvatarUrl', {'roomID': roomID}) ??
+      '';
+
   /// Pull on-demand WhatsApp message history for [roomID] (the WA JID) going
   /// back [days] days. Messages arrive as backfill events on the event stream.
   /// The anchor describes the oldest message currently loaded (the Go bridge

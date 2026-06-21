@@ -359,8 +359,9 @@ class WaMatrixBridge {
     if (room == null) throw Exception('room not loaded');
 
     final timeline = await room.getTimeline();
-    // Timeline events are newest-first; the oldest WA message is the last one
-    // whose event ID is a bridged WA id ("$wa_<msgID>").
+    // Timeline events are newest-first; the oldest usable anchor is the last
+    // message with a real WA id ("$wa_<msgID>"). Outgoing ($wa_out_) ids are
+    // synthetic local ids the server won't recognise, so they can't anchor.
     Event? anchor;
     for (final e in timeline.events.reversed) {
       if (e.eventId.startsWith(r'$wa_') &&
@@ -370,12 +371,17 @@ class WaMatrixBridge {
         break;
       }
     }
-    if (anchor == null) {
-      throw Exception('open the chat and load some messages first');
-    }
-    final anchorMsgID = anchor.eventId.substring(r'$wa_'.length);
-    final anchorFromMe = anchor.senderId == client.userID;
-    final anchorTS = anchor.originServerTs.millisecondsSinceEpoch ~/ 1000;
+
+    // No usable anchor (empty/freshly-synced chat, or only-sent chat): fall back
+    // to a synthetic "now" anchor so the Go bridge still sends the on-demand
+    // request. Whether WhatsApp returns recent history for an empty anchor is
+    // server-dependent — the Go logs ([Bridge] handleHistorySync) reveal it.
+    final anchorMsgID =
+        anchor != null ? anchor.eventId.substring(r'$wa_'.length) : '';
+    final anchorFromMe = anchor != null && anchor.senderId == client.userID;
+    final anchorTS = anchor != null
+        ? anchor.originServerTs.millisecondsSinceEpoch ~/ 1000
+        : DateTime.now().millisecondsSinceEpoch ~/ 1000;
 
     await TjenaBridge.instance.requestBackfill(
       waId,
@@ -392,26 +398,29 @@ class WaMatrixBridge {
   final _pendingBackfillDays = <String, int>{};
 
   /// List all WhatsApp chats (contacts + groups) annotated with whether each is
-  /// currently synced into the bridge as a room.
+  /// currently synced and, for synced chats, the last-activity timestamp (ms)
+  /// from the bridged room so the UI can sort by recent activity.
   Future<List<Map<String, dynamic>>> listChatsWithStatus() async {
     final chats = await TjenaBridge.instance.listChats();
+    final client = _client;
     for (final c in chats) {
-      c['synced'] = _waToMatrix.containsKey(c['jid'] as String? ?? '');
+      final jid = c['jid'] as String? ?? '';
+      final mid = _waToMatrix[jid];
+      c['synced'] = mid != null;
+      var lastActivity = 0;
+      if (mid != null && client != null) {
+        final room = client.getRoomById(mid);
+        final ts = room?.lastEvent?.originServerTs.millisecondsSinceEpoch;
+        if (ts != null) lastActivity = ts;
+      }
+      c['last_activity'] = lastActivity;
     }
-    // Sort: synced first, then by name.
-    chats.sort((a, b) {
-      final sa = (a['synced'] as bool? ?? false) ? 0 : 1;
-      final sb = (b['synced'] as bool? ?? false) ? 0 : 1;
-      if (sa != sb) return sa - sb;
-      final na = (a['name'] as String? ?? '').toLowerCase();
-      final nb = (b['name'] as String? ?? '').toLowerCase();
-      if (na.isEmpty && nb.isEmpty) return 0;
-      if (na.isEmpty) return 1;
-      if (nb.isEmpty) return -1;
-      return na.compareTo(nb);
-    });
     return chats;
   }
+
+  /// Fetch a chat's WhatsApp profile-picture URL (direct CDN https link).
+  Future<String> chatAvatarUrl(String jid) =>
+      TjenaBridge.instance.getChatAvatarUrl(jid);
 
   /// Create a room for [jid] and schedule [days] of history backfill (fired once
   /// a message provides an anchor). Use [days] = 0 to skip backfill.
