@@ -47,6 +47,9 @@ class WaMatrixBridge {
   String? _spaceId;
   String? _connectedPhone;
 
+  // Cached in memory for the hot path (new-room lazy backfill); loaded in init.
+  int _defaultBackfillDays = 30;
+
   static const _bridgeStateType = 'org.tjena.bridge.local';
   static const _spaceRoomId = '!wa_space_local:local';
 
@@ -130,6 +133,9 @@ class WaMatrixBridge {
     // visible in release logcat regardless of capture timing.
     _repairRoomNames('init');
     Future.delayed(const Duration(seconds: 3), () => _repairRoomNames('delayed'));
+
+    // Load the default backfill window for lazy room creation.
+    _defaultBackfillDays = await getDefaultBackfillDays();
   }
 
   // Give every WA room a non-empty, non-JID name. An empty name makes the SDK
@@ -345,111 +351,121 @@ class WaMatrixBridge {
     }
   }
 
-  /// Pull WhatsApp message history for a chat going back [days] days. Messages
-  /// arrive asynchronously as backfill events. The oldest currently-loaded WA
-  /// message is used as the anchor (the Go bridge keeps no history of its own),
-  /// so we read it from the room's timeline here.
+  /// Pull WhatsApp message history for a chat going back [days] days from the
+  /// local cache (populated by the link-time history sync). Reliable — no
+  /// network anchor needed. Messages arrive as backfill events.
   Future<void> requestBackfill(String matrixRoomId, int days) async {
     final waId = _matrixToWa[matrixRoomId];
-    final client = _client;
-    if (waId == null || client == null) {
-      throw Exception('not a WhatsApp chat');
-    }
-    final room = client.getRoomById(matrixRoomId);
-    if (room == null) throw Exception('room not loaded');
-
-    final timeline = await room.getTimeline();
-    // Timeline events are newest-first; the oldest usable anchor is the last
-    // message with a real WA id ("$wa_<msgID>"). Outgoing ($wa_out_) ids are
-    // synthetic local ids the server won't recognise, so they can't anchor.
-    Event? anchor;
-    for (final e in timeline.events.reversed) {
-      if (e.eventId.startsWith(r'$wa_') &&
-          !e.eventId.startsWith(r'$wa_react_') &&
-          !e.eventId.startsWith(r'$wa_out_')) {
-        anchor = e;
-        break;
-      }
-    }
-
-    // No usable anchor (empty/freshly-synced chat, or only-sent chat): fall back
-    // to a synthetic "now" anchor so the Go bridge still sends the on-demand
-    // request. Whether WhatsApp returns recent history for an empty anchor is
-    // server-dependent — the Go logs ([Bridge] handleHistorySync) reveal it.
-    final anchorMsgID =
-        anchor != null ? anchor.eventId.substring(r'$wa_'.length) : '';
-    final anchorFromMe = anchor != null && anchor.senderId == client.userID;
-    final anchorTS = anchor != null
-        ? anchor.originServerTs.millisecondsSinceEpoch ~/ 1000
-        : DateTime.now().millisecondsSinceEpoch ~/ 1000;
-
-    await TjenaBridge.instance.requestBackfill(
-      waId,
-      days,
-      anchorMsgID: anchorMsgID,
-      anchorFromMe: anchorFromMe,
-      anchorTS: anchorTS,
-    );
+    if (waId == null) throw Exception('not a WhatsApp chat');
+    await TjenaBridge.instance.backfillFromCache(waId, days);
   }
 
-  // ── Chat picker (sync/unsync chats from the bridge settings) ────────────────
+  // ── Chat picker + cached-history sync ───────────────────────────────────────
 
-  // waJid → days of history to backfill once an anchor message is available.
-  final _pendingBackfillDays = <String, int>{};
+  static const _linkModeKey = 'wa_link_mode'; // 'all' | 'silent' | '' (unset)
+  static const _defaultBackfillDaysKey = 'wa_default_backfill_days';
 
-  /// List all WhatsApp chats (contacts + groups) annotated with whether each is
-  /// currently synced and, for synced chats, the last-activity timestamp (ms)
-  /// from the bridged room so the UI can sort by recent activity.
+  /// Link mode chosen after pairing: 'all' (create every chat) or 'silent'
+  /// (cache only; create a room when a new message arrives). '' = not chosen.
+  Future<String> getLinkMode() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_linkModeKey) ?? '';
+  }
+
+  Future<void> setLinkMode(String mode) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_linkModeKey, mode);
+  }
+
+  /// Default number of days to backfill when a chat is created lazily (silent
+  /// mode) or as the picker's default. 0 = no backfill.
+  Future<int> getDefaultBackfillDays() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getInt(_defaultBackfillDaysKey) ?? 30;
+  }
+
+  Future<void> setDefaultBackfillDays(int days) async {
+    _defaultBackfillDays = days;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(_defaultBackfillDaysKey, days);
+  }
+
+  /// List chats for the picker: the cached chats (with real last-activity for
+  /// every chat) merged with any saved contacts/groups not yet in the cache.
+  /// Each entry: jid, name, is_group, phone, synced, last_activity (ms).
   Future<List<Map<String, dynamic>>> listChatsWithStatus() async {
-    final chats = await TjenaBridge.instance.listChats();
-    final client = _client;
-    for (final c in chats) {
+    final byJid = <String, Map<String, dynamic>>{};
+
+    // Cached chats first — these carry last_ts (recency) for every chat.
+    for (final c in await TjenaBridge.instance.listCachedChats()) {
       final jid = c['jid'] as String? ?? '';
-      final mid = _waToMatrix[jid];
-      c['synced'] = mid != null;
-      var lastActivity = 0;
-      if (mid != null && client != null) {
-        final room = client.getRoomById(mid);
-        final ts = room?.lastEvent?.originServerTs.millisecondsSinceEpoch;
-        if (ts != null) lastActivity = ts;
-      }
-      c['last_activity'] = lastActivity;
+      if (jid.isEmpty) continue;
+      byJid[jid] = {
+        'jid': jid,
+        'name': c['name'] ?? '',
+        'is_group': c['is_group'] ?? false,
+        'phone': c['phone'] ?? '',
+        'last_activity': ((c['last_ts'] as num?)?.toInt() ?? 0) * 1000,
+      };
     }
-    return chats;
+    // Merge in contacts/groups without cached history.
+    for (final c in await TjenaBridge.instance.listChats()) {
+      final jid = c['jid'] as String? ?? '';
+      if (jid.isEmpty || byJid.containsKey(jid)) continue;
+      byJid[jid] = {
+        'jid': jid,
+        'name': c['name'] ?? '',
+        'is_group': c['is_group'] ?? false,
+        'phone': c['phone'] ?? '',
+        'last_activity': 0,
+      };
+    }
+
+    final out = byJid.values.toList();
+    for (final c in out) {
+      c['synced'] = _waToMatrix.containsKey(c['jid']);
+    }
+    return out;
   }
 
   /// Fetch a chat's WhatsApp profile-picture URL (direct CDN https link).
   Future<String> chatAvatarUrl(String jid) =>
       TjenaBridge.instance.getChatAvatarUrl(jid);
 
-  /// Create a room for [jid] and schedule [days] of history backfill (fired once
-  /// a message provides an anchor). Use [days] = 0 to skip backfill.
-  Future<void> syncChat(
-    String jid,
-    String name,
-    bool isGroup,
-    int days,
-  ) async {
+  /// Create a room for [jid] and backfill [days] days from the local cache.
+  Future<void> syncChat(String jid, String name, bool isGroup, int days) async {
     final displayName = name.isNotEmpty ? name : jid.split('@').first;
     _ensureRoom(jid, displayName, isDM: !isGroup);
     if (days > 0) {
-      _pendingBackfillDays[jid] = days;
-      // Try immediately in case the room already has anchor messages.
       // ignore: unawaited_futures
-      _tryPendingBackfill(jid);
+      TjenaBridge.instance.backfillFromCache(jid, days);
     }
-    // Fetch the real name + photo from the network.
     final mid = _waToMatrix[jid];
     if (mid != null) {
       // ignore: unawaited_futures
-      refreshRoom(mid);
+      refreshRoom(mid); // real name + photo
     }
+  }
+
+  /// Create rooms + backfill [days] for every cached chat (link-mode "all").
+  Future<int> syncAllCachedChats(int days) async {
+    final chats = await TjenaBridge.instance.listCachedChats();
+    for (final c in chats) {
+      final jid = c['jid'] as String? ?? '';
+      if (jid.isEmpty || _waToMatrix.containsKey(jid)) continue;
+      await syncChat(
+        jid,
+        c['name'] as String? ?? '',
+        c['is_group'] as bool? ?? false,
+        days,
+      );
+    }
+    return chats.length;
   }
 
   /// Remove a chat's room from the bridge (keeps WhatsApp linked).
   Future<void> unsyncChat(String jid) async {
     final mid = _waToMatrix[jid];
-    _pendingBackfillDays.remove(jid);
     if (mid == null) return;
     final client = _client;
     if (client != null) {
@@ -460,19 +476,6 @@ class WaMatrixBridge {
     _waToMatrix.remove(jid);
     _matrixToWa.remove(mid);
     await _saveRoomMappings();
-  }
-
-  // Fire a pending day-based backfill for [jid] if the room now has an anchor.
-  Future<void> _tryPendingBackfill(String jid) async {
-    final days = _pendingBackfillDays[jid];
-    final mid = _waToMatrix[jid];
-    if (days == null || mid == null) return;
-    try {
-      await requestBackfill(mid, days);
-      _pendingBackfillDays.remove(jid); // success — don't retry
-    } catch (_) {
-      // No anchor yet; keep pending and retry when a message arrives.
-    }
   }
 
   /// Call when the user opens a WA room to clear unread count and send WA receipt.
@@ -660,7 +663,9 @@ class WaMatrixBridge {
       case BridgeEventType.message:
         final waRoomId = evt.data['room_id'] as String? ?? '';
         final eventData = evt.data['event'] as Map<String, dynamic>;
-        if (!_waToMatrix.containsKey(waRoomId)) {
+        final isBackfill = eventData['is_backfill'] as bool? ?? false;
+        final isNewRoom = !_waToMatrix.containsKey(waRoomId);
+        if (isNewRoom) {
           final isGroup = waRoomId.endsWith('@g.us');
           final senderName = eventData['sender_name'] as String?;
           // chat_phone is the resolved phone number (LID chats resolve LID→PN in
@@ -682,11 +687,13 @@ class WaMatrixBridge {
           );
         }
         _pushMessage(waRoomId, eventData);
-        // If this chat was just synced with a requested backfill, the incoming
-        // message now provides an anchor — fire the deferred day-based backfill.
-        if (_pendingBackfillDays.containsKey(waRoomId)) {
+        // A brand-new chat surfaced by a *live* message (silent link mode, or a
+        // chat that appeared after linking): pull its recent history from the
+        // cache so it doesn't start empty. Skipped for backfilled messages to
+        // avoid re-entrancy.
+        if (isNewRoom && !isBackfill && _defaultBackfillDays > 0) {
           // ignore: unawaited_futures
-          _tryPendingBackfill(waRoomId);
+          TjenaBridge.instance.backfillFromCache(waRoomId, _defaultBackfillDays);
         }
 
       case BridgeEventType.backfill:

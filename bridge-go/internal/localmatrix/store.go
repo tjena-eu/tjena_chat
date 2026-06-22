@@ -134,6 +134,26 @@ func (s *LocalStore) RunMigrations(ctx context.Context) error {
 			file_name TEXT NOT NULL DEFAULT '',
 			data      BLOB NOT NULL
 		)`,
+		// Cached WhatsApp history (from history sync + live messages). Lets us
+		// create rooms / backfill from local cache instead of the network.
+		`CREATE TABLE IF NOT EXISTS wa_history (
+			chat_jid    TEXT NOT NULL,
+			msg_id      TEXT NOT NULL,
+			sender      TEXT NOT NULL DEFAULT '',
+			sender_name TEXT NOT NULL DEFAULT '',
+			ts          INTEGER NOT NULL,
+			body        TEXT NOT NULL DEFAULT '',
+			msgtype     TEXT NOT NULL DEFAULT 'm.text',
+			is_own      INTEGER NOT NULL DEFAULT 0,
+			PRIMARY KEY (chat_jid, msg_id)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_wa_history_chat ON wa_history(chat_jid, ts)`,
+		`CREATE TABLE IF NOT EXISTS wa_chat (
+			chat_jid TEXT PRIMARY KEY,
+			name     TEXT NOT NULL DEFAULT '',
+			is_group INTEGER NOT NULL DEFAULT 0,
+			last_ts  INTEGER NOT NULL DEFAULT 0
+		)`,
 	}
 	for _, stmt := range stmts {
 		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
@@ -447,4 +467,93 @@ func unmarshalContent(s string) *event.Content {
 	var c event.Content
 	_ = json.Unmarshal([]byte(s), &c)
 	return &c
+}
+
+// --- WhatsApp history cache ---
+
+// CachedMessage is one cached WhatsApp message.
+type CachedMessage struct {
+	ChatJID    string
+	MsgID      string
+	Sender     string
+	SenderName string
+	TS         int64 // unix seconds
+	Body       string
+	MsgType    string
+	IsOwn      bool
+}
+
+// CachedChat is a chat summary from the cache (for the picker).
+type CachedChat struct {
+	ChatJID string
+	Name    string
+	IsGroup bool
+	LastTS  int64 // unix seconds of newest cached message
+}
+
+// CacheMessage stores (or ignores if already present) a single message and keeps
+// the chat summary's name/last_ts up to date.
+func (s *LocalStore) CacheMessage(ctx context.Context, m CachedMessage, chatName string, isGroup bool) error {
+	if _, err := s.db.ExecContext(ctx, `
+		INSERT INTO wa_history (chat_jid, msg_id, sender, sender_name, ts, body, msgtype, is_own)
+		VALUES (?,?,?,?,?,?,?,?)
+		ON CONFLICT(chat_jid, msg_id) DO NOTHING`,
+		m.ChatJID, m.MsgID, m.Sender, m.SenderName, m.TS, m.Body, m.MsgType, boolInt(m.IsOwn)); err != nil {
+		return err
+	}
+	// Upsert chat summary: bump last_ts, set name if we have a better one.
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO wa_chat (chat_jid, name, is_group, last_ts)
+		VALUES (?,?,?,?)
+		ON CONFLICT(chat_jid) DO UPDATE SET
+			last_ts = MAX(last_ts, excluded.last_ts),
+			name = CASE WHEN excluded.name != '' THEN excluded.name ELSE name END,
+			is_group = excluded.is_group`,
+		m.ChatJID, chatName, boolInt(isGroup), m.TS)
+	return err
+}
+
+// GetCachedMessages returns cached messages for a chat newer than sinceUnix,
+// oldest first (ready to inject as backfill).
+func (s *LocalStore) GetCachedMessages(ctx context.Context, chatJID string, sinceUnix int64) ([]CachedMessage, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT chat_jid, msg_id, sender, sender_name, ts, body, msgtype, is_own
+		FROM wa_history WHERE chat_jid=? AND ts>=? ORDER BY ts ASC`,
+		chatJID, sinceUnix)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []CachedMessage
+	for rows.Next() {
+		var m CachedMessage
+		var isOwn int
+		if err := rows.Scan(&m.ChatJID, &m.MsgID, &m.Sender, &m.SenderName, &m.TS, &m.Body, &m.MsgType, &isOwn); err != nil {
+			return nil, err
+		}
+		m.IsOwn = isOwn != 0
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+// ListCachedChats returns all cached chat summaries, newest activity first.
+func (s *LocalStore) ListCachedChats(ctx context.Context) ([]CachedChat, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT chat_jid, name, is_group, last_ts FROM wa_chat ORDER BY last_ts DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []CachedChat
+	for rows.Next() {
+		var c CachedChat
+		var isGroup int
+		if err := rows.Scan(&c.ChatJID, &c.Name, &isGroup, &c.LastTS); err != nil {
+			return nil, err
+		}
+		c.IsGroup = isGroup != 0
+		out = append(out, c)
+	}
+	return out, rows.Err()
 }

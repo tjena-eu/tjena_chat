@@ -152,6 +152,13 @@ class TjenaBridgePlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamH
                     result.success(null)
                 }
                 "listChats" -> result.success(bridge?.listChatsJSON() ?: "[]")
+                "listCachedChats" -> result.success(bridge?.listCachedChatsJSON() ?: "[]")
+                "backfillFromCache" -> {
+                    val roomID = call.argument<String>("roomID") ?: ""
+                    val days = call.argument<Int>("days") ?: 30
+                    bridge!!.backfillFromCache(roomID, days.toLong())
+                    result.success(null)
+                }
                 "getChatAvatarUrl" -> {
                     val roomID = call.argument<String>("roomID") ?: ""
                     result.success(bridge?.getChatAvatarURL(roomID) ?: "")

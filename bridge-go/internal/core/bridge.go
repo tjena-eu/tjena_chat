@@ -1171,6 +1171,22 @@ func (b *Bridge) handleWAMessage(evt *waevents.Message) {
 		},
 	})
 
+	// Cache the live message too so the history cache stays current for future
+	// backfills / lazy room creation.
+	if b.st != nil {
+		// ignore: best-effort cache write
+		_ = b.st.CacheMessage(context.Background(), localmatrix.CachedMessage{
+			ChatJID:    roomID,
+			MsgID:      evt.Info.ID,
+			Sender:     "@wa_" + evt.Info.Sender.User + ":tjena.local",
+			SenderName: evt.Info.PushName,
+			TS:         evt.Info.Timestamp.Unix(),
+			Body:       body,
+			MsgType:    msgtype,
+			IsOwn:      isOwn,
+		}, evt.Info.PushName, evt.Info.Chat.Server == types.GroupServer)
+	}
+
 	// For media messages, download asynchronously and emit media_ready.
 	if msgtype != "m.text" {
 		b.downloadMedia(
@@ -1388,199 +1404,152 @@ func (b *Bridge) recordOldest(roomID string, info *types.MessageInfo) {
 	}
 }
 
-// RequestBackfill starts an on-demand history pull for a chat (roomID is the WA
-// JID, e.g. "1234@s.whatsapp.net"), fetching messages back to `days` ago. WA's
-// on-demand API is count-based, so we request batches of 50 and keep going (via
-// handleHistorySync) until the oldest fetched message predates the cutoff.
-//
-// The anchor (oldest message the client currently has) is supplied by the caller
-// because the Go bridge doesn't persist message history — the Dart timeline is
-// the source of truth. anchorMsgID/anchorFromMe/anchorTS describe that message.
+// RequestBackfill populates a chat's room with cached history (last `days` days).
+// History is read from the local cache that was filled by the link-time history
+// sync — reliable, unlike WhatsApp's flaky on-demand network API. The anchor
+// parameters are accepted for FFI compatibility but no longer used.
 func (b *Bridge) RequestBackfill(roomID string, days int, anchorMsgID string, anchorFromMe bool, anchorTS int64) error {
-	jid, err := types.ParseJID(roomID)
-	if err != nil {
-		return fmt.Errorf("invalid JID: %w", err)
-	}
-	if days < 1 {
-		days = 1
-	}
-	if anchorTS == 0 {
-		anchorTS = time.Now().Unix()
-	}
-	// Seed the anchor so sendHistoryRequest (and later continuations) can use it.
-	// An empty anchorMsgID means the chat has no local messages — we still send a
-	// request (anchored at the given/now timestamp); WhatsApp may or may not
-	// return recent history for an empty message anchor.
-	b.recordAnchor(roomID, jid, anchorMsgID, anchorFromMe, anchorTS)
-
-	cutoff := time.Now().AddDate(0, 0, -days).Unix()
-	b.mu.Lock()
-	if b.backfillCutoff == nil {
-		b.backfillCutoff = make(map[string]int64)
-	}
-	b.backfillCutoff[roomID] = cutoff
-	b.mu.Unlock()
-	b.appendLog(fmt.Sprintf("[Bridge] backfill requested for %s (%d days, cutoff=%d, anchor=%s)", roomID, days, cutoff, anchorMsgID))
-	return b.sendHistoryRequest(jid)
+	return b.BackfillFromCache(roomID, days)
 }
 
-// recordAnchor stores a caller-supplied anchor message as the oldest known
-// message for a chat (overwrites, since the caller knows the true oldest).
-func (b *Bridge) recordAnchor(roomID string, chat types.JID, msgID string, fromMe bool, ts int64) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.oldestMsg == nil {
-		b.oldestMsg = make(map[string]*types.MessageInfo)
-	}
-	b.oldestMsg[roomID] = &types.MessageInfo{
-		ID:            msgID,
-		MessageSource: types.MessageSource{Chat: chat, IsFromMe: fromMe},
-		Timestamp:     time.Unix(ts, 0),
-	}
-}
-
-// sendHistoryRequest asks WA's primary device for older messages preceding the
-// oldest message we currently have for the chat.
-func (b *Bridge) sendHistoryRequest(chat types.JID) error {
-	roomID := chat.User + "@" + string(chat.Server)
-	b.mu.Lock()
-	client := b.waClient
-	oldest := b.oldestMsg[roomID]
-	b.mu.Unlock()
-	if client == nil {
-		return fmt.Errorf("not connected")
-	}
-	if oldest == nil {
-		return fmt.Errorf("no anchor message for %s — open the chat first", roomID)
-	}
-	req := client.BuildHistorySyncRequest(oldest, 50)
-	_, err := client.SendPeerMessage(context.Background(), req)
-	b.appendLog(fmt.Sprintf("[Bridge] sendHistoryRequest chat=%s anchor=%s ts=%d err=%v",
-		roomID, oldest.ID, oldest.Timestamp.Unix(), err))
-	return err
-}
-
-// handleHistorySync processes an incoming HistorySync (live initial sync or an
-// on-demand response) and emits each historical message as a backfill event.
+// handleHistorySync caches every message from a HistorySync (the bulk dump WA
+// sends at link time, plus any on-demand responses) into the local DB. It does
+// NOT create rooms or emit messages — that happens later via BackfillFromCache
+// when the user chooses which chats to sync. This is the "load all data silently
+// into the database" step.
 func (b *Bridge) handleHistorySync(data *waHistorySync.HistorySync) {
-	if data == nil {
+	if data == nil || b.st == nil {
 		return
 	}
-	onDemand := data.GetSyncType() == waHistorySync.HistorySync_ON_DEMAND
-	b.appendLog(fmt.Sprintf("[Bridge] handleHistorySync type=%s onDemand=%v conversations=%d",
-		data.GetSyncType().String(), onDemand, len(data.GetConversations())))
+	ctx := context.Background()
+	cached := 0
 	for _, conv := range data.GetConversations() {
 		jid, err := types.ParseJID(conv.GetID())
 		if err != nil {
 			continue
 		}
 		roomID := jid.User + "@" + string(jid.Server)
-		msgs := conv.GetMessages()
-		var oldestTS int64
-		var emitted int
-		for _, hm := range msgs {
-			ts := b.emitHistoricalMessage(roomID, jid, hm.GetMessage())
-			if ts > 0 {
-				emitted++
-				if oldestTS == 0 || ts < oldestTS {
-					oldestTS = ts
-				}
+		isGroup := jid.Server == types.GroupServer
+		chatName := conv.GetName()
+		for _, hm := range conv.GetMessages() {
+			if b.cacheHistoricalMessage(ctx, roomID, jid, isGroup, chatName, hm.GetMessage()) {
+				cached++
 			}
 		}
-		b.appendLog(fmt.Sprintf("[Bridge] history conv=%s msgs=%d emitted=%d", roomID, len(msgs), emitted))
-		if onDemand {
-			b.maybeContinueBackfill(roomID, jid, oldestTS, len(msgs))
-		}
 	}
+	b.appendLog(fmt.Sprintf("[Bridge] handleHistorySync type=%s convs=%d cached=%d",
+		data.GetSyncType().String(), len(data.GetConversations()), cached))
+	// Tell Dart fresh history landed so it can (re)run an auto-sync if configured.
+	b.emitter.Emit(map[string]any{"type": "history_cached", "count": cached})
 }
 
-// emitHistoricalMessage emits a single backfilled message and returns its unix
-// timestamp (0 if it was skipped).
-func (b *Bridge) emitHistoricalMessage(roomID string, chat types.JID, wmi *waWeb.WebMessageInfo) int64 {
+// cacheHistoricalMessage parses one WebMessageInfo and stores it in the cache.
+// Returns true if it was cached (false for reactions/empty/unsupported).
+func (b *Bridge) cacheHistoricalMessage(ctx context.Context, roomID string, chat types.JID, isGroup bool, chatName string, wmi *waWeb.WebMessageInfo) bool {
 	if wmi == nil {
-		return 0
+		return false
 	}
 	key := wmi.GetKey()
 	msg := wmi.GetMessage()
-	if key == nil || msg == nil {
-		return 0
-	}
-	if msg.GetReactionMessage() != nil {
-		return 0 // reactions aren't backfilled as messages
+	if key == nil || msg == nil || msg.GetReactionMessage() != nil {
+		return false
 	}
 	body, msgtype := messageBodyType(msg)
 	if body == "" && msgtype == "m.text" {
-		return 0 // nothing renderable (protocol/system message)
+		return false
 	}
 	msgID := key.GetID()
 	if msgID == "" {
-		return 0
+		return false
 	}
-	isOwn := key.GetFromMe()
-	ts := int64(wmi.GetMessageTimestamp())
-
-	// Resolve the sender: group messages carry a Participant; DMs use the chat.
 	senderUser := chat.User
 	if p := key.GetParticipant(); p != "" {
 		if pj, perr := types.ParseJID(p); perr == nil {
 			senderUser = pj.User
 		}
 	}
-	sender := "@wa_" + senderUser + ":tjena.local"
-	eventID := "$wa_" + msgID
-
-	// Track this as a candidate oldest anchor for further backfill requests.
-	b.recordOldest(roomID, &types.MessageInfo{
-		ID:            msgID,
-		MessageSource: types.MessageSource{Chat: chat, IsFromMe: isOwn},
-		Timestamp:     time.Unix(ts, 0),
-	})
-
-	b.emitter.Emit(map[string]any{
-		"type":    "message",
-		"room_id": roomID,
-		"event": map[string]any{
-			"id":          eventID,
-			"sender":      sender,
-			"sender_name": wmi.GetPushName(),
-			"ts":          ts,
-			"body":        body,
-			"msgtype":     msgtype,
-			"is_own":      isOwn,
-			"is_backfill": true,
-		},
-	})
-
-	if msgtype != "m.text" {
-		b.downloadMedia(eventID, msgID, roomID, msgtype, body, sender, wmi.GetPushName(), ts, isOwn, msg)
-	}
-	return ts
+	_ = b.st.CacheMessage(ctx, localmatrix.CachedMessage{
+		ChatJID:    roomID,
+		MsgID:      msgID,
+		Sender:     "@wa_" + senderUser + ":tjena.local",
+		SenderName: wmi.GetPushName(),
+		TS:         int64(wmi.GetMessageTimestamp()),
+		Body:       body,
+		MsgType:    msgtype,
+		IsOwn:      key.GetFromMe(),
+	}, chatName, isGroup)
+	return true
 }
 
-// maybeContinueBackfill requests the next older batch if the chat hasn't yet
-// reached its backfill cutoff, otherwise clears the in-progress marker.
-func (b *Bridge) maybeContinueBackfill(roomID string, chat types.JID, oldestTS int64, gotCount int) {
-	b.mu.Lock()
-	cutoff, active := b.backfillCutoff[roomID]
-	b.mu.Unlock()
-	if !active {
-		return
+// BackfillFromCache emits cached messages for a chat (last `days` days) as
+// backfill events, so the Dart side can populate the room. Reliable — reads the
+// local DB rather than the flaky on-demand network.
+func (b *Bridge) BackfillFromCache(roomID string, days int) error {
+	if b.st == nil {
+		return fmt.Errorf("no store")
 	}
-	// Stop when there's no more history, or we've gone back past the cutoff.
-	if gotCount == 0 || oldestTS == 0 || oldestTS <= cutoff {
-		b.mu.Lock()
-		delete(b.backfillCutoff, roomID)
-		b.mu.Unlock()
-		b.appendLog(fmt.Sprintf("[Bridge] backfill complete for %s", roomID))
-		return
+	if days < 1 {
+		days = 1
 	}
-	b.appendLog(fmt.Sprintf("[Bridge] backfill continuing for %s (oldest=%d cutoff=%d)", roomID, oldestTS, cutoff))
-	if err := b.sendHistoryRequest(chat); err != nil {
-		b.appendLog("[Bridge] backfill continuation failed: " + err.Error())
-		b.mu.Lock()
-		delete(b.backfillCutoff, roomID)
-		b.mu.Unlock()
+	since := time.Now().AddDate(0, 0, -days).Unix()
+	msgs, err := b.st.GetCachedMessages(context.Background(), roomID, since)
+	if err != nil {
+		return err
 	}
+	b.appendLog(fmt.Sprintf("[Bridge] BackfillFromCache %s days=%d -> %d msgs", roomID, days, len(msgs)))
+	for _, m := range msgs {
+		b.emitter.Emit(map[string]any{
+			"type":    "message",
+			"room_id": roomID,
+			"event": map[string]any{
+				"id":          "$wa_" + m.MsgID,
+				"sender":      m.Sender,
+				"sender_name": m.SenderName,
+				"ts":          m.TS,
+				"body":        m.Body,
+				"msgtype":     m.MsgType,
+				"is_own":      m.IsOwn,
+				"is_backfill": true,
+			},
+		})
+	}
+	return nil
+}
+
+// ListCachedChatsJSON returns all cached chats (from the history cache) as JSON,
+// newest activity first. Used by the chat picker — instant and includes last
+// activity for every chat (so "recent" sort works for unsynced chats too).
+func (b *Bridge) ListCachedChatsJSON() string {
+	if b.st == nil {
+		return "[]"
+	}
+	chats, err := b.st.ListCachedChats(context.Background())
+	if err != nil {
+		return "[]"
+	}
+	type entry struct {
+		JID     string `json:"jid"`
+		Name    string `json:"name"`
+		IsGroup bool   `json:"is_group"`
+		LastTS  int64  `json:"last_ts"`
+		Phone   string `json:"phone"`
+	}
+	out := make([]entry, 0, len(chats))
+	for _, c := range chats {
+		jid, _ := types.ParseJID(c.ChatJID)
+		out = append(out, entry{
+			JID:     c.ChatJID,
+			Name:    c.Name,
+			IsGroup: c.IsGroup,
+			LastTS:  c.LastTS,
+			Phone:   b.chatPhone(jid),
+		})
+	}
+	data, err := json.Marshal(out)
+	if err != nil {
+		return "[]"
+	}
+	return string(data)
 }
 
 func (b *Bridge) handleWAReceipt(evt *waevents.Receipt) {

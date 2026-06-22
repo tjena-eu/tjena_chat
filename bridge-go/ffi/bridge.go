@@ -204,6 +204,27 @@ func (b *Bridge) ListChatsJSON() string {
 	return c.ListChatsJSON()
 }
 
+// ListCachedChatsJSON returns all chats from the local history cache as JSON
+// (newest activity first), for the picker. Available even without a live
+// connection since it reads the database.
+func (b *Bridge) ListCachedChatsJSON() string {
+	b.mu.Lock()
+	c := b.core
+	b.mu.Unlock()
+	if c == nil {
+		return "[]"
+	}
+	return c.ListCachedChatsJSON()
+}
+
+// BackfillFromCache emits cached messages for a chat (last `days` days) as
+// backfill events so the Dart side can populate the room.
+func (b *Bridge) BackfillFromCache(roomID string, days int) error {
+	return b.withCore(func(c *core.Bridge) error {
+		return c.BackfillFromCache(roomID, days)
+	})
+}
+
 // GetChatAvatarURL returns the https URL of a chat's profile picture, or "".
 func (b *Bridge) GetChatAvatarURL(roomID string) string {
 	b.mu.Lock()

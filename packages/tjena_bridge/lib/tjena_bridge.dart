@@ -275,6 +275,21 @@ class TjenaBridge {
     return list.cast<Map<String, dynamic>>();
   }
 
+  /// List chats from the local history cache (instant; newest activity first).
+  /// Each map: jid, name, is_group, phone, last_ts (unix seconds).
+  Future<List<Map<String, dynamic>>> listCachedChats() async {
+    final raw = await _method.invokeMethod<String>('listCachedChats') ?? '[]';
+    final list = jsonDecode(raw) as List<dynamic>;
+    return list.cast<Map<String, dynamic>>();
+  }
+
+  /// Emit cached history for [roomID] (last [days] days) as backfill events.
+  Future<void> backfillFromCache(String roomID, int days) =>
+      _method.invokeMethod<void>('backfillFromCache', {
+        'roomID': roomID,
+        'days': days,
+      });
+
   /// Returns the https URL of a chat's WhatsApp profile picture, or '' if none.
   Future<String> getChatAvatarUrl(String roomID) async =>
       await _method.invokeMethod<String>('getChatAvatarUrl', {'roomID': roomID}) ??

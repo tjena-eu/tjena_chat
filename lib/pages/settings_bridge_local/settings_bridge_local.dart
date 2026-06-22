@@ -73,11 +73,111 @@ class _SettingsBridgeLocalState extends State<SettingsBridgeLocal> {
     } catch (_) {}
   }
 
+  bool _askedLinkMode = false;
+
   Future<void> _refreshState() async {
     try {
       final s = await TjenaBridge.instance.getState();
       if (mounted) setState(() => _state = s);
+      // First time we observe a linked account and the user hasn't chosen how to
+      // handle history yet, ask.
+      if (s.linked && !_askedLinkMode) {
+        _askedLinkMode = true;
+        final mode = await WaMatrixBridge.instance.getLinkMode();
+        if (mode.isEmpty && mounted) {
+          await _showPostLinkDialog();
+        }
+      }
     } catch (_) {}
+  }
+
+  Future<void> _showPostLinkDialog() async {
+    final choice = await showDialog<String>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: const Text('WhatsApp linked'),
+        content: const Text(
+          'Your WhatsApp history is being loaded into the app in the '
+          'background.\n\nHow should chats appear?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop('silent'),
+            child: const Text('Only on new message'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop('all'),
+            child: const Text('Create all chats'),
+          ),
+        ],
+      ),
+    );
+    if (choice == null || !mounted) return;
+    final days = await _promptDays(
+      choice == 'all'
+          ? 'How many days of history per chat?'
+          : 'Default days of history to load when a chat first receives a message?',
+    );
+    if (days == null) return;
+    await WaMatrixBridge.instance.setLinkMode(choice);
+    await WaMatrixBridge.instance.setDefaultBackfillDays(days);
+    if (choice == 'all') {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Creating all chats from cached history…'),
+        ),
+      );
+      // Give the link-time history sync a moment to populate the cache, then
+      // create every cached chat. (Re-running later is safe — it skips existing.)
+      Future.delayed(const Duration(seconds: 5), () async {
+        final n = await WaMatrixBridge.instance.syncAllCachedChats(days);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Synced $n cached chats')),
+          );
+        }
+      });
+    }
+  }
+
+  Future<int?> _promptDays(String message) async {
+    final controller = TextEditingController(text: '30');
+    return showDialog<int>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Backfill history'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(message),
+            const SizedBox(height: 16),
+            TextField(
+              controller: controller,
+              keyboardType: TextInputType.number,
+              autofocus: true,
+              decoration: const InputDecoration(
+                labelText: 'Days',
+                border: OutlineInputBorder(),
+                suffixText: 'days',
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(0),
+            child: const Text('No history'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context)
+                .pop(int.tryParse(controller.text.trim()) ?? 30),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _openLink() async {
