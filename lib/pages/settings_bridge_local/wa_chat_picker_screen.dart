@@ -5,7 +5,7 @@ import 'package:flutter/material.dart';
 
 import 'package:fluffychat/utils/wa_matrix_bridge.dart';
 
-enum _SortMode { recent, name }
+enum _SortKey { recent, name }
 
 /// Lists every WhatsApp chat (saved contacts + joined groups) and lets the user
 /// pick which ones to sync into the bridge as rooms. Newly-checked chats get a
@@ -26,7 +26,8 @@ class _WaChatPickerScreenState extends State<WaChatPickerScreen> {
   bool _saving = false;
   String? _error;
   String _filter = '';
-  _SortMode _sort = _SortMode.recent;
+  _SortKey _sortKey = _SortKey.recent;
+  bool _sortDescending = true; // recent: newest first; name: Z→A
 
   // jid → resolved avatar URL ('' = none, missing = not yet fetched).
   final _avatarUrls = <String, String>{};
@@ -189,32 +190,73 @@ class _WaChatPickerScreenState extends State<WaChatPickerScreen> {
     }
 
     filtered.sort((a, b) {
-      if (_sort == _SortMode.recent) {
+      int cmp;
+      if (_sortKey == _SortKey.recent) {
         final la = a['last_activity'] as int? ?? 0;
         final lb = b['last_activity'] as int? ?? 0;
-        if (la != lb) return lb.compareTo(la); // most recent first
-        // chats with no activity (unsynced) fall back to name order
+        cmp = la.compareTo(lb);
+        // tie-break equal/zero activity by name so it's stable
+        if (cmp == 0) {
+          cmp = displayName(a).toLowerCase().compareTo(
+                displayName(b).toLowerCase(),
+              );
+          return cmp; // name tie-break is always ascending
+        }
+      } else {
+        cmp = displayName(a).toLowerCase().compareTo(
+              displayName(b).toLowerCase(),
+            );
       }
-      return displayName(a).toLowerCase().compareTo(displayName(b).toLowerCase());
+      return _sortDescending ? -cmp : cmp;
     });
+
+    final visibleJids = filtered.map((c) => c['jid'] as String).toSet();
+    final allVisibleSelected =
+        visibleJids.isNotEmpty && visibleJids.every(_selected.contains);
 
     return Scaffold(
       appBar: AppBar(
         title: const Text('Choose WhatsApp chats'),
         actions: [
-          PopupMenuButton<_SortMode>(
-            tooltip: 'Sort',
+          if (!_loading && _error == null)
+            IconButton(
+              tooltip: allVisibleSelected ? 'Deselect all' : 'Select all',
+              onPressed: () => setState(() {
+                if (allVisibleSelected) {
+                  _selected.removeAll(visibleJids);
+                } else {
+                  _selected.addAll(visibleJids);
+                }
+              }),
+              icon: Icon(
+                allVisibleSelected
+                    ? Icons.deselect_outlined
+                    : Icons.select_all_outlined,
+              ),
+            ),
+          IconButton(
+            tooltip: _sortDescending ? 'Descending' : 'Ascending',
+            onPressed: () =>
+                setState(() => _sortDescending = !_sortDescending),
+            icon: Icon(
+              _sortDescending
+                  ? Icons.arrow_downward_outlined
+                  : Icons.arrow_upward_outlined,
+            ),
+          ),
+          PopupMenuButton<_SortKey>(
+            tooltip: 'Sort by',
             icon: const Icon(Icons.sort),
-            initialValue: _sort,
-            onSelected: (m) => setState(() => _sort = m),
+            initialValue: _sortKey,
+            onSelected: (m) => setState(() => _sortKey = m),
             itemBuilder: (context) => const [
               PopupMenuItem(
-                value: _SortMode.recent,
-                child: Text('Sort: Recent activity'),
+                value: _SortKey.recent,
+                child: Text('Sort by: Recent activity'),
               ),
               PopupMenuItem(
-                value: _SortMode.name,
-                child: Text('Sort: Name (A–Z)'),
+                value: _SortKey.name,
+                child: Text('Sort by: Name'),
               ),
             ],
           ),

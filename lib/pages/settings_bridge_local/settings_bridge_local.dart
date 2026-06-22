@@ -8,7 +8,6 @@ import 'package:fluffychat/utils/wa_matrix_bridge.dart';
 import 'package:fluffychat/widgets/matrix.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:tjena_bridge/tjena_bridge.dart';
 
 import '../bridge/bridge_link_screen.dart';
@@ -25,12 +24,8 @@ class _SettingsBridgeLocalState extends State<SettingsBridgeLocal> {
   BridgeState _state = BridgeState.empty;
   StreamSubscription<BridgeEvent>? _sub;
 
-  bool _seedOnConnect = false;
-  int _backfillDays = 30;
+  int _defaultDays = 30;
   bool _syncing = false;
-
-  static const _keySeed = 'wa_seed_on_connect';
-  static const _keyDays = 'wa_backfill_days';
 
   @override
   void initState() {
@@ -53,24 +48,9 @@ class _SettingsBridgeLocalState extends State<SettingsBridgeLocal> {
   }
 
   Future<void> _loadPrefs() async {
-    final prefs = await SharedPreferences.getInstance();
+    final days = await WaMatrixBridge.instance.getDefaultBackfillDays();
     if (!mounted) return;
-    setState(() {
-      _seedOnConnect = prefs.getBool(_keySeed) ?? false;
-      _backfillDays = prefs.getInt(_keyDays) ?? 30;
-    });
-  }
-
-  Future<void> _savePrefs() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_keySeed, _seedOnConnect);
-    await prefs.setInt(_keyDays, _backfillDays);
-    try {
-      await TjenaBridge.instance.setBackfillConfig(
-        seedOnConnect: _seedOnConnect,
-        days: _backfillDays,
-      );
-    } catch (_) {}
+    setState(() => _defaultDays = days);
   }
 
   bool _askedLinkMode = false;
@@ -280,7 +260,9 @@ class _SettingsBridgeLocalState extends State<SettingsBridgeLocal> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('WhatsApp Direct'),
-        leading: BackButton(onPressed: () => context.go('/rooms/settings')),
+        leading: BackButton(
+          onPressed: () => context.go('/rooms/settings/local-bridges'),
+        ),
       ),
       body: ListView(
         padding: const EdgeInsets.all(16),
@@ -353,42 +335,22 @@ class _SettingsBridgeLocalState extends State<SettingsBridgeLocal> {
           const SizedBox(height: 8),
           Card(
             margin: EdgeInsets.zero,
-            child: Column(
-              children: [
-                SwitchListTile(
-                  title: const Text('Seed all chats on connect'),
-                  subtitle: const Text(
-                    'Load all contacts and groups when WhatsApp connects. '
-                    'Off: only chats with new incoming messages are created.',
-                  ),
-                  value: _seedOnConnect,
+            child: ListTile(
+              title: const Text('Default backfill (days)'),
+              subtitle: const Text(
+                'History loaded when a chat is selected or first receives a '
+                'message. 0 = none.',
+              ),
+              trailing: SizedBox(
+                width: 80,
+                child: _DaysField(
+                  value: _defaultDays,
                   onChanged: (v) {
-                    setState(() => _seedOnConnect = v);
-                    _savePrefs();
+                    setState(() => _defaultDays = v);
+                    WaMatrixBridge.instance.setDefaultBackfillDays(v);
                   },
                 ),
-                if (_seedOnConnect) ...[
-                  const Divider(height: 1),
-                  ListTile(
-                    title: const Text('History window (days)'),
-                    subtitle: Text(
-                      _backfillDays == 0
-                          ? 'All history'
-                          : 'Last $_backfillDays days',
-                    ),
-                    trailing: SizedBox(
-                      width: 80,
-                      child: _DaysField(
-                        value: _backfillDays,
-                        onChanged: (v) {
-                          setState(() => _backfillDays = v);
-                          _savePrefs();
-                        },
-                      ),
-                    ),
-                  ),
-                ],
-              ],
+              ),
             ),
           ),
           if (_state.linked) ...[

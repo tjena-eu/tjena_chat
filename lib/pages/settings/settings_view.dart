@@ -225,20 +225,13 @@ class SettingsView extends StatelessWidget {
               ),
             ),
             ListTile(
-              leading: const Icon(Icons.chat_rounded),
-              title: const Text('WhatsApp Direct'),
-              subtitle: const Text('Runs locally — no cloud required'),
-              onTap: () => context.go('/rooms/settings/bridge-local'),
-              tileColor: activeRoute.startsWith('/rooms/settings/bridge-local')
-                  ? theme.colorScheme.surfaceContainerHigh
-                  : null,
-            ),
-            ListTile(
-              leading: const Icon(Icons.signal_cellular_alt),
-              title: const Text('Signal Direct'),
-              subtitle: const Text('Runs locally — no cloud required'),
-              onTap: () => context.go('/rooms/settings/signal'),
-              tileColor: activeRoute.startsWith('/rooms/settings/signal')
+              leading: const Icon(Icons.devices_outlined),
+              title: const Text('Local Bridges'),
+              subtitle: const Text('WhatsApp · Signal — run locally, no cloud'),
+              onTap: () => context.go('/rooms/settings/local-bridges'),
+              tileColor: activeRoute.startsWith('/rooms/settings/local-bridges') ||
+                      activeRoute.startsWith('/rooms/settings/bridge-local') ||
+                      activeRoute.startsWith('/rooms/settings/signal')
                   ? theme.colorScheme.surfaceContainerHigh
                   : null,
             ),

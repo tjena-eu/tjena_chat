@@ -141,7 +141,9 @@ class _SettingsSignalState extends State<SettingsSignal> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Signal Direct'),
-        leading: BackButton(onPressed: () => context.go('/rooms/settings')),
+        leading: BackButton(
+          onPressed: () => context.go('/rooms/settings/local-bridges'),
+        ),
       ),
       body: ListView(
         padding: const EdgeInsets.all(16),

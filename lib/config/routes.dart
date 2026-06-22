@@ -32,6 +32,7 @@ import 'package:fluffychat/pages/settings_homeserver/settings_homeserver.dart';
 import 'package:fluffychat/pages/settings_identity_server/settings_identity_server_page.dart';
 import 'package:fluffychat/pages/settings_ignore_list/settings_ignore_list.dart';
 import 'package:fluffychat/pages/settings_bridge_local/settings_bridge_local.dart';
+import 'package:fluffychat/pages/settings_bridge_local/local_bridges_hub.dart';
 import 'package:fluffychat/pages/signal/settings_signal.dart';
 import 'package:fluffychat/pages/settings_debug/settings_debug.dart';
 import 'package:fluffychat/pages/settings_local_backup/local_backup_page.dart';
@@ -391,6 +392,15 @@ abstract class AppRoutes {
                         context,
                         state,
                         const LocalBackupPage(),
+                      ),
+                    ),
+                    GoRoute(
+                      path: 'local-bridges',
+                      redirect: loggedOutRedirect,
+                      pageBuilder: (context, state) => defaultPageBuilder(
+                        context,
+                        state,
+                        const LocalBridgesHub(),
                       ),
                     ),
                     GoRoute(
