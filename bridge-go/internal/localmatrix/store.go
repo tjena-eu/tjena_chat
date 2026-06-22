@@ -557,3 +557,13 @@ func (s *LocalStore) ListCachedChats(ctx context.Context) ([]CachedChat, error) 
 	}
 	return out, rows.Err()
 }
+
+// ClearHistoryCache wipes all cached WhatsApp messages and chat summaries so a
+// fresh history sync can repopulate them cleanly.
+func (s *LocalStore) ClearHistoryCache(ctx context.Context) error {
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM wa_history`); err != nil {
+		return err
+	}
+	_, err := s.db.ExecContext(ctx, `DELETE FROM wa_chat`)
+	return err
+}

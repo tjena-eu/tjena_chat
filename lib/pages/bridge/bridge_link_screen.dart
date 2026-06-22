@@ -7,6 +7,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:fluffychat/utils/platform_infos.dart';
+import 'package:fluffychat/utils/wa_matrix_bridge.dart';
+import 'package:fluffychat/widgets/matrix.dart';
 import 'package:tjena_bridge/tjena_bridge.dart';
 
 /// Screen for linking a WhatsApp account via QR code or phone number pairing.
@@ -15,7 +17,9 @@ import 'package:tjena_bridge/tjena_bridge.dart';
 /// Starting phone-link disconnects any live QR session to prevent the QR
 /// timeout from killing the phone-link connection.
 class BridgeLinkScreen extends StatefulWidget {
-  const BridgeLinkScreen({super.key});
+  /// WhatsApp account to link (defaults to the primary "default" account).
+  final String accountId;
+  const BridgeLinkScreen({this.accountId = 'default', super.key});
 
   @override
   State<BridgeLinkScreen> createState() => _BridgeLinkScreenState();
@@ -35,6 +39,10 @@ class _BridgeLinkScreenState extends State<BridgeLinkScreen> {
 
   final _phoneController = TextEditingController();
   StreamSubscription<BridgeEvent>? _sub;
+
+  // When set, delete this account's existing Tjena chats + history cache right
+  // before linking, so the fresh history sync rebuilds everything cleanly.
+  bool _startFresh = false;
 
   @override
   void initState() {
@@ -111,6 +119,9 @@ class _BridgeLinkScreenState extends State<BridgeLinkScreen> {
   }
 
   void _onEvent(BridgeEvent evt) {
+    // Ignore events for other accounts (events are tagged with account_id).
+    final acc = evt.data['account_id'] as String? ?? 'default';
+    if (acc != widget.accountId) return;
     if (mounted) {
       setState(() {
         _debugEvents.add(
@@ -163,12 +174,23 @@ class _BridgeLinkScreenState extends State<BridgeLinkScreen> {
     });
   }
 
+  // If "Start fresh" is checked, wipe this account's Tjena chats + history cache
+  // once before linking.
+  Future<void> _maybeStartFresh() async {
+    if (!_startFresh) return;
+    try {
+      await WaMatrixBridge.instance
+          .clearAccountData(Matrix.of(context).client, widget.accountId);
+    } catch (_) {}
+  }
+
   Future<void> _startQR() async {
+    await _maybeStartFresh();
     setState(() { _loading = true; _qrBase64 = null; _errorMsg = null; });
     // Same OS-kill applies to the QR websocket — keep the socket alive.
     await _startKeepAliveService();
     try {
-      await TjenaBridge.instance.requestQRLink();
+      await TjenaBridge.instance.requestQRLink(accountID: widget.accountId);
       Future.delayed(const Duration(seconds: 20), () {
         if (mounted && _loading && _qrBase64 == null) {
           setState(() {
@@ -185,12 +207,13 @@ class _BridgeLinkScreenState extends State<BridgeLinkScreen> {
   Future<void> _startPhone() async {
     final phone = _phoneController.text.trim();
     if (phone.isEmpty) return;
+    await _maybeStartFresh();
     setState(() { _loading = true; _phoneCode = null; _errorMsg = null; });
     // Start the foreground service BEFORE requesting the code so the socket
     // survives when the user switches to WhatsApp to enter it.
     await _startKeepAliveService();
     try {
-      await TjenaBridge.instance.requestPhoneLink(phone);
+      await TjenaBridge.instance.requestPhoneLink(phone, accountID: widget.accountId);
       Future.delayed(const Duration(seconds: 30), () {
         if (mounted && _loading && _phoneCode == null) {
           setState(() {
@@ -207,7 +230,7 @@ class _BridgeLinkScreenState extends State<BridgeLinkScreen> {
   Future<void> _forceReset() async {
     setState(() { _loading = true; _errorMsg = null; _qrBase64 = null; _phoneCode = null; });
     try {
-      await TjenaBridge.instance.forceReset();
+      await TjenaBridge.instance.forceReset(accountID: widget.accountId);
       _backToSelector();
     } catch (e) {
       if (mounted) setState(() { _errorMsg = e.toString(); _loading = false; });
@@ -254,7 +277,22 @@ class _BridgeLinkScreenState extends State<BridgeLinkScreen> {
               style: TextStyle(fontSize: 16),
               textAlign: TextAlign.center,
             ),
-            const SizedBox(height: 32),
+            const SizedBox(height: 16),
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 360),
+              child: CheckboxListTile(
+                value: _startFresh,
+                onChanged: (v) => setState(() => _startFresh = v ?? false),
+                contentPadding: EdgeInsets.zero,
+                controlAffinity: ListTileControlAffinity.leading,
+                title: const Text('Start fresh'),
+                subtitle: const Text(
+                  'Delete existing Tjena chats for this account and clear the '
+                  'cached history before linking. WhatsApp itself is not changed.',
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
             FilledButton.icon(
               onPressed: () => _selectMethod(_LinkMethod.qr),
               icon: const Icon(Icons.qr_code),

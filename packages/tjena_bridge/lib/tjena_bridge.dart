@@ -169,58 +169,90 @@ class TjenaBridge {
 
   Future<void> stop() => _method.invokeMethod<void>('stop');
 
-  Future<BridgeState> getState() async {
-    final raw = await _method.invokeMethod<String>('getState') ?? '{}';
+  // ── Account management ──────────────────────────────────────────────────────
+
+  /// Create a new (unlinked) WhatsApp account; returns its account id.
+  Future<String> addAccount() async =>
+      await _method.invokeMethod<String>('addAccount') ?? '';
+
+  /// Log out, stop and delete an account (no-op for unknown ids).
+  Future<void> removeAccount(String accountID) =>
+      _method.invokeMethod<void>('removeAccount', {'accountID': accountID});
+
+  /// List accounts: each map has id, linked, connected, phone, push_name.
+  Future<List<Map<String, dynamic>>> listAccounts() async {
+    final raw = await _method.invokeMethod<String>('listAccounts') ?? '[]';
+    return (jsonDecode(raw) as List<dynamic>).cast<Map<String, dynamic>>();
+  }
+
+  Future<BridgeState> getState({String accountID = 'default'}) async {
+    final raw = await _method
+            .invokeMethod<String>('getState', {'accountID': accountID}) ??
+        '{}';
     return BridgeState.fromJson(jsonDecode(raw) as Map<String, dynamic>);
   }
 
   /// Triggers async QR events on the event stream.
-  Future<void> requestQRLink() => _method.invokeMethod<void>('requestQRLink');
+  Future<void> requestQRLink({String accountID = 'default'}) =>
+      _method.invokeMethod<void>('requestQRLink', {'accountID': accountID});
 
   /// Triggers async phone_code event on the event stream.
-  Future<void> requestPhoneLink(String phone) =>
-      _method.invokeMethod<void>('requestPhoneLink', {'phone': phone});
+  Future<void> requestPhoneLink(String phone, {String accountID = 'default'}) =>
+      _method.invokeMethod<void>(
+          'requestPhoneLink', {'accountID': accountID, 'phone': phone});
 
   Future<void> confirmPhoneLink(String code) =>
       _method.invokeMethod<void>('confirmPhoneLink', {'code': code});
 
-  Future<void> sendText(String portalID, String msgID, String text) =>
+  Future<void> sendText(String portalID, String msgID, String text,
+          {String accountID = 'default'}) =>
       _method.invokeMethod<void>('sendText', {
+        'accountID': accountID,
         'portalID': portalID,
         'msgID': msgID,
         'text': text,
       });
 
   Future<void> sendReaction(
-          String portalID, String targetEventID, String emoji) =>
+          String portalID, String targetEventID, String emoji,
+          {String accountID = 'default'}) =>
       _method.invokeMethod<void>('sendReaction', {
+        'accountID': accountID,
         'portalID': portalID,
         'targetEventID': targetEventID,
         'emoji': emoji,
       });
 
-  Future<void> sendRedaction(String portalID, String targetEventID) =>
+  Future<void> sendRedaction(String portalID, String targetEventID,
+          {String accountID = 'default'}) =>
       _method.invokeMethod<void>('sendRedaction', {
+        'accountID': accountID,
         'portalID': portalID,
         'targetEventID': targetEventID,
       });
 
-  Future<void> markRead(String portalID, String eventID) =>
+  Future<void> markRead(String portalID, String eventID,
+          {String accountID = 'default'}) =>
       _method.invokeMethod<void>('markRead', {
+        'accountID': accountID,
         'portalID': portalID,
         'eventID': eventID,
       });
 
-  Future<void> setTyping(String portalID, {required bool typing}) =>
+  Future<void> setTyping(String portalID,
+          {required bool typing, String accountID = 'default'}) =>
       _method.invokeMethod<void>('setTyping', {
+        'accountID': accountID,
         'portalID': portalID,
         'typing': typing,
       });
 
-  Future<void> logout() => _method.invokeMethod<void>('logout');
+  Future<void> logout({String accountID = 'default'}) =>
+      _method.invokeMethod<void>('logout', {'accountID': accountID});
 
   /// Wipe local device credentials and prepare for fresh linking.
-  Future<void> forceReset() => _method.invokeMethod<void>('forceReset');
+  Future<void> forceReset({String accountID = 'default'}) =>
+      _method.invokeMethod<void>('forceReset', {'accountID': accountID});
 
   Future<void> clearPersistedRooms() =>
       _method.invokeMethod<void>('clearPersistedRooms');
@@ -235,16 +267,19 @@ class TjenaBridge {
 
   /// Re-fetches name and profile picture for the given WA room JID and emits
   /// a room_updated event so the UI refreshes name and avatar.
-  Future<void> refreshRoom(String jid) =>
-      _method.invokeMethod<void>('refreshRoom', {'jid': jid});
+  Future<void> refreshRoom(String jid, {String accountID = 'default'}) =>
+      _method.invokeMethod<void>(
+          'refreshRoom', {'accountID': accountID, 'jid': jid});
 
   /// Upload and send media (image/video/audio/document) through WhatsApp.
   Future<void> sendMedia(
     String portalID,
     String msgID,
     String mimeType,
-    Uint8List data,
-  ) => _method.invokeMethod<void>('sendMedia', {
+    Uint8List data, {
+    String accountID = 'default',
+  }) => _method.invokeMethod<void>('sendMedia', {
+        'accountID': accountID,
         'portalID': portalID,
         'msgID': msgID,
         'mimeType': mimeType,
@@ -252,8 +287,10 @@ class TjenaBridge {
       });
 
   /// Send a location through WhatsApp.
-  Future<void> sendLocation(String portalID, double lat, double lon) =>
+  Future<void> sendLocation(String portalID, double lat, double lon,
+          {String accountID = 'default'}) =>
       _method.invokeMethod<void>('sendLocation', {
+        'accountID': accountID,
         'portalID': portalID,
         'lat': lat,
         'lon': lon,
@@ -269,44 +306,56 @@ class TjenaBridge {
 
   /// List all known WhatsApp chats (saved contacts + joined groups) for the
   /// chat-picker UI. Each map has keys: jid, name, is_group, phone.
-  Future<List<Map<String, dynamic>>> listChats() async {
-    final raw = await _method.invokeMethod<String>('listChats') ?? '[]';
-    final list = jsonDecode(raw) as List<dynamic>;
-    return list.cast<Map<String, dynamic>>();
+  Future<List<Map<String, dynamic>>> listChats(
+      {String accountID = 'default'}) async {
+    final raw = await _method
+            .invokeMethod<String>('listChats', {'accountID': accountID}) ??
+        '[]';
+    return (jsonDecode(raw) as List<dynamic>).cast<Map<String, dynamic>>();
   }
 
   /// List chats from the local history cache (instant; newest activity first).
   /// Each map: jid, name, is_group, phone, last_ts (unix seconds).
-  Future<List<Map<String, dynamic>>> listCachedChats() async {
-    final raw = await _method.invokeMethod<String>('listCachedChats') ?? '[]';
-    final list = jsonDecode(raw) as List<dynamic>;
-    return list.cast<Map<String, dynamic>>();
+  Future<List<Map<String, dynamic>>> listCachedChats(
+      {String accountID = 'default'}) async {
+    final raw = await _method
+            .invokeMethod<String>('listCachedChats', {'accountID': accountID}) ??
+        '[]';
+    return (jsonDecode(raw) as List<dynamic>).cast<Map<String, dynamic>>();
   }
 
   /// Emit cached history for [roomID] (last [days] days) as backfill events.
-  Future<void> backfillFromCache(String roomID, int days) =>
+  Future<void> backfillFromCache(String roomID, int days,
+          {String accountID = 'default'}) =>
       _method.invokeMethod<void>('backfillFromCache', {
+        'accountID': accountID,
         'roomID': roomID,
         'days': days,
       });
 
+  /// Wipe an account's cached WhatsApp history (not WhatsApp itself).
+  Future<void> clearCache({String accountID = 'default'}) =>
+      _method.invokeMethod<void>('clearCache', {'accountID': accountID});
+
   /// Returns the https URL of a chat's WhatsApp profile picture, or '' if none.
-  Future<String> getChatAvatarUrl(String roomID) async =>
-      await _method.invokeMethod<String>('getChatAvatarUrl', {'roomID': roomID}) ??
+  Future<String> getChatAvatarUrl(String roomID,
+          {String accountID = 'default'}) async =>
+      await _method.invokeMethod<String>(
+          'getChatAvatarUrl', {'accountID': accountID, 'roomID': roomID}) ??
       '';
 
-  /// Pull on-demand WhatsApp message history for [roomID] (the WA JID) going
-  /// back [days] days. Messages arrive as backfill events on the event stream.
-  /// The anchor describes the oldest message currently loaded (the Go bridge
-  /// keeps no history, so the client supplies the starting point).
+  /// Pull on-demand WhatsApp message history for [roomID]. Anchor params kept for
+  /// compatibility; backfill now reads from the local cache.
   Future<void> requestBackfill(
     String roomID,
     int days, {
     required String anchorMsgID,
     required bool anchorFromMe,
     required int anchorTS,
+    String accountID = 'default',
   }) =>
       _method.invokeMethod<void>('requestBackfill', {
+        'accountID': accountID,
         'roomID': roomID,
         'days': days,
         'anchorMsgID': anchorMsgID,

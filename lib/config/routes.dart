@@ -409,7 +409,10 @@ abstract class AppRoutes {
                       pageBuilder: (context, state) => defaultPageBuilder(
                         context,
                         state,
-                        const SettingsBridgeLocal(),
+                        SettingsBridgeLocal(
+                          accountId:
+                              state.uri.queryParameters['account'] ?? 'default',
+                        ),
                       ),
                     ),
                     GoRoute(

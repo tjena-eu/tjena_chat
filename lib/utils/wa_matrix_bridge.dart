@@ -24,9 +24,20 @@ class WaMatrixBridge {
 
   Client? _client;
 
-  // Bidirectional WA JID ↔ Matrix room ID mapping
-  final _waToMatrix = <String, String>{};
-  final _matrixToWa = <String, String>{};
+  // Bidirectional mapping. Keyed by a composite "<accountId>|<waJid>" so the
+  // same WhatsApp chat on different accounts maps to distinct Matrix rooms.
+  // For the "default" account the composite key collapses to just the JID, so
+  // existing single-account installs keep working unchanged.
+  final _waToMatrix = <String, String>{}; // compositeKey -> matrixRoomId
+  final _matrixToWa = <String, String>{}; // matrixRoomId -> waJid
+  final _matrixToAccount = <String, String>{}; // matrixRoomId -> accountId
+
+  static const _defaultAccount = 'default';
+
+  // Composite map key. Default account uses the bare JID for back-compat.
+  static const _sep = '\u0001';
+  static String _key(String accountId, String waJid) =>
+      accountId == _defaultAccount ? waJid : '$accountId$_sep$waJid';
 
   // eventId → original event data, kept until media_ready allows re-injection
   final _pendingMediaEvents = <String, Map<String, dynamic>>{};
@@ -44,17 +55,30 @@ class WaMatrixBridge {
   // placeholder always lands before its media_ready URL update.
   Future<void> _injectChain = Future.value();
 
-  String? _spaceId;
-  String? _connectedPhone;
+  // Per-account space room ids and connected phone numbers.
+  final _spaceIds = <String, String>{}; // accountId -> space room id
+  final _connectedPhones = <String, String>{}; // accountId -> phone
 
   // Cached in memory for the hot path (new-room lazy backfill); loaded in init.
   int _defaultBackfillDays = 30;
 
   static const _bridgeStateType = 'org.tjena.bridge.local';
-  static const _spaceRoomId = '!wa_space_local:local';
 
-  static String _toMatrixId(String waRoomId) =>
-      '!wa_${waRoomId.replaceAll('@', '_')}:local';
+  // Account id of an existing bridged room (for outgoing calls). Defaults to
+  // "default" for legacy rooms with no recorded account.
+  String _accOf(String matrixRoomId) =>
+      _matrixToAccount[matrixRoomId] ?? _defaultAccount;
+
+  static String _spaceRoomIdFor(String accountId) => accountId == _defaultAccount
+      ? '!wa_space_local:local'
+      : '!wa_space_${accountId}_local:local';
+
+  static String _toMatrixId(String accountId, String waRoomId) {
+    final safe = waRoomId.replaceAll('@', '_');
+    return accountId == _defaultAccount
+        ? '!wa_$safe:local'
+        : '!wa_${accountId}_$safe:local';
+  }
 
   // ── Init ─────────────────────────────────────────────────────────────────────
 
@@ -89,31 +113,37 @@ class WaMatrixBridge {
     _client = client;
 
     // ① Load from SharedPreferences — fast, reliable, survives process kills.
+    // Keys are composite "<accountId><jid>" (default account = bare jid).
     try {
       final prefs = await SharedPreferences.getInstance();
       final str = prefs.getString(_roomMappingsKey);
       if (str != null) {
         final raw = jsonDecode(str) as Map<String, dynamic>;
         for (final e in raw.entries) {
-          _waToMatrix[e.key] = e.value as String;
-          _matrixToWa[e.value as String] = e.key;
+          final matrixId = e.value as String;
+          _waToMatrix[e.key] = matrixId;
+          final sep = e.key.indexOf(_sep);
+          final accountId = sep < 0 ? _defaultAccount : e.key.substring(0, sep);
+          final jid = sep < 0 ? e.key : e.key.substring(sep + 1);
+          _matrixToWa[matrixId] = jid;
+          _matrixToAccount[matrixId] = accountId;
         }
       }
     } catch (e) {
       Logs().w('[WaBridge] load room mappings failed: $e');
     }
 
-    // ② Supplement from client.rooms (covers first-ever install and space room).
+    // ② Supplement from client.rooms (covers first-ever install + space rooms).
     for (final room in client.rooms) {
-      if (room.id == _spaceRoomId) {
-        _spaceId = _spaceRoomId;
-        continue;
-      }
-      var waId = room.getState(_bridgeStateType)?.content['wa_room_id'] as String?;
+      if (room.id.startsWith('!wa_space')) continue; // space rooms aren't chats
+      final st = room.getState(_bridgeStateType)?.content;
+      var waId = st?['wa_room_id'] as String?;
+      final accountId = (st?['account_id'] as String?) ?? _defaultAccount;
       waId ??= _waIdFromRoomId(room.id);
-      if (waId != null && !_waToMatrix.containsKey(waId)) {
-        _waToMatrix[waId] = room.id;
+      if (waId != null && !_matrixToWa.containsKey(room.id)) {
+        _waToMatrix[_key(accountId, waId)] = room.id;
         _matrixToWa[room.id] = waId;
+        _matrixToAccount[room.id] = accountId;
       }
     }
 
@@ -146,17 +176,22 @@ class WaMatrixBridge {
     if (client == null) return;
     var repaired = 0;
     for (final room in client.rooms) {
-      if (room.id == _spaceRoomId) continue;
-      var waId = room.getState(_bridgeStateType)?.content['wa_room_id'] as String?;
+      if (room.id.startsWith('!wa_space')) continue;
+      final st = room.getState(_bridgeStateType)?.content;
+      var waId = st?['wa_room_id'] as String?;
+      final accountId = (st?['account_id'] as String?) ??
+          _matrixToAccount[room.id] ??
+          _defaultAccount;
       waId ??= _waIdFromRoomId(room.id);
       if (waId == null) continue;
-      if (!_waToMatrix.containsKey(waId)) {
-        _waToMatrix[waId] = room.id;
+      if (!_matrixToWa.containsKey(room.id)) {
+        _waToMatrix[_key(accountId, waId)] = room.id;
         _matrixToWa[room.id] = waId;
+        _matrixToAccount[room.id] = accountId;
       }
       final n = room.name;
       if (n.isEmpty || n.contains('@') || n == room.id) {
-        _pushNameUpdate(waId, waId.split('@').first);
+        _pushNameUpdate(accountId, waId, waId.split('@').first);
         repaired++;
       }
     }
@@ -173,19 +208,17 @@ class WaMatrixBridge {
     if (!isLinked) return null;
     final phone = rawPhone.replaceAll(RegExp(r'[\s+\-()]'), '');
     final jid = '$phone@s.whatsapp.net';
-    if (!_waToMatrix.containsKey(jid)) {
-      _ensureRoom(jid, '+$phone', isDM: true);
+    if (!_waToMatrix.containsKey(_key(_defaultAccount, jid))) {
+      _ensureRoom(_defaultAccount, jid, '+$phone', isDM: true);
     }
-    return _waToMatrix[jid];
+    return _waToMatrix[_key(_defaultAccount, jid)];
   }
-  // True if connected now, OR if rooms from a previous session still exist —
-  // the latter means the bridge was linked before but the state event hasn't
-  // fired yet this session (bridge still connecting at app start).
-  bool get isLinked => _connectedPhone != null || _waToMatrix.isNotEmpty;
-  String? get connectedPhone => _connectedPhone;
+  // True if any account is connected, OR rooms from a previous session exist.
+  bool get isLinked => _connectedPhones.isNotEmpty || _waToMatrix.isNotEmpty;
+  String? get connectedPhone => _connectedPhones[_defaultAccount];
   String? matrixRoomIdForPhone(String phone) {
     final jid = '${phone.replaceAll('+', '').replaceAll(' ', '')}@s.whatsapp.net';
-    return _waToMatrix[jid];
+    return _waToMatrix[_key(_defaultAccount, jid)];
   }
 
   // ── Public actions ────────────────────────────────────────────────────────────
@@ -218,7 +251,7 @@ class WaMatrixBridge {
         }),
       ));
     }
-    await TjenaBridge.instance.sendText(waId, eventId, text);
+    await TjenaBridge.instance.sendText(waId, eventId, text, accountID: _accOf(matrixRoomId));
   }
 
   /// Send a media file through WhatsApp. Injects a local Matrix event immediately
@@ -280,7 +313,7 @@ class WaMatrixBridge {
     ));
 
     try {
-      await TjenaBridge.instance.sendMedia(waId, eventId, mimeType, bytes);
+      await TjenaBridge.instance.sendMedia(waId, eventId, mimeType, bytes, accountID: _accOf(matrixRoomId));
     } catch (e) {
       Logs().w('[WaBridge] sendFile failed: $e');
     }
@@ -327,7 +360,7 @@ class WaMatrixBridge {
     ));
 
     try {
-      await TjenaBridge.instance.sendLocation(waId, lat, lon);
+      await TjenaBridge.instance.sendLocation(waId, lat, lon, accountID: _accOf(matrixRoomId));
     } catch (e) {
       Logs().w('[WaBridge] sendLocation failed: $e');
     }
@@ -340,12 +373,13 @@ class WaMatrixBridge {
   Future<void> refreshRoom(String matrixRoomId) async {
     final waId = _matrixToWa[matrixRoomId];
     if (waId == null) return;
+    final accountId = _accOf(matrixRoomId);
     final n = _client?.getRoomById(matrixRoomId)?.name ?? '';
     if (n.isEmpty || n.contains('@') || n == matrixRoomId) {
-      _pushNameUpdate(waId, waId.split('@').first);
+      _pushNameUpdate(accountId, waId, waId.split('@').first);
     }
     try {
-      await TjenaBridge.instance.refreshRoom(waId);
+      await TjenaBridge.instance.refreshRoom(waId, accountID: accountId);
     } catch (e) {
       Logs().w('[WaBridge] refreshRoom failed: $e');
     }
@@ -357,7 +391,8 @@ class WaMatrixBridge {
   Future<void> requestBackfill(String matrixRoomId, int days) async {
     final waId = _matrixToWa[matrixRoomId];
     if (waId == null) throw Exception('not a WhatsApp chat');
-    await TjenaBridge.instance.backfillFromCache(waId, days);
+    await TjenaBridge.instance
+        .backfillFromCache(waId, days, accountID: _accOf(matrixRoomId));
   }
 
   // ── Chat picker + cached-history sync ───────────────────────────────────────
@@ -393,11 +428,12 @@ class WaMatrixBridge {
   /// List chats for the picker: the cached chats (with real last-activity for
   /// every chat) merged with any saved contacts/groups not yet in the cache.
   /// Each entry: jid, name, is_group, phone, synced, last_activity (ms).
-  Future<List<Map<String, dynamic>>> listChatsWithStatus() async {
+  Future<List<Map<String, dynamic>>> listChatsWithStatus(
+      {String accountId = _defaultAccount}) async {
     final byJid = <String, Map<String, dynamic>>{};
 
     // Cached chats first — these carry last_ts (recency) for every chat.
-    for (final c in await TjenaBridge.instance.listCachedChats()) {
+    for (final c in await TjenaBridge.instance.listCachedChats(accountID: accountId)) {
       final jid = c['jid'] as String? ?? '';
       if (jid.isEmpty) continue;
       byJid[jid] = {
@@ -409,7 +445,7 @@ class WaMatrixBridge {
       };
     }
     // Merge in contacts/groups without cached history.
-    for (final c in await TjenaBridge.instance.listChats()) {
+    for (final c in await TjenaBridge.instance.listChats(accountID: accountId)) {
       final jid = c['jid'] as String? ?? '';
       if (jid.isEmpty || byJid.containsKey(jid)) continue;
       byJid[jid] = {
@@ -423,24 +459,25 @@ class WaMatrixBridge {
 
     final out = byJid.values.toList();
     for (final c in out) {
-      c['synced'] = _waToMatrix.containsKey(c['jid']);
+      c['synced'] = _waToMatrix.containsKey(_key(accountId, c['jid'] as String));
     }
     return out;
   }
 
   /// Fetch a chat's WhatsApp profile-picture URL (direct CDN https link).
-  Future<String> chatAvatarUrl(String jid) =>
-      TjenaBridge.instance.getChatAvatarUrl(jid);
+  Future<String> chatAvatarUrl(String jid, {String accountId = _defaultAccount}) =>
+      TjenaBridge.instance.getChatAvatarUrl(jid, accountID: accountId);
 
   /// Create a room for [jid] and backfill [days] days from the local cache.
-  Future<void> syncChat(String jid, String name, bool isGroup, int days) async {
+  Future<void> syncChat(String jid, String name, bool isGroup, int days,
+      {String accountId = _defaultAccount}) async {
     final displayName = name.isNotEmpty ? name : jid.split('@').first;
-    _ensureRoom(jid, displayName, isDM: !isGroup);
+    _ensureRoom(accountId, jid, displayName, isDM: !isGroup);
     if (days > 0) {
       // ignore: unawaited_futures
-      TjenaBridge.instance.backfillFromCache(jid, days);
+      TjenaBridge.instance.backfillFromCache(jid, days, accountID: accountId);
     }
-    final mid = _waToMatrix[jid];
+    final mid = _waToMatrix[_key(accountId, jid)];
     if (mid != null) {
       // ignore: unawaited_futures
       refreshRoom(mid); // real name + photo
@@ -448,24 +485,26 @@ class WaMatrixBridge {
   }
 
   /// Create rooms + backfill [days] for every cached chat (link-mode "all").
-  Future<int> syncAllCachedChats(int days) async {
-    final chats = await TjenaBridge.instance.listCachedChats();
+  Future<int> syncAllCachedChats(int days,
+      {String accountId = _defaultAccount}) async {
+    final chats = await TjenaBridge.instance.listCachedChats(accountID: accountId);
     for (final c in chats) {
       final jid = c['jid'] as String? ?? '';
-      if (jid.isEmpty || _waToMatrix.containsKey(jid)) continue;
+      if (jid.isEmpty || _waToMatrix.containsKey(_key(accountId, jid))) continue;
       await syncChat(
         jid,
         c['name'] as String? ?? '',
         c['is_group'] as bool? ?? false,
         days,
+        accountId: accountId,
       );
     }
     return chats.length;
   }
 
   /// Remove a chat's room from the bridge (keeps WhatsApp linked).
-  Future<void> unsyncChat(String jid) async {
-    final mid = _waToMatrix[jid];
+  Future<void> unsyncChat(String jid, {String accountId = _defaultAccount}) async {
+    final mid = _waToMatrix[_key(accountId, jid)];
     if (mid == null) return;
     final client = _client;
     if (client != null) {
@@ -473,8 +512,9 @@ class WaMatrixBridge {
       client.rooms.removeWhere((r) => r.id == mid);
       client.archivedRooms.removeWhere((r) => r.room.id == mid);
     }
-    _waToMatrix.remove(jid);
+    _waToMatrix.remove(_key(accountId, jid));
     _matrixToWa.remove(mid);
+    _matrixToAccount.remove(mid);
     await _saveRoomMappings();
   }
 
@@ -515,7 +555,7 @@ class WaMatrixBridge {
     }
     // Send WA read receipt (fire and forget — failures are non-fatal).
     try {
-      await TjenaBridge.instance.markRead(waId, lastEventId ?? '');
+      await TjenaBridge.instance.markRead(waId, lastEventId ?? '', accountID: _accOf(matrixRoomId));
     } catch (_) {}
   }
 
@@ -532,7 +572,7 @@ class WaMatrixBridge {
         ? targetMatrixEventId.substring(4)
         : targetMatrixEventId;
     try {
-      await TjenaBridge.instance.sendReaction(waId, targetWaId, emoji);
+      await TjenaBridge.instance.sendReaction(waId, targetWaId, emoji, accountID: _accOf(matrixRoomId));
     } catch (_) {}
   }
 
@@ -544,7 +584,7 @@ class WaMatrixBridge {
     final targetWaId =
         eventId.startsWith(r'$wa_') ? eventId.substring(4) : eventId;
     try {
-      await TjenaBridge.instance.sendRedaction(waId, targetWaId);
+      await TjenaBridge.instance.sendRedaction(waId, targetWaId, accountID: _accOf(matrixRoomId));
     } catch (_) {}
     // Inject local redaction for immediate UI update.
     final ts = DateTime.now();
@@ -577,7 +617,7 @@ class WaMatrixBridge {
     final waId = _matrixToWa[matrixRoomId];
     if (waId == null) return;
     TjenaBridge.instance
-        .setTyping(waId, typing: typing)
+        .setTyping(waId, typing: typing, accountID: _accOf(matrixRoomId))
         .catchError((_) {});
   }
 
@@ -600,12 +640,13 @@ class WaMatrixBridge {
       client.rooms.removeWhere((r) => r.id == mid);
       client.archivedRooms.removeWhere((r) => r.room.id == mid);
     }
-    // Also remove the space room.
-    if (_spaceId != null) {
-      try { await client.database.forgetRoom(_spaceId!); } catch (_) {}
-      client.rooms.removeWhere((r) => r.id == _spaceId);
-      _spaceId = null;
+    // Also remove all per-account space rooms.
+    for (final sid in _spaceIds.values) {
+      try { await client.database.forgetRoom(sid); } catch (_) {}
+      client.rooms.removeWhere((r) => r.id == sid);
     }
+    _spaceIds.clear();
+    _matrixToAccount.clear();
     _waToMatrix.clear();
     _matrixToWa.clear();
     _pendingMediaEvents.clear();
@@ -615,6 +656,38 @@ class WaMatrixBridge {
       await TjenaBridge.instance.clearPersistedRooms();
     } catch (e) {
       Logs().w('[WaBridge] clearPersistedRooms failed: $e');
+    }
+  }
+
+  /// Clean slate for one account: forget its rooms + clear its history cache.
+  /// WhatsApp itself is untouched. Used by the link screen's "start fresh" box.
+  Future<void> clearAccountData(Client client, String accountId) async {
+    // Forget this account's rooms.
+    final mids = _matrixToAccount.entries
+        .where((e) => e.value == accountId)
+        .map((e) => e.key)
+        .toList();
+    for (final mid in mids) {
+      final jid = _matrixToWa[mid];
+      try { await client.database.forgetRoom(mid); } catch (_) {}
+      client.rooms.removeWhere((r) => r.id == mid);
+      client.archivedRooms.removeWhere((r) => r.room.id == mid);
+      _matrixToWa.remove(mid);
+      _matrixToAccount.remove(mid);
+      if (jid != null) _waToMatrix.remove(_key(accountId, jid));
+    }
+    // Remove this account's space room.
+    final sid = _spaceIds.remove(accountId);
+    if (sid != null) {
+      try { await client.database.forgetRoom(sid); } catch (_) {}
+      client.rooms.removeWhere((r) => r.id == sid);
+    }
+    await _saveRoomMappings();
+    // Wipe the Go-side history cache for this account.
+    try {
+      await TjenaBridge.instance.clearCache(accountID: accountId);
+    } catch (e) {
+      Logs().w('[WaBridge] clearCache failed: $e');
     }
   }
 
@@ -629,18 +702,21 @@ class WaMatrixBridge {
   }
 
   void _onBridgeEventInner(BridgeEvent evt) {
+    // Every WA event is tagged with the account it came from (default "default").
+    final acc = evt.data['account_id'] as String? ?? _defaultAccount;
     switch (evt.type) {
       case BridgeEventType.state:
         final phone = evt.data['phone'] as String? ?? '';
         final connected = evt.data['connected'] as bool? ?? false;
-        if (connected && phone.isNotEmpty && phone != _connectedPhone) {
-          _connectedPhone = phone;
-          _initSpace(phone);
+        if (connected && phone.isNotEmpty && _connectedPhones[acc] != phone) {
+          _connectedPhones[acc] = phone;
+          _initSpace(acc, phone);
         }
 
       case BridgeEventType.roomCreated:
         final data = evt.data['room'] as Map<String, dynamic>;
         _ensureRoom(
+          acc,
           data['id'] as String,
           data['name'] as String? ?? '',
           isDM: data['is_dm'] as bool? ?? true,
@@ -648,52 +724,38 @@ class WaMatrixBridge {
 
       case BridgeEventType.roomUpdated:
         // room_updated only refreshes existing rooms — never creates new ones.
-        // (Creating from room_updated would cause spurious DM rooms for every
-        // group-chat member whose PushName event fires.)
         final waId = evt.data['room_id'] as String? ?? '';
         final name = evt.data['name'] as String? ?? '';
         final avatarUrl = evt.data['avatar_url'] as String? ?? '';
-        if (name.isNotEmpty && _looksLikeName(name) && _waToMatrix.containsKey(waId)) {
-          _pushNameUpdate(waId, name);
+        final has = _waToMatrix.containsKey(_key(acc, waId));
+        if (name.isNotEmpty && _looksLikeName(name) && has) {
+          _pushNameUpdate(acc, waId, name);
         }
-        if (avatarUrl.isNotEmpty && _waToMatrix.containsKey(waId)) {
-          _pushAvatarUpdate(waId, avatarUrl);
+        if (avatarUrl.isNotEmpty && has) {
+          _pushAvatarUpdate(acc, waId, avatarUrl);
         }
 
       case BridgeEventType.message:
         final waRoomId = evt.data['room_id'] as String? ?? '';
         final eventData = evt.data['event'] as Map<String, dynamic>;
         final isBackfill = eventData['is_backfill'] as bool? ?? false;
-        final isNewRoom = !_waToMatrix.containsKey(waRoomId);
+        final isNewRoom = !_waToMatrix.containsKey(_key(acc, waRoomId));
         if (isNewRoom) {
           final isGroup = waRoomId.endsWith('@g.us');
           final senderName = eventData['sender_name'] as String?;
-          // chat_phone is the resolved phone number (LID chats resolve LID→PN in
-          // Go), a far friendlier fallback than the raw LID ident number.
           final chatPhone = eventData['chat_phone'] as String?;
-          // Only seed a DM room with the sender's push name — for a group the
-          // sender is a member, not the room, so naming the group after them is
-          // wrong. Groups get a temporary name until room_updated delivers the
-          // real group name (via Go GetGroupInfo).
           final fallbackName = (!isGroup && senderName?.isNotEmpty == true)
               ? senderName!
               : (chatPhone?.isNotEmpty == true
                   ? chatPhone!
                   : waRoomId.split('@').first);
-          _ensureRoom(
-            waRoomId,
-            fallbackName,
-            isDM: !isGroup,
-          );
+          _ensureRoom(acc, waRoomId, fallbackName, isDM: !isGroup);
         }
-        _pushMessage(waRoomId, eventData);
-        // A brand-new chat surfaced by a *live* message (silent link mode, or a
-        // chat that appeared after linking): pull its recent history from the
-        // cache so it doesn't start empty. Skipped for backfilled messages to
-        // avoid re-entrancy.
+        _pushMessage(acc, waRoomId, eventData);
         if (isNewRoom && !isBackfill && _defaultBackfillDays > 0) {
           // ignore: unawaited_futures
-          TjenaBridge.instance.backfillFromCache(waRoomId, _defaultBackfillDays);
+          TjenaBridge.instance.backfillFromCache(
+              waRoomId, _defaultBackfillDays, accountID: acc);
         }
 
       case BridgeEventType.backfill:
@@ -701,7 +763,7 @@ class WaMatrixBridge {
         final events =
             (evt.data['events'] as List?)?.cast<Map<String, dynamic>>() ?? [];
         for (final e in events) {
-          _pushMessage(waRoomId, e);
+          _pushMessage(acc, waRoomId, e);
         }
 
       case BridgeEventType.mediaReady:
@@ -710,21 +772,19 @@ class WaMatrixBridge {
         final filePath = evt.data['file_path'] as String? ?? '';
         final mimetype = evt.data['mimetype'] as String? ?? 'application/octet-stream';
         final size = (evt.data['size'] as num?)?.toInt() ?? 0;
-        Logs().d('[WaBridge] media_ready: room=$waRoomId ev=$eventId fp=$filePath size=$size knownRoom=${_waToMatrix.containsKey(waRoomId)}');
-        if (filePath.isNotEmpty && eventId.isNotEmpty && _waToMatrix.containsKey(waRoomId)) {
-          _pushMediaReady(waRoomId, eventId, filePath, mimetype, size, evt.data);
-        } else {
-          Logs().w('[WaBridge] media_ready SKIPPED: fp.empty=${filePath.isEmpty} ev.empty=${eventId.isEmpty} noRoom=${!_waToMatrix.containsKey(waRoomId)}');
+        if (filePath.isNotEmpty && eventId.isNotEmpty &&
+            _waToMatrix.containsKey(_key(acc, waRoomId))) {
+          _pushMediaReady(acc, waRoomId, eventId, filePath, mimetype, size, evt.data);
         }
 
       case BridgeEventType.reaction:
-        _pushReaction(evt.data);
+        _pushReaction(acc, evt.data);
 
       case BridgeEventType.typing:
-        _pushTyping(evt.data);
+        _pushTyping(acc, evt.data);
 
       case BridgeEventType.receipt:
-        _pushReceipt(evt.data);
+        _pushReceipt(acc, evt.data);
 
       default:
         break;
@@ -733,17 +793,17 @@ class WaMatrixBridge {
 
   // ── Space management ──────────────────────────────────────────────────────────
 
-  void _initSpace(String phone) {
+  void _initSpace(String accountId, String phone) {
     final client = _client;
     if (client?.userID == null) return;
     final name = 'WA-local ($phone)';
+    final spaceRoomId = _spaceRoomIdFor(accountId);
 
-    if (_spaceId != null) {
-      // Space already exists — just update the name.
-      _pushNameUpdate(_spaceId!, name, isSpace: true);
+    if (_spaceIds[accountId] != null) {
+      _pushNameUpdate(accountId, spaceRoomId, name, isSpace: true);
       return;
     }
-    _spaceId = _spaceRoomId;
+    _spaceIds[accountId] = spaceRoomId;
     final myUserId = client!.userID!;
     final now = DateTime.now();
 
@@ -751,7 +811,7 @@ class WaMatrixBridge {
     _inject(SyncUpdate(
       nextBatch: client.prevBatch ?? '',
       rooms: RoomsUpdate(join: {
-        _spaceRoomId: JoinedRoomUpdate(
+        spaceRoomId: JoinedRoomUpdate(
           state: [
             MatrixEvent(
               type: EventTypes.RoomCreate,
@@ -761,7 +821,7 @@ class WaMatrixBridge {
                 'type': 'm.space',
               },
               senderId: myUserId,
-              eventId: '\$wa_space_create',
+              eventId: '\$wa_space_create_$accountId',
               originServerTs: now,
               stateKey: '',
             ),
@@ -769,7 +829,7 @@ class WaMatrixBridge {
               type: EventTypes.RoomName,
               content: {'name': name},
               senderId: myUserId,
-              eventId: '\$wa_space_name',
+              eventId: '\$wa_space_name_$accountId',
               originServerTs: now,
               stateKey: '',
             ),
@@ -777,21 +837,24 @@ class WaMatrixBridge {
               type: EventTypes.RoomMember,
               content: {'membership': 'join'},
               senderId: myUserId,
-              eventId: '\$wa_space_member',
+              eventId: '\$wa_space_member_$accountId',
               originServerTs: now,
               stateKey: myUserId,
             ),
-            // Add all existing WA rooms as children.
-            ..._waToMatrix.values.map(
-              (mid) => MatrixEvent(
-                type: 'm.space.child',
-                content: {'via': ['local']},
-                senderId: myUserId,
-                eventId: '\$wa_spacechild_${_safe(mid)}',
-                originServerTs: now,
-                stateKey: mid,
-              ),
-            ),
+            // Add this account's existing rooms as children.
+            ...(_matrixToAccount.entries
+                .where((e) => e.value == accountId)
+                .map((e) => e.key)
+                .map(
+                  (mid) => MatrixEvent(
+                    type: 'm.space.child',
+                    content: {'via': ['local']},
+                    senderId: myUserId,
+                    eventId: '\$wa_spacechild_${_safe(mid)}',
+                    originServerTs: now,
+                    stateKey: mid,
+                  ),
+                )),
           ],
           timeline: TimelineUpdate(events: [], limited: false),
         ),
@@ -799,8 +862,8 @@ class WaMatrixBridge {
     ));
   }
 
-  void _addRoomToSpace(String matrixRoomId) {
-    final spaceId = _spaceId;
+  void _addRoomToSpace(String accountId, String matrixRoomId) {
+    final spaceId = _spaceIds[accountId];
     final client = _client;
     if (spaceId == null || client?.userID == null) return;
     final ts = DateTime.now();
@@ -833,39 +896,41 @@ class WaMatrixBridge {
   static bool _looksLikeName(String s) =>
       s.contains(RegExp(r'[A-Za-zÀ-žЀ-ӿ؀-ۿ]'));
 
-  void _ensureRoom(String waId, String name, {required bool isDM}) {
-    if (_waToMatrix.containsKey(waId)) {
-      // Only overwrite the stored name when the incoming name looks like a
-      // real contact name.  On restart the contacts DB is often empty, so
-      // ensureRoom arrives with a bare phone number; we must not clobber the
-      // good name that was persisted from the previous session.
-      if (name.isNotEmpty && _looksLikeName(name)) _pushNameUpdate(waId, name);
+  void _ensureRoom(String accountId, String waId, String name,
+      {required bool isDM}) {
+    final mapKey = _key(accountId, waId);
+    if (_waToMatrix.containsKey(mapKey)) {
+      if (name.isNotEmpty && _looksLikeName(name)) {
+        _pushNameUpdate(accountId, waId, name);
+      }
       return;
     }
-    final matrixId = _toMatrixId(waId);
-    // Safety: if the room already exists in the SDK's room list (e.g. init
-    // missed it because the bridge state event wasn't loaded), register the
-    // mapping without re-creating the room — that would re-inject a member
-    // event and show a spurious "joined" indicator in the UI.
+    final matrixId = _toMatrixId(accountId, waId);
+    // Safety: room already exists in the SDK (init missed it) — register mapping
+    // without re-creating (would re-inject a member event / "joined" indicator).
     if (_client?.getRoomById(matrixId) != null) {
-      _waToMatrix[waId] = matrixId;
+      _waToMatrix[mapKey] = matrixId;
       _matrixToWa[matrixId] = waId;
-      if (name.isNotEmpty && _looksLikeName(name)) _pushNameUpdate(waId, name);
+      _matrixToAccount[matrixId] = accountId;
+      if (name.isNotEmpty && _looksLikeName(name)) {
+        _pushNameUpdate(accountId, waId, name);
+      }
       return;
     }
-    _waToMatrix[waId] = matrixId;
+    _waToMatrix[mapKey] = matrixId;
     _matrixToWa[matrixId] = waId;
-    // Persist so the mapping survives the next process restart.
+    _matrixToAccount[matrixId] = accountId;
     // ignore: unawaited_futures
     _saveRoomMappings();
-    _createRoom(matrixId, waId, name, isDM);
-    if (_spaceId == null && _connectedPhone != null) {
-      _initSpace(_connectedPhone!);
+    _createRoom(accountId, matrixId, waId, name, isDM);
+    if (_spaceIds[accountId] == null && _connectedPhones[accountId] != null) {
+      _initSpace(accountId, _connectedPhones[accountId]!);
     }
-    _addRoomToSpace(matrixId);
+    _addRoomToSpace(accountId, matrixId);
   }
 
-  void _createRoom(String matrixId, String waId, String name, bool isDM) {
+  void _createRoom(
+      String accountId, String matrixId, String waId, String name, bool isDM) {
     final client = _client;
     if (client?.userID == null) return;
     final myUserId = client!.userID!;
@@ -905,7 +970,11 @@ class WaMatrixBridge {
             ),
             MatrixEvent(
               type: _bridgeStateType,
-              content: {'wa_room_id': waId, 'is_dm': isDM},
+              content: {
+                'wa_room_id': waId,
+                'is_dm': isDM,
+                'account_id': accountId,
+              },
               senderId: myUserId,
               eventId: '\$wabridge_$sid',
               originServerTs: now,
@@ -918,8 +987,10 @@ class WaMatrixBridge {
     ));
   }
 
-  void _pushNameUpdate(String waIdOrSpaceId, String name, {bool isSpace = false}) {
-    final matrixId = isSpace ? waIdOrSpaceId : _waToMatrix[waIdOrSpaceId];
+  void _pushNameUpdate(String accountId, String waIdOrSpaceId, String name,
+      {bool isSpace = false}) {
+    final matrixId =
+        isSpace ? waIdOrSpaceId : _waToMatrix[_key(accountId, waIdOrSpaceId)];
     final client = _client;
     if (matrixId == null || client?.userID == null) return;
     final ts = DateTime.now().millisecondsSinceEpoch;
@@ -943,8 +1014,9 @@ class WaMatrixBridge {
     ));
   }
 
-  Future<void> _pushAvatarUpdate(String waId, String avatarHttpUrl) async {
-    final matrixId = _waToMatrix[waId];
+  Future<void> _pushAvatarUpdate(
+      String accountId, String waId, String avatarHttpUrl) async {
+    final matrixId = _waToMatrix[_key(accountId, waId)];
     final client = _client;
     if (matrixId == null || client?.userID == null) return;
     try {
@@ -999,11 +1071,12 @@ class WaMatrixBridge {
     return _injectChain;
   }
 
-  void _pushMessage(String waRoomId, Map<String, dynamic> eventData) {
-    final matrixId = _waToMatrix[waRoomId];
+  void _pushMessage(
+      String accountId, String waRoomId, Map<String, dynamic> eventData) {
+    final matrixId = _waToMatrix[_key(accountId, waRoomId)];
     final client = _client;
     if (matrixId == null || client?.userID == null) {
-      Logs().w('[WaBridge] _pushMessage EARLY RETURN: waRoomId=$waRoomId matrixId=$matrixId');
+      Logs().w('[WaBridge] _pushMessage EARLY RETURN: acc=$accountId waRoomId=$waRoomId matrixId=$matrixId');
       return;
     }
     final myUserId = client!.userID!;
@@ -1144,6 +1217,7 @@ class WaMatrixBridge {
   }
 
   Future<void> _pushMediaReady(
+    String accountId,
     String waRoomId,
     String eventId,
     String filePath,
@@ -1153,7 +1227,7 @@ class WaMatrixBridge {
   ) async {
     // Use event data embedded in the payload (primary), fall back to pending map.
     final pending = _pendingMediaEvents.remove(eventId);
-    final matrixId = _waToMatrix[waRoomId];
+    final matrixId = _waToMatrix[_key(accountId, waRoomId)];
     final client = _client;
     if (matrixId == null || client?.userID == null) {
       Logs().w('[WaBridge] _pushMediaReady ABORT: matrixId=$matrixId userID=${client?.userID}');
@@ -1231,9 +1305,9 @@ class WaMatrixBridge {
     }
   }
 
-  void _pushReaction(Map<String, dynamic> data) {
+  void _pushReaction(String accountId, Map<String, dynamic> data) {
     final waRoomId = data['room_id'] as String? ?? '';
-    final matrixId = _waToMatrix[waRoomId];
+    final matrixId = _waToMatrix[_key(accountId, waRoomId)];
     final client = _client;
     if (matrixId == null || client == null || client.userID == null) return;
 
@@ -1242,7 +1316,7 @@ class WaMatrixBridge {
     final rawSender = data['sender'] as String? ?? '@wa_unknown:local';
     final targetId = data['target_id'] as String? ?? '';
     final emoji = data['emoji'] as String? ?? '';
-    final isOwn = rawSender.contains(_connectedPhone ?? '__none__');
+    final isOwn = rawSender.contains(_connectedPhones[accountId] ?? '__none__');
 
     // ignore: unawaited_futures
     client.handleSync(SyncUpdate(
@@ -1273,9 +1347,9 @@ class WaMatrixBridge {
     ));
   }
 
-  void _pushTyping(Map<String, dynamic> data) {
+  void _pushTyping(String accountId, Map<String, dynamic> data) {
     final waRoomId = data['room_id'] as String? ?? '';
-    final matrixId = _waToMatrix[waRoomId];
+    final matrixId = _waToMatrix[_key(accountId, waRoomId)];
     final client = _client;
     if (matrixId == null) return;
 
@@ -1300,9 +1374,9 @@ class WaMatrixBridge {
     ));
   }
 
-  void _pushReceipt(Map<String, dynamic> data) {
+  void _pushReceipt(String accountId, Map<String, dynamic> data) {
     final waRoomId = data['room_id'] as String? ?? '';
-    final matrixId = _waToMatrix[waRoomId];
+    final matrixId = _waToMatrix[_key(accountId, waRoomId)];
     final client = _client;
     if (matrixId == null) return;
 

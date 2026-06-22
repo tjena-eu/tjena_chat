@@ -1,276 +1,389 @@
 // Package ffi is the gomobile-bound entry point for the tjena bridge.
 // Only gomobile-safe types are used here: primitives, string, []byte, error,
 // exported struct pointers, and exported interfaces.
+//
+// Multi-account: WhatsApp runs one core.Bridge per account. The "default"
+// account uses the root data dir (preserving pre-multi-account installs); extra
+// accounts live in dataDir/acc_<id>/. Every event is tagged with "account_id"
+// so the Dart side can namespace rooms/ghosts per account. Signal remains a
+// single account at dataDir/signal.
 package ffi
 
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
 	"sync"
+	"time"
 
 	"tjena.eu/tjena-bridge/internal/core"
 	"tjena.eu/tjena-bridge/internal/emitter"
 	signalpkg "tjena.eu/tjena-bridge/internal/signal"
 )
 
+const defaultAccountID = "default"
+
 // EventListener receives JSON-encoded events from the Go bridge.
-// The single method OnEvent is called from a Go goroutine;
-// implementations must be goroutine-safe.
-// The Kotlin implementation forwards events to Flutter's EventChannel.
+// OnEvent is called from Go goroutines; implementations must be goroutine-safe.
 type EventListener interface {
 	OnEvent(payload string)
 }
 
-// Bridge is the main entry point exposed to the Flutter plugin via gomobile.
-// Create with New; call SetListener before Start.
+// account is one WhatsApp login: its own core.Bridge, data dir and emitter.
+type account struct {
+	id   string
+	dir  string
+	core *core.Bridge
+	em   *emitter.Emitter
+}
+
+// Bridge is the gomobile entry point. Create with New; call SetListener before Start.
 type Bridge struct {
 	mu        sync.Mutex
-	em        *emitter.Emitter
-	core      *core.Bridge
+	listener  EventListener
+	em        *emitter.Emitter // untagged: signal + ffi-level events
+	accounts  map[string]*account
+	order     []string
 	signal    *signalpkg.Bridge
-	startErr  string // last Start() error message; non-empty means start failed
-	signalErr string // last signal Start() error message
+	signalErr string
 	dataDir   string
 }
 
 // New allocates a Bridge for the given data directory.
-// The directory will be created if it does not exist.
 func New(dataDir string) *Bridge {
 	return &Bridge{
-		em:      emitter.New(),
-		dataDir: dataDir,
+		em:       emitter.New(),
+		accounts: map[string]*account{},
+		dataDir:  dataDir,
 	}
 }
 
-// SetListener wires a Kotlin/Swift EventListener to the Go event emitter.
-// Call before Start; may be called again after hot-restart.
+// SetListener wires the Kotlin/Swift listener. Tags per-account events with the
+// account id; signal/ffi-level events go through untagged.
 func (b *Bridge) SetListener(l EventListener) {
+	b.mu.Lock()
+	b.listener = l
 	b.em.SetListener(listenerAdapter{l})
+	for _, a := range b.accounts {
+		a.em.SetListener(tagListener{a.id, l})
+	}
+	b.mu.Unlock()
 }
 
-// Start opens stores and connects WhatsApp. Idempotent.
+func (b *Bridge) accountDir(id string) string {
+	if id == defaultAccountID {
+		return b.dataDir
+	}
+	return filepath.Join(b.dataDir, id)
+}
+
+// startAccountLocked creates and starts a core.Bridge for id. Caller holds mu.
+func (b *Bridge) startAccountLocked(id string) (*account, error) {
+	if a, ok := b.accounts[id]; ok {
+		return a, nil
+	}
+	dir := b.accountDir(id)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, err
+	}
+	em := emitter.New()
+	if b.listener != nil {
+		em.SetListener(tagListener{id, b.listener})
+	}
+	c, err := core.New(dir, em)
+	if err != nil {
+		return nil, err
+	}
+	if err := c.Start(context.Background()); err != nil {
+		return nil, err
+	}
+	a := &account{id: id, dir: dir, core: c, em: em}
+	b.accounts[id] = a
+	return a, nil
+}
+
+// Start discovers and starts all accounts ("default" + acc_* dirs) and Signal.
 func (b *Bridge) Start() error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if b.core != nil {
-		return nil // already started
-	}
-	br, err := core.New(b.dataDir, b.em)
-	if err != nil {
-		b.startErr = err.Error()
-		return err
-	}
-	if err := br.Start(context.Background()); err != nil {
-		b.startErr = err.Error()
-		return err
-	}
-	b.core = br
-	b.startErr = ""
 
-	// Start the Signal bridge too, sharing the same event emitter. Failure here
-	// is non-fatal: WhatsApp must keep working even if Signal can't start.
+	ids := []string{defaultAccountID}
+	if entries, err := os.ReadDir(b.dataDir); err == nil {
+		for _, e := range entries {
+			if e.IsDir() && strings.HasPrefix(e.Name(), "acc_") {
+				ids = append(ids, e.Name())
+			}
+		}
+	}
+	sort.Strings(ids)
+	b.order = ids
+	for _, id := range ids {
+		if _, err := b.startAccountLocked(id); err != nil {
+			b.em.Emit(map[string]any{
+				"type": "account_error", "account_id": id, "error": err.Error(),
+			})
+		}
+	}
+
+	// Signal (single account) at <dataDir>/signal.
 	if b.signal == nil {
 		sb, serr := signalpkg.New(b.dataDir+"/signal", b.em)
+		if serr == nil {
+			serr = sb.Start(context.Background())
+		}
 		if serr != nil {
-			b.signalErr = serr.Error()
-		} else if serr := sb.Start(context.Background()); serr != nil {
 			b.signalErr = serr.Error()
 		} else {
 			b.signal = sb
-			b.signalErr = ""
 		}
 	}
 	return nil
 }
 
-// Stop disconnects and flushes state.
+// Stop disconnects all accounts and Signal.
 func (b *Bridge) Stop() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if b.core != nil {
-		b.core.Stop()
-		b.core = nil
+	for _, a := range b.accounts {
+		a.core.Stop()
 	}
+	b.accounts = map[string]*account{}
 	if b.signal != nil {
 		b.signal.Stop()
 		b.signal = nil
 	}
 }
 
-// GetStateJSON returns {"linked":bool,"connected":bool,"phone":"...","push_name":"..."}.
-func (b *Bridge) GetStateJSON() string {
+// --- Account management ---
+
+// AddAccount creates a new (unlinked) WhatsApp account and returns its id. Link
+// it afterwards with RequestQRLink(id).
+func (b *Bridge) AddAccount() string {
 	b.mu.Lock()
-	c := b.core
+	defer b.mu.Unlock()
+	id := fmt.Sprintf("acc_%d", time.Now().UnixNano())
+	if _, err := b.startAccountLocked(id); err != nil {
+		b.em.Emit(map[string]any{"type": "account_error", "account_id": id, "error": err.Error()})
+		return ""
+	}
+	b.order = append(b.order, id)
+	return id
+}
+
+// RemoveAccount logs out, stops and (for non-default accounts) deletes an account.
+func (b *Bridge) RemoveAccount(accountID string) error {
+	b.mu.Lock()
+	a := b.accounts[accountID]
+	delete(b.accounts, accountID)
+	for i, id := range b.order {
+		if id == accountID {
+			b.order = append(b.order[:i], b.order[i+1:]...)
+			break
+		}
+	}
 	b.mu.Unlock()
+	if a != nil {
+		_ = a.core.Logout()
+		a.core.Stop()
+	}
+	if accountID != defaultAccountID {
+		_ = os.RemoveAll(b.accountDir(accountID))
+	}
+	return nil
+}
+
+// ListAccountsJSON returns [{"id","linked","connected","phone","push_name"}].
+func (b *Bridge) ListAccountsJSON() string {
+	b.mu.Lock()
+	ids := append([]string{}, b.order...)
+	accs := make(map[string]*account, len(b.accounts))
+	for k, v := range b.accounts {
+		accs[k] = v
+	}
+	b.mu.Unlock()
+
+	var sb strings.Builder
+	sb.WriteByte('[')
+	first := true
+	for _, id := range ids {
+		a := accs[id]
+		if a == nil {
+			continue
+		}
+		st := a.core.GetStateJSON() // {"linked":...}
+		if !strings.HasPrefix(st, "{") {
+			continue
+		}
+		if !first {
+			sb.WriteByte(',')
+		}
+		first = false
+		sb.WriteString(`{"id":"` + id + `",` + st[1:])
+	}
+	sb.WriteByte(']')
+	return sb.String()
+}
+
+func (b *Bridge) coreOf(accountID string) *core.Bridge {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if a := b.accounts[accountID]; a != nil {
+		return a.core
+	}
+	return nil
+}
+
+func (b *Bridge) withAccount(accountID string, fn func(*core.Bridge) error) error {
+	c := b.coreOf(accountID)
+	if c == nil {
+		return fmt.Errorf("account %q not started", accountID)
+	}
+	return fn(c)
+}
+
+// --- WhatsApp (per account) ---
+
+func (b *Bridge) GetStateJSON(accountID string) string {
+	c := b.coreOf(accountID)
 	if c == nil {
 		return `{"linked":false,"connected":false,"phone":"","push_name":""}`
 	}
 	return c.GetStateJSON()
 }
 
-// RequestQRLink starts async QR linking.
-// QR PNG frames arrive as {"type":"qr","data":"<base64>"} events.
-func (b *Bridge) RequestQRLink() error {
-	return b.withCore(func(c *core.Bridge) error { return c.RequestQRLink() })
+func (b *Bridge) RequestQRLink(accountID string) error {
+	return b.withAccount(accountID, func(c *core.Bridge) error { return c.RequestQRLink() })
 }
 
-// RequestPhoneLink requests a pairing code.
-// The code arrives as {"type":"phone_code","code":"xxx-xxx"}.
-func (b *Bridge) RequestPhoneLink(phone string) error {
-	return b.withCore(func(c *core.Bridge) error { return c.RequestPhoneLink(phone) })
+func (b *Bridge) RequestPhoneLink(accountID, phone string) error {
+	return b.withAccount(accountID, func(c *core.Bridge) error { return c.RequestPhoneLink(phone) })
 }
 
-// ConfirmPhoneLink is a no-op — pairing completes automatically.
-func (b *Bridge) ConfirmPhoneLink(code string) error { return nil }
-
-// SendText sends a text message to a portal.
-func (b *Bridge) SendText(portalID, msgID, text string) error {
-	return b.withCore(func(c *core.Bridge) error { return c.SendText(portalID, msgID, text) })
+func (b *Bridge) SendText(accountID, portalID, msgID, text string) error {
+	return b.withAccount(accountID, func(c *core.Bridge) error { return c.SendText(portalID, msgID, text) })
 }
 
-// SendMedia uploads and sends a file/image/video/audio through WhatsApp.
-// mimeType determines the WA message type (image/*, video/*, audio/*, other→document).
-func (b *Bridge) SendMedia(portalID, msgID, mimeType string, data []byte) error {
-	return b.withCore(func(c *core.Bridge) error {
+func (b *Bridge) SendMedia(accountID, portalID, msgID, mimeType string, data []byte) error {
+	return b.withAccount(accountID, func(c *core.Bridge) error {
 		return c.SendMedia(portalID, msgID, mimeType, data)
 	})
 }
 
-// SendLocation sends a location message through WhatsApp.
-func (b *Bridge) SendLocation(portalID string, lat, lon float64) error {
-	return b.withCore(func(c *core.Bridge) error { return c.SendLocation(portalID, lat, lon) })
+func (b *Bridge) SendLocation(accountID, portalID string, lat, lon float64) error {
+	return b.withAccount(accountID, func(c *core.Bridge) error { return c.SendLocation(portalID, lat, lon) })
 }
 
-// SendReaction sends an emoji reaction.
-func (b *Bridge) SendReaction(portalID, targetEventID, emoji string) error {
-	return b.withCore(func(c *core.Bridge) error {
+func (b *Bridge) SendReaction(accountID, portalID, targetEventID, emoji string) error {
+	return b.withAccount(accountID, func(c *core.Bridge) error {
 		return c.SendReaction(portalID, targetEventID, emoji)
 	})
 }
 
-// SendRedaction retracts a message.
-func (b *Bridge) SendRedaction(portalID, targetEventID string) error {
-	return b.withCore(func(c *core.Bridge) error {
+func (b *Bridge) SendRedaction(accountID, portalID, targetEventID string) error {
+	return b.withAccount(accountID, func(c *core.Bridge) error {
 		return c.SendRedaction(portalID, targetEventID)
 	})
 }
 
-// MarkRead sends a read marker.
-func (b *Bridge) MarkRead(portalID, eventID string) error {
-	return b.withCore(func(c *core.Bridge) error { return c.MarkRead(portalID, eventID) })
+func (b *Bridge) MarkRead(accountID, portalID, eventID string) error {
+	return b.withAccount(accountID, func(c *core.Bridge) error { return c.MarkRead(portalID, eventID) })
 }
 
-// SetTyping sends a typing presence update.
-func (b *Bridge) SetTyping(portalID string, typing bool) error {
-	return b.withCore(func(c *core.Bridge) error { return c.SetTyping(portalID, typing) })
+func (b *Bridge) SetTyping(accountID, portalID string, typing bool) error {
+	return b.withAccount(accountID, func(c *core.Bridge) error { return c.SetTyping(portalID, typing) })
 }
 
-// Logout unlinks the WhatsApp account.
-func (b *Bridge) Logout() error {
-	return b.withCore(func(c *core.Bridge) error { return c.Logout() })
+func (b *Bridge) Logout(accountID string) error {
+	return b.withAccount(accountID, func(c *core.Bridge) error { return c.Logout() })
 }
 
-// ForceReset wipes local device credentials and prepares for fresh linking.
-// Use when the device store has stale credentials that block re-linking.
-func (b *Bridge) ForceReset() error {
-	return b.withCore(func(c *core.Bridge) error { return c.ForceReset() })
+func (b *Bridge) ForceReset(accountID string) error {
+	return b.withAccount(accountID, func(c *core.Bridge) error { return c.ForceReset() })
 }
 
-// RefreshRoom re-fetches the name and profile picture for a room (JID string
-// like "15551234567@s.whatsapp.net") and emits a room_updated event.
-func (b *Bridge) RefreshRoom(roomID string) error {
-	return b.withCore(func(c *core.Bridge) error { return c.RefreshRoom(roomID) })
+func (b *Bridge) RefreshRoom(accountID, roomID string) error {
+	return b.withAccount(accountID, func(c *core.Bridge) error { return c.RefreshRoom(roomID) })
 }
 
-// RequestBackfill pulls on-demand message history for a chat (roomID is the WA
-// JID) going back `days` days. Messages arrive as backfill `message` events.
-// The anchor (oldest message the client has) is supplied by the caller since the
-// Go bridge keeps no message history of its own.
-func (b *Bridge) RequestBackfill(roomID string, days int, anchorMsgID string, anchorFromMe bool, anchorTS int64) error {
-	return b.withCore(func(c *core.Bridge) error {
+func (b *Bridge) RequestBackfill(accountID, roomID string, days int, anchorMsgID string, anchorFromMe bool, anchorTS int64) error {
+	return b.withAccount(accountID, func(c *core.Bridge) error {
 		return c.RequestBackfill(roomID, days, anchorMsgID, anchorFromMe, anchorTS)
 	})
 }
 
-// ListChatsJSON returns a JSON array of all known WhatsApp chats (contacts +
-// groups) for the chat-picker UI. Returns "[]" if the bridge isn't connected.
-func (b *Bridge) ListChatsJSON() string {
-	b.mu.Lock()
-	c := b.core
-	b.mu.Unlock()
+func (b *Bridge) BackfillFromCache(accountID, roomID string, days int) error {
+	return b.withAccount(accountID, func(c *core.Bridge) error {
+		return c.BackfillFromCache(roomID, days)
+	})
+}
+
+// ClearCache wipes an account's cached WhatsApp history (not WhatsApp itself).
+func (b *Bridge) ClearCache(accountID string) error {
+	return b.withAccount(accountID, func(c *core.Bridge) error { return c.ClearCache() })
+}
+
+func (b *Bridge) ListChatsJSON(accountID string) string {
+	c := b.coreOf(accountID)
 	if c == nil {
 		return "[]"
 	}
 	return c.ListChatsJSON()
 }
 
-// ListCachedChatsJSON returns all chats from the local history cache as JSON
-// (newest activity first), for the picker. Available even without a live
-// connection since it reads the database.
-func (b *Bridge) ListCachedChatsJSON() string {
-	b.mu.Lock()
-	c := b.core
-	b.mu.Unlock()
+func (b *Bridge) ListCachedChatsJSON(accountID string) string {
+	c := b.coreOf(accountID)
 	if c == nil {
 		return "[]"
 	}
 	return c.ListCachedChatsJSON()
 }
 
-// BackfillFromCache emits cached messages for a chat (last `days` days) as
-// backfill events so the Dart side can populate the room.
-func (b *Bridge) BackfillFromCache(roomID string, days int) error {
-	return b.withCore(func(c *core.Bridge) error {
-		return c.BackfillFromCache(roomID, days)
-	})
-}
-
-// GetChatAvatarURL returns the https URL of a chat's profile picture, or "".
-func (b *Bridge) GetChatAvatarURL(roomID string) string {
-	b.mu.Lock()
-	c := b.core
-	b.mu.Unlock()
+func (b *Bridge) GetChatAvatarURL(accountID, roomID string) string {
+	c := b.coreOf(accountID)
 	if c == nil {
 		return ""
 	}
 	return c.GetChatAvatarURL(roomID)
 }
 
-// GetLogs returns recent bridge log lines (up to 100) as a single string.
-func (b *Bridge) GetLogs() string {
-	b.mu.Lock()
-	c := b.core
-	b.mu.Unlock()
+func (b *Bridge) GetLogs(accountID string) string {
+	c := b.coreOf(accountID)
 	if c == nil {
-		return "(bridge not started)"
+		return "(account not started)"
 	}
 	return c.GetLogs()
 }
 
-// OnForeground notifies the bridge that the app came to the foreground.
+// OnForeground / OnBackground apply to every account.
 func (b *Bridge) OnForeground() {
 	b.mu.Lock()
-	c := b.core
+	accs := make([]*account, 0, len(b.accounts))
+	for _, a := range b.accounts {
+		accs = append(accs, a)
+	}
 	b.mu.Unlock()
-	if c != nil {
-		c.OnForeground()
+	for _, a := range accs {
+		a.core.OnForeground()
 	}
 }
 
-// OnBackground notifies the bridge that the app moved to the background.
 func (b *Bridge) OnBackground() {
 	b.mu.Lock()
-	c := b.core
+	accs := make([]*account, 0, len(b.accounts))
+	for _, a := range b.accounts {
+		accs = append(accs, a)
+	}
 	b.mu.Unlock()
-	if c != nil {
-		c.OnBackground()
+	for _, a := range accs {
+		a.core.OnBackground()
 	}
 }
 
-// --- Signal bridge ---
+// --- Signal bridge (single account) ---
 
-// StartSignal ensures the Signal bridge is started (it normally auto-starts with
-// Start). Idempotent.
 func (b *Bridge) StartSignal() error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -291,7 +404,6 @@ func (b *Bridge) StartSignal() error {
 	return nil
 }
 
-// StopSignal disconnects the Signal bridge.
 func (b *Bridge) StopSignal() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -301,7 +413,6 @@ func (b *Bridge) StopSignal() {
 	}
 }
 
-// GetSignalStateJSON returns {"linked":bool,"connected":bool,"phone":"..."}.
 func (b *Bridge) GetSignalStateJSON() string {
 	b.mu.Lock()
 	s := b.signal
@@ -312,27 +423,22 @@ func (b *Bridge) GetSignalStateJSON() string {
 	return s.GetStateJSON()
 }
 
-// RequestSignalQR starts async provisioning; emits signal_qr events with the URL.
 func (b *Bridge) RequestSignalQR() error {
 	return b.withSignal(func(s *signalpkg.Bridge) error { return s.RequestQRLink() })
 }
 
-// SignalLogout unlinks the Signal account.
 func (b *Bridge) SignalLogout() error {
 	return b.withSignal(func(s *signalpkg.Bridge) error { return s.Logout() })
 }
 
-// SignalManualSync triggers a manual contact/room sync.
 func (b *Bridge) SignalManualSync() error {
 	return b.withSignal(func(s *signalpkg.Bridge) error { return s.ManualSync() })
 }
 
-// SignalSyncRoom re-fetches metadata for a single Signal chat.
 func (b *Bridge) SignalSyncRoom(chatID string) error {
 	return b.withSignal(func(s *signalpkg.Bridge) error { return s.SyncRoom(chatID) })
 }
 
-// ClearSignalRooms wipes the persisted Signal room cache.
 func (b *Bridge) ClearSignalRooms() {
 	b.mu.Lock()
 	s := b.signal
@@ -342,7 +448,6 @@ func (b *Bridge) ClearSignalRooms() {
 	}
 }
 
-// GetSignalLogs returns recent Signal bridge log lines.
 func (b *Bridge) GetSignalLogs() string {
 	b.mu.Lock()
 	s := b.signal
@@ -369,21 +474,24 @@ func (b *Bridge) withSignal(fn func(*signalpkg.Bridge) error) error {
 	return fn(s)
 }
 
-func (b *Bridge) withCore(fn func(*core.Bridge) error) error {
-	b.mu.Lock()
-	c := b.core
-	startErr := b.startErr
-	b.mu.Unlock()
-	if c == nil {
-		if startErr != "" {
-			return fmt.Errorf("bridge start failed: %s", startErr)
-		}
-		return fmt.Errorf("bridge not started")
-	}
-	return fn(c)
-}
-
-// listenerAdapter bridges EventListener to emitter.Listener.
+// listenerAdapter bridges EventListener to emitter.Listener (untagged).
 type listenerAdapter struct{ l EventListener }
 
 func (a listenerAdapter) OnEvent(payload string) { a.l.OnEvent(payload) }
+
+// tagListener injects "account_id" into each JSON event object before forwarding.
+type tagListener struct {
+	id string
+	l  EventListener
+}
+
+func (t tagListener) OnEvent(payload string) {
+	if strings.HasPrefix(payload, "{") {
+		if payload == "{}" {
+			payload = `{"account_id":"` + t.id + `"}`
+		} else {
+			payload = `{"account_id":"` + t.id + `",` + payload[1:]
+		}
+	}
+	t.l.OnEvent(payload)
+}

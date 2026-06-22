@@ -1155,13 +1155,14 @@ func (b *Bridge) handleWAMessage(evt *waevents.Message) {
 		}
 	}
 
+	senderName := b.senderDisplayName(evt.Info.Sender, evt.Info.PushName)
 	b.emitter.Emit(map[string]any{
 		"type":    "message",
 		"room_id": roomID,
 		"event": map[string]any{
 			"id":          "$wa_" + evt.Info.ID,
 			"sender":      "@wa_" + evt.Info.Sender.User + ":tjena.local",
-			"sender_name": evt.Info.PushName,
+			"sender_name": senderName,
 			"chat_phone":  b.chatPhone(evt.Info.Chat),
 			"ts":          evt.Info.Timestamp.Unix(),
 			"body":        body,
@@ -1179,7 +1180,7 @@ func (b *Bridge) handleWAMessage(evt *waevents.Message) {
 			ChatJID:    roomID,
 			MsgID:      evt.Info.ID,
 			Sender:     "@wa_" + evt.Info.Sender.User + ":tjena.local",
-			SenderName: evt.Info.PushName,
+			SenderName: senderName,
 			TS:         evt.Info.Timestamp.Unix(),
 			Body:       body,
 			MsgType:    msgtype,
@@ -1191,7 +1192,7 @@ func (b *Bridge) handleWAMessage(evt *waevents.Message) {
 	if msgtype != "m.text" {
 		b.downloadMedia(
 			"$wa_"+evt.Info.ID, evt.Info.ID, roomID, msgtype, body,
-			"@wa_"+evt.Info.Sender.User+":tjena.local", evt.Info.PushName,
+			"@wa_"+evt.Info.Sender.User+":tjena.local", senderName,
 			evt.Info.Timestamp.Unix(), isOwn, msg,
 		)
 	}
@@ -1389,6 +1390,43 @@ func (b *Bridge) chatPhone(chat types.JID) string {
 	return chat.User
 }
 
+// senderDisplayName returns the best display name for a message sender: the
+// message's own push name if present, otherwise the contact store (resolving
+// LID→PN first). Returns "" when nothing is known.
+func (b *Bridge) senderDisplayName(sender types.JID, pushName string) string {
+	if pushName != "" {
+		return pushName
+	}
+	b.mu.Lock()
+	client := b.waClient
+	b.mu.Unlock()
+	if client == nil || sender.IsEmpty() {
+		return ""
+	}
+	ctx := context.Background()
+	tryJIDs := []types.JID{sender}
+	if sender.Server == types.HiddenUserServer {
+		if pn, err := client.Store.LIDs.GetPNForLID(ctx, sender); err == nil && !pn.IsEmpty() {
+			tryJIDs = append(tryJIDs, pn)
+		}
+	}
+	for _, j := range tryJIDs {
+		c, err := client.Store.Contacts.GetContact(ctx, j)
+		if err != nil {
+			continue
+		}
+		switch {
+		case c.FullName != "":
+			return c.FullName
+		case c.PushName != "":
+			return c.PushName
+		case c.BusinessName != "":
+			return c.BusinessName
+		}
+	}
+	return ""
+}
+
 // recordOldest remembers the oldest MessageInfo seen for a chat, used as the
 // anchor for on-demand history requests.
 func (b *Bridge) recordOldest(roomID string, info *types.MessageInfo) {
@@ -1462,23 +1500,42 @@ func (b *Bridge) cacheHistoricalMessage(ctx context.Context, roomID string, chat
 	if msgID == "" {
 		return false
 	}
+	// Resolve the sender. In groups the participant identifies who sent it; it
+	// lives on the key or (for history sync) on the WebMessageInfo. Falling back
+	// to chat.User would wrongly attribute every group message to the group id.
 	senderUser := chat.User
-	if p := key.GetParticipant(); p != "" {
-		if pj, perr := types.ParseJID(p); perr == nil {
+	senderJID := chat
+	part := key.GetParticipant()
+	if part == "" {
+		part = wmi.GetParticipant()
+	}
+	if part != "" {
+		if pj, perr := types.ParseJID(part); perr == nil {
 			senderUser = pj.User
+			senderJID = pj
 		}
 	}
 	_ = b.st.CacheMessage(ctx, localmatrix.CachedMessage{
 		ChatJID:    roomID,
 		MsgID:      msgID,
 		Sender:     "@wa_" + senderUser + ":tjena.local",
-		SenderName: wmi.GetPushName(),
+		SenderName: b.senderDisplayName(senderJID, wmi.GetPushName()),
 		TS:         int64(wmi.GetMessageTimestamp()),
 		Body:       body,
 		MsgType:    msgtype,
 		IsOwn:      key.GetFromMe(),
 	}, chatName, isGroup)
 	return true
+}
+
+// ClearCache wipes this account's cached WhatsApp history so a re-link can
+// repopulate it cleanly. Does not touch WhatsApp itself.
+func (b *Bridge) ClearCache() error {
+	if b.st == nil {
+		return nil
+	}
+	b.appendLog("[Bridge] clearing local history cache")
+	return b.st.ClearHistoryCache(context.Background())
 }
 
 // BackfillFromCache emits cached messages for a chat (last `days` days) as

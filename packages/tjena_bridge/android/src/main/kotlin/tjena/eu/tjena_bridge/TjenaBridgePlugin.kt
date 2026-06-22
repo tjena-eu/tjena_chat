@@ -59,6 +59,10 @@ class TjenaBridgePlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamH
 
     // --- MethodChannel.MethodCallHandler ---
 
+    // Account id from the call, defaulting to "default" for legacy callers.
+    private fun acc(call: MethodCall): String =
+        call.argument<String>("accountID") ?: "default"
+
     override fun onMethodCall(call: MethodCall, result: Result) {
         try {
             when (call.method) {
@@ -76,55 +80,59 @@ class TjenaBridgePlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamH
                     bridge?.stop()
                     result.success(null)
                 }
-                "getState" -> result.success(bridge?.getStateJSON() ?: "{}")
-                "requestQRLink" -> { bridge!!.requestQRLink(); result.success(null) }
+                // ---- Account management ----
+                "addAccount" -> result.success(bridge?.addAccount() ?: "")
+                "removeAccount" -> {
+                    bridge!!.removeAccount(acc(call))
+                    result.success(null)
+                }
+                "listAccounts" -> result.success(bridge?.listAccountsJSON() ?: "[]")
+                // ---- WhatsApp (per account; accountID defaults to "default") ----
+                "getState" -> result.success(bridge?.getStateJSON(acc(call)) ?: "{}")
+                "requestQRLink" -> { bridge!!.requestQRLink(acc(call)); result.success(null) }
                 "requestPhoneLink" -> {
                     val phone = call.argument<String>("phone")!!
-                    bridge!!.requestPhoneLink(phone)
+                    bridge!!.requestPhoneLink(acc(call), phone)
                     result.success(null)
                 }
-                "confirmPhoneLink" -> {
-                    val code = call.argument<String>("code")!!
-                    bridge!!.confirmPhoneLink(code)
-                    result.success(null)
-                }
+                "confirmPhoneLink" -> result.success(null)
                 "sendText" -> {
                     val portalID = call.argument<String>("portalID")!!
                     val msgID = call.argument<String>("msgID")!!
                     val text = call.argument<String>("text")!!
-                    bridge!!.sendText(portalID, msgID, text)
+                    bridge!!.sendText(acc(call), portalID, msgID, text)
                     result.success(null)
                 }
                 "sendReaction" -> {
                     val portalID = call.argument<String>("portalID")!!
                     val targetEventID = call.argument<String>("targetEventID")!!
                     val emoji = call.argument<String>("emoji")!!
-                    bridge!!.sendReaction(portalID, targetEventID, emoji)
+                    bridge!!.sendReaction(acc(call), portalID, targetEventID, emoji)
                     result.success(null)
                 }
                 "sendRedaction" -> {
                     val portalID = call.argument<String>("portalID")!!
                     val targetEventID = call.argument<String>("targetEventID")!!
-                    bridge!!.sendRedaction(portalID, targetEventID)
+                    bridge!!.sendRedaction(acc(call), portalID, targetEventID)
                     result.success(null)
                 }
                 "markRead" -> {
                     val portalID = call.argument<String>("portalID")!!
                     val eventID = call.argument<String>("eventID")!!
-                    bridge!!.markRead(portalID, eventID)
+                    bridge!!.markRead(acc(call), portalID, eventID)
                     result.success(null)
                 }
                 "setTyping" -> {
                     val portalID = call.argument<String>("portalID")!!
                     val typing = call.argument<Boolean>("typing") ?: false
-                    bridge!!.setTyping(portalID, typing)
+                    bridge!!.setTyping(acc(call), portalID, typing)
                     result.success(null)
                 }
-                "logout" -> { bridge!!.logout(); result.success(null) }
-                "forceReset" -> { bridge!!.forceReset(); result.success(null) }
+                "logout" -> { bridge!!.logout(acc(call)); result.success(null) }
+                "forceReset" -> { bridge!!.forceReset(acc(call)); result.success(null) }
                 "refreshRoom" -> {
                     val jid = call.argument<String>("jid") ?: ""
-                    bridge?.refreshRoom(jid)
+                    bridge?.refreshRoom(acc(call), jid)
                     result.success(null)
                 }
                 "sendMedia" -> {
@@ -132,14 +140,14 @@ class TjenaBridgePlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamH
                     val msgID = call.argument<String>("msgID") ?: ""
                     val mimeType = call.argument<String>("mimeType") ?: ""
                     val data = call.argument<ByteArray>("data") ?: ByteArray(0)
-                    bridge!!.sendMedia(portalID, msgID, mimeType, data)
+                    bridge!!.sendMedia(acc(call), portalID, msgID, mimeType, data)
                     result.success(null)
                 }
                 "sendLocation" -> {
                     val portalID = call.argument<String>("portalID") ?: ""
                     val lat = call.argument<Double>("lat") ?: 0.0
                     val lon = call.argument<Double>("lon") ?: 0.0
-                    bridge!!.sendLocation(portalID, lat, lon)
+                    bridge!!.sendLocation(acc(call), portalID, lat, lon)
                     result.success(null)
                 }
                 "requestBackfill" -> {
@@ -148,22 +156,26 @@ class TjenaBridgePlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamH
                     val anchorMsgID = call.argument<String>("anchorMsgID") ?: ""
                     val anchorFromMe = call.argument<Boolean>("anchorFromMe") ?: false
                     val anchorTS = (call.argument<Number>("anchorTS") ?: 0).toLong()
-                    bridge!!.requestBackfill(roomID, days.toLong(), anchorMsgID, anchorFromMe, anchorTS)
+                    bridge!!.requestBackfill(acc(call), roomID, days.toLong(), anchorMsgID, anchorFromMe, anchorTS)
                     result.success(null)
                 }
-                "listChats" -> result.success(bridge?.listChatsJSON() ?: "[]")
-                "listCachedChats" -> result.success(bridge?.listCachedChatsJSON() ?: "[]")
+                "listChats" -> result.success(bridge?.listChatsJSON(acc(call)) ?: "[]")
+                "listCachedChats" -> result.success(bridge?.listCachedChatsJSON(acc(call)) ?: "[]")
                 "backfillFromCache" -> {
                     val roomID = call.argument<String>("roomID") ?: ""
                     val days = call.argument<Int>("days") ?: 30
-                    bridge!!.backfillFromCache(roomID, days.toLong())
+                    bridge!!.backfillFromCache(acc(call), roomID, days.toLong())
+                    result.success(null)
+                }
+                "clearCache" -> {
+                    bridge!!.clearCache(acc(call))
                     result.success(null)
                 }
                 "getChatAvatarUrl" -> {
                     val roomID = call.argument<String>("roomID") ?: ""
-                    result.success(bridge?.getChatAvatarURL(roomID) ?: "")
+                    result.success(bridge?.getChatAvatarURL(acc(call), roomID) ?: "")
                 }
-                "getLogs" -> result.success(bridge?.getLogs() ?: "(no bridge)")
+                "getLogs" -> result.success(bridge?.getLogs(acc(call)) ?: "(no bridge)")
                 "onForeground" -> { bridge?.onForeground(); result.success(null) }
                 "onBackground" -> { bridge?.onBackground(); result.success(null) }
                 // ---- stubs: not in current AAR, return safe no-ops ----

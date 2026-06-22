@@ -14,7 +14,9 @@ import '../bridge/bridge_link_screen.dart';
 import 'wa_chat_picker_screen.dart';
 
 class SettingsBridgeLocal extends StatefulWidget {
-  const SettingsBridgeLocal({super.key});
+  /// Which WhatsApp account this page manages ("default" = primary).
+  final String accountId;
+  const SettingsBridgeLocal({this.accountId = 'default', super.key});
 
   @override
   State<SettingsBridgeLocal> createState() => _SettingsBridgeLocalState();
@@ -57,7 +59,7 @@ class _SettingsBridgeLocalState extends State<SettingsBridgeLocal> {
 
   Future<void> _refreshState() async {
     try {
-      final s = await TjenaBridge.instance.getState();
+      final s = await TjenaBridge.instance.getState(accountID: widget.accountId);
       if (mounted) setState(() => _state = s);
       // First time we observe a linked account and the user hasn't chosen how to
       // handle history yet, ask.
@@ -112,7 +114,7 @@ class _SettingsBridgeLocalState extends State<SettingsBridgeLocal> {
       // Give the link-time history sync a moment to populate the cache, then
       // create every cached chat. (Re-running later is safe — it skips existing.)
       Future.delayed(const Duration(seconds: 5), () async {
-        final n = await WaMatrixBridge.instance.syncAllCachedChats(days);
+        final n = await WaMatrixBridge.instance.syncAllCachedChats(days, accountId: widget.accountId);
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(content: Text('Synced $n cached chats')),
@@ -162,7 +164,7 @@ class _SettingsBridgeLocalState extends State<SettingsBridgeLocal> {
 
   Future<void> _openLink() async {
     final linked = await Navigator.of(context).push<bool>(
-      MaterialPageRoute(builder: (_) => const BridgeLinkScreen()),
+      MaterialPageRoute(builder: (_) => BridgeLinkScreen(accountId: widget.accountId)),
     );
     if (linked == true) _refreshState();
   }
@@ -249,7 +251,7 @@ class _SettingsBridgeLocalState extends State<SettingsBridgeLocal> {
     );
     if (ok != true || !mounted) return;
     try {
-      await TjenaBridge.instance.logout();
+      await TjenaBridge.instance.logout(accountID: widget.accountId);
     } catch (_) {}
     _refreshState();
   }
@@ -302,7 +304,7 @@ class _SettingsBridgeLocalState extends State<SettingsBridgeLocal> {
                   onPressed: _state.connected
                       ? () => Navigator.of(context).push(
                             MaterialPageRoute(
-                              builder: (_) => const WaChatPickerScreen(),
+                              builder: (_) => WaChatPickerScreen(accountId: widget.accountId),
                             ),
                           )
                       : null,

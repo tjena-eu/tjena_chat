@@ -12,7 +12,8 @@ enum _SortKey { recent, name }
 /// room created and (optionally) N days of history backfilled; unchecked chats
 /// have their room removed.
 class WaChatPickerScreen extends StatefulWidget {
-  const WaChatPickerScreen({super.key});
+  final String accountId;
+  const WaChatPickerScreen({this.accountId = 'default', super.key});
 
   @override
   State<WaChatPickerScreen> createState() => _WaChatPickerScreenState();
@@ -35,7 +36,7 @@ class _WaChatPickerScreenState extends State<WaChatPickerScreen> {
   Future<String> _avatarUrl(String jid) async {
     final cached = _avatarUrls[jid];
     if (cached != null) return cached;
-    final url = await WaMatrixBridge.instance.chatAvatarUrl(jid);
+    final url = await WaMatrixBridge.instance.chatAvatarUrl(jid, accountId: widget.accountId);
     _avatarUrls[jid] = url;
     return url;
   }
@@ -52,7 +53,7 @@ class _WaChatPickerScreenState extends State<WaChatPickerScreen> {
       _error = null;
     });
     try {
-      final chats = await WaMatrixBridge.instance.listChatsWithStatus();
+      final chats = await WaMatrixBridge.instance.listChatsWithStatus(accountId: widget.accountId);
       _selected.clear();
       _initiallySynced.clear();
       for (final c in chats) {
@@ -145,10 +146,11 @@ class _WaChatPickerScreenState extends State<WaChatPickerScreen> {
           chat['name'] as String? ?? '',
           chat['is_group'] as bool? ?? false,
           days,
+          accountId: widget.accountId,
         );
       }
       for (final jid in toRemove) {
-        await WaMatrixBridge.instance.unsyncChat(jid);
+        await WaMatrixBridge.instance.unsyncChat(jid, accountId: widget.accountId);
       }
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
