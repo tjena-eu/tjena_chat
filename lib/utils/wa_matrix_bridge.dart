@@ -484,6 +484,14 @@ class WaMatrixBridge {
     }
   }
 
+  /// Ensure a room exists for [jid] (creating + backfilling with the default
+  /// window if new) and return its Matrix room id, for "open this chat" flows.
+  Future<String?> openChatRoom(String jid, String name, bool isGroup,
+      {String accountId = _defaultAccount}) async {
+    await syncChat(jid, name, isGroup, _defaultBackfillDays, accountId: accountId);
+    return _waToMatrix[_key(accountId, jid)];
+  }
+
   /// Create rooms + backfill [days] for every cached chat (link-mode "all").
   Future<int> syncAllCachedChats(int days,
       {String accountId = _defaultAccount}) async {
@@ -1263,7 +1271,7 @@ class WaMatrixBridge {
           ?? false;
       final myUserId = client.userID!;
 
-      _autoSaveMedia(bytes, body, msgtype);
+      _autoSaveMedia(bytes, body, msgtype, mimetype);
 
       Logs().d('[WaBridge] _pushMediaReady injecting $eventId into $matrixId url=$mxcUri size=$size');
       // Re-inject the same event ID with content['url'] added. Serialized via
@@ -1410,7 +1418,8 @@ class WaMatrixBridge {
 
   static String _safe(String s) => s.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '_');
 
-  static void _autoSaveMedia(Uint8List bytes, String body, String msgtype) {
+  static void _autoSaveMedia(
+      Uint8List bytes, String body, String msgtype, String mimetype) {
     if (kIsWeb || !PlatformInfos.isMobile) return;
     if (!AppSettings.autoSaveMedia.value) return;
     final isImage = msgtype == 'm.image';
@@ -1419,6 +1428,12 @@ class WaMatrixBridge {
     final file = isImage
         ? MatrixImageFile(bytes: bytes, name: body)
         : MatrixVideoFile(bytes: bytes, name: body);
-    file.saveToGallery().catchError((_) => false);
+    final fileName = MatrixFileExtension.galleryName(
+      'wa',
+      mimeType: mimetype,
+      originalName: body,
+      video: isVideo,
+    );
+    file.saveToGallery(fileName: fileName).catchError((_) => false);
   }
 }

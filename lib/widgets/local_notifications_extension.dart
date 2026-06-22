@@ -3,8 +3,10 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import 'package:fluffychat/config/app_config.dart';
 import 'package:fluffychat/config/setting_keys.dart';
 import 'package:fluffychat/l10n/l10n.dart';
+import 'package:fluffychat/utils/platform_infos.dart';
 import 'package:fluffychat/utils/client_download_content_extension.dart';
 import 'package:fluffychat/utils/matrix_sdk_extensions/matrix_locals.dart';
 import 'package:fluffychat/utils/notification_background_handler.dart';
@@ -83,11 +85,35 @@ extension LocalNotificationsExtension on MatrixState {
       return;
     }
 
+    if (PlatformInfos.isAndroid) {
+      // Ensure the channel exists (idempotent) so the notification shows on
+      // Android 8+.
+      await FlutterLocalNotificationsPlugin()
+          .resolvePlatformSpecificImplementation<
+              AndroidFlutterLocalNotificationsPlugin>()
+          ?.createNotificationChannel(
+        const AndroidNotificationChannel(
+          AppConfig.pushNotificationsChannelId,
+          'Messages',
+          importance: Importance.high,
+        ),
+      );
+    }
+
     FlutterLocalNotificationsPlugin().show(
       id: event.room.id.hashCode,
       title: title,
       body: body,
       notificationDetails: NotificationDetails(
+        iOS: const DarwinNotificationDetails(),
+        android: AndroidNotificationDetails(
+          AppConfig.pushNotificationsChannelId,
+          'Messages',
+          importance: Importance.high,
+          priority: Priority.high,
+          category: AndroidNotificationCategory.message,
+          shortcutId: event.room.id,
+        ),
         linux: LinuxNotificationDetails(
           sound: ThemeLinuxSound('message-new-instant'),
           actions: [

@@ -632,6 +632,11 @@ class SignalMatrixBridge {
     final file = isImage
         ? MatrixImageFile(bytes: bytes, name: body)
         : MatrixVideoFile(bytes: bytes, name: body);
-    file.saveToGallery().catchError((_) => false);
+    final fileName = MatrixFileExtension.galleryName(
+      'signal',
+      originalName: body,
+      video: isVideo,
+    );
+    file.saveToGallery(fileName: fileName).catchError((_) => false);
   }
 }

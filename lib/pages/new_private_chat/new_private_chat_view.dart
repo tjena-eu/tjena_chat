@@ -361,7 +361,7 @@ List<Widget> _bridgeTiles(
         ),
         title: const Text('WhatsApp chat'),
         subtitle: const Text('Open or start a WA conversation'),
-        onTap: () => controller.openLocalBridgeChat(isSig: false),
+        onTap: () => controller.openWhatsAppNewChat(),
       ));
     }
     if (sigLinked) {
