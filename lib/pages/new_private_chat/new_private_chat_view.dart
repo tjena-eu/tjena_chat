@@ -9,7 +9,9 @@ import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/pages/new_private_chat/new_private_chat.dart';
 import 'package:fluffychat/utils/localized_exception_extension.dart';
 import 'package:fluffychat/utils/platform_infos.dart';
+import 'package:fluffychat/utils/signal_matrix_bridge.dart';
 import 'package:fluffychat/utils/url_launcher.dart';
+import 'package:fluffychat/utils/wa_matrix_bridge.dart';
 import 'package:fluffychat/widgets/avatar.dart';
 import 'package:fluffychat/widgets/layouts/max_width_body.dart';
 import 'package:fluffychat/widgets/matrix.dart';
@@ -324,18 +326,93 @@ List<Widget> _bridgeTiles(
   BuildContext context,
   NewPrivateChatController controller,
 ) {
-  final available = controller.availableBridges();
-  if (available.isEmpty) return const [];
-  return available.map((def) {
-    return ListTile(
-      leading: CircleAvatar(
-        backgroundColor: def.color,
-        foregroundColor: Colors.white,
-        child: const Icon(Icons.chat_outlined),
+  final theme = Theme.of(context);
+  final tiles = <Widget>[];
+
+  // ── On-Device Bridges ──────────────────────────────────────────────────
+  final waLinked = WaMatrixBridge.instance.isLinked;
+  final sigLinked = SignalMatrixBridge.instance.isLinked;
+  if (waLinked || sigLinked) {
+    tiles.add(
+      Padding(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 2),
+        child: Row(
+          children: [
+            Icon(Icons.smartphone_outlined, size: 14, color: theme.colorScheme.primary),
+            const SizedBox(width: 6),
+            Text(
+              'On-Device Bridges',
+              style: theme.textTheme.labelMedium?.copyWith(
+                color: theme.colorScheme.primary,
+                fontWeight: FontWeight.w600,
+                letterSpacing: 0.5,
+              ),
+            ),
+          ],
+        ),
       ),
-      title: Text('New ${def.name} chat'),
-      subtitle: const Text('Start a chat via phone number'),
-      onTap: () => controller.openBridgeNewChat(def),
     );
-  }).toList();
+    if (waLinked) {
+      tiles.add(ListTile(
+        leading: CircleAvatar(
+          backgroundColor: const Color(0xFF25D366),
+          foregroundColor: Colors.white,
+          child: const Icon(Icons.chat_rounded),
+        ),
+        title: const Text('WhatsApp chat'),
+        subtitle: const Text('Open or start a WA conversation'),
+        onTap: () => controller.openWhatsAppNewChat(),
+      ));
+    }
+    if (sigLinked) {
+      tiles.add(ListTile(
+        leading: CircleAvatar(
+          backgroundColor: const Color(0xFF3A76F0),
+          foregroundColor: Colors.white,
+          child: const Icon(Icons.signal_cellular_alt),
+        ),
+        title: const Text('Signal chat'),
+        subtitle: const Text('Open or start a Signal conversation'),
+        onTap: () => controller.openLocalBridgeChat(isSig: true),
+      ));
+    }
+  }
+
+  // ── Homeserver Bridges ────────────────────────────────────────────────
+  final available = controller.availableBridges();
+  if (available.isNotEmpty) {
+    tiles.add(
+      Padding(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 2),
+        child: Row(
+          children: [
+            Icon(Icons.cloud_outlined, size: 14, color: theme.colorScheme.secondary),
+            const SizedBox(width: 6),
+            Text(
+              'Homeserver Bridges',
+              style: theme.textTheme.labelMedium?.copyWith(
+                color: theme.colorScheme.secondary,
+                fontWeight: FontWeight.w600,
+                letterSpacing: 0.5,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+    for (final def in available) {
+      tiles.add(ListTile(
+        leading: CircleAvatar(
+          backgroundColor: def.color,
+          foregroundColor: Colors.white,
+          child: const Icon(Icons.chat_outlined),
+        ),
+        title: Text('New ${def.name} chat'),
+        subtitle: const Text('Start a chat via phone number'),
+        onTap: () => controller.openBridgeNewChat(def),
+      ));
+    }
+  }
+
+  return tiles;
 }

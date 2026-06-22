@@ -26,8 +26,13 @@ class ImageViewerView extends StatelessWidget {
     );
     return GestureDetector(
       onTap: () => Navigator.of(context).pop(),
-      child: Scaffold(
-        backgroundColor: Colors.black.withAlpha(128),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        color: controller.backgroundVisible
+            ? Colors.black.withAlpha(128)
+            : Colors.transparent,
+        child: Scaffold(
+        backgroundColor: Colors.transparent,
         extendBodyBehindAppBar: true,
         appBar: AppBar(
           elevation: 0,
@@ -156,6 +161,7 @@ class ImageViewerView extends StatelessWidget {
             ],
           ),
         ),
+      ),
       ),
     );
   }

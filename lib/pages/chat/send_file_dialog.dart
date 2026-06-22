@@ -12,6 +12,7 @@ import 'package:fluffychat/utils/matrix_sdk_extensions/matrix_file_extension.dar
 import 'package:fluffychat/utils/other_party_can_receive.dart';
 import 'package:fluffychat/utils/platform_infos.dart';
 import 'package:fluffychat/utils/size_string.dart';
+import 'package:fluffychat/utils/wa_matrix_bridge.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/adaptive_dialog_action.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/dialog_text_field.dart';
 import 'package:fluffychat/widgets/future_loading_dialog.dart';
@@ -59,10 +60,21 @@ class SendFileDialogState extends State<SendFileDialog> {
       context: widget.outerContext,
       title: l10n.sendingAttachment,
       futureWithProgress: (setProgress) async {
+        Navigator.of(context, rootNavigator: false).pop();
+
+        // Route through WA bridge for local-bridged rooms.
+        if (WaMatrixBridge.instance.isWaRoom(widget.room.id)) {
+          for (final xfile in widget.files) {
+            final bytes = await xfile.readAsBytes();
+            final mimeType = xfile.mimeType ?? lookupMimeType(xfile.path) ?? 'application/octet-stream';
+            await WaMatrixBridge.instance.sendFile(widget.room.id, bytes, mimeType, xfile.name);
+          }
+          return;
+        }
+
         if (!widget.room.otherPartyCanReceiveMessages) {
           throw OtherPartyCanNotReceiveMessages();
         }
-        Navigator.of(context, rootNavigator: false).pop();
         final clientConfig = await Result.capture(
           widget.room.client.getConfig(),
         );

@@ -1,0 +1,24 @@
+name: tjena_bridge
+description: Flutter plugin wrapping the on-device WhatsApp bridge (Go/gomobile AAR).
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: ">=3.0.0 <4.0.0"
+  flutter: ">=3.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  path_provider: ^2.1.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+flutter:
+  plugin:
+    platforms:
+      android:
+        package: tjena.eu.tjena_bridge
+        pluginClass: TjenaBridgePlugin

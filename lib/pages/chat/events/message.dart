@@ -17,6 +17,7 @@ import 'package:fluffychat/utils/live_location/live_location_constants.dart';
 import 'package:fluffychat/utils/matrix_sdk_extensions/matrix_locals.dart';
 import 'package:fluffychat/utils/string_color.dart';
 import 'package:fluffychat/widgets/avatar.dart';
+import 'package:fluffychat/utils/wa_matrix_bridge.dart';
 import 'package:fluffychat/widgets/matrix.dart';
 import 'package:fluffychat/widgets/member_actions_popup_menu_button.dart';
 import 'package:flutter/material.dart';
@@ -658,12 +659,31 @@ class Message extends StatelessWidget {
                                                           ? null
                                                           : () {
                                                               onSelect(event);
-                                                              event.room
-                                                                  .sendReaction(
+                                                              if (WaMatrixBridge
+                                                                  .instance
+                                                                  .isWaRoom(
                                                                     event
-                                                                        .eventId,
-                                                                    emoji,
-                                                                  );
+                                                                        .room
+                                                                        .id,
+                                                                  )) {
+                                                                WaMatrixBridge
+                                                                    .instance
+                                                                    .sendReaction(
+                                                                      event
+                                                                          .room
+                                                                          .id,
+                                                                      event
+                                                                          .eventId,
+                                                                      emoji,
+                                                                    );
+                                                              } else {
+                                                                event.room
+                                                                    .sendReaction(
+                                                                      event
+                                                                          .eventId,
+                                                                      emoji,
+                                                                    );
+                                                              }
                                                             },
                                                     ),
                                                   ),
@@ -771,11 +791,25 @@ class Message extends StatelessWidget {
                                                       }
                                                       onSelect(event);
 
-                                                      await event.room
-                                                          .sendReaction(
-                                                            event.eventId,
-                                                            emoji,
-                                                          );
+                                                      if (WaMatrixBridge
+                                                          .instance
+                                                          .isWaRoom(
+                                                            event.room.id,
+                                                          )) {
+                                                        WaMatrixBridge
+                                                            .instance
+                                                            .sendReaction(
+                                                              event.room.id,
+                                                              event.eventId,
+                                                              emoji,
+                                                            );
+                                                      } else {
+                                                        await event.room
+                                                            .sendReaction(
+                                                              event.eventId,
+                                                              emoji,
+                                                            );
+                                                      }
                                                     },
                                                   ),
                                                 ],

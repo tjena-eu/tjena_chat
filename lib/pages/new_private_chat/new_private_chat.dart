@@ -11,8 +11,11 @@ import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/pages/new_private_chat/new_private_chat_view.dart';
 import 'package:fluffychat/pages/new_private_chat/qr_scanner_modal.dart';
 import 'package:fluffychat/pages/settings_bridges/bridge_definition.dart';
+import 'package:fluffychat/pages/settings_bridge_local/wa_open_chat_screen.dart';
 import 'package:fluffychat/utils/adaptive_bottom_sheet.dart';
 import 'package:fluffychat/utils/fluffy_share.dart';
+import 'package:fluffychat/utils/signal_matrix_bridge.dart';
+import 'package:fluffychat/utils/wa_matrix_bridge.dart';
 import 'package:fluffychat/utils/identity_server_lookup.dart';
 import 'package:fluffychat/utils/platform_infos.dart';
 import 'package:fluffychat/utils/url_launcher.dart';
@@ -154,6 +157,73 @@ class NewPrivateChatController extends State<NewPrivateChat> {
         (r) => r.isDirectChat && r.directChatMatrixID == botId,
       );
     }).toList();
+  }
+
+  /// WhatsApp "new chat" entry: choose an existing chat from the list, or enter
+  /// a phone number.
+  Future<void> openWhatsAppNewChat() async {
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const ListTile(
+              dense: true,
+              title: Text('Start a WhatsApp chat'),
+            ),
+            const Divider(height: 1),
+            ListTile(
+              leading: const Icon(Icons.forum_outlined),
+              title: const Text('Choose an existing chat'),
+              subtitle: const Text('Pick from your WhatsApp chats'),
+              onTap: () => Navigator.pop(ctx, 'existing'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.dialpad_outlined),
+              title: const Text('Enter a phone number'),
+              subtitle: const Text('Start a chat with a number'),
+              onTap: () => Navigator.pop(ctx, 'phone'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (!mounted || choice == null) return;
+    if (choice == 'phone') {
+      await openLocalBridgeChat(isSig: false);
+    } else if (choice == 'existing') {
+      final roomId = await Navigator.of(context).push<String>(
+        MaterialPageRoute(builder: (_) => const WaOpenChatScreen()),
+      );
+      if (roomId != null && roomId.isNotEmpty && mounted) {
+        context.go('/rooms/$roomId');
+      }
+    }
+  }
+
+  Future<void> openLocalBridgeChat({required bool isSig}) async {
+    final phone = await _showPhoneDialog(
+      isSig ? 'Signal chat' : 'WhatsApp chat',
+    );
+    if (phone == null || phone.isEmpty || !mounted) return;
+    final roomId = isSig
+        ? SignalMatrixBridge.instance.matrixRoomIdForPhone(phone)
+        : WaMatrixBridge.instance.ensureChatForPhone(phone);
+    if (roomId != null && mounted) {
+      context.go('/rooms/$roomId');
+    } else if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            isSig
+                ? 'No Signal chat found for $phone. '
+                    'Send or receive a message via Signal first.'
+                : 'WhatsApp bridge not connected yet. Try again in a moment.',
+          ),
+        ),
+      );
+    }
   }
 
   Future<void> openBridgeNewChat(BridgeDef def) async {

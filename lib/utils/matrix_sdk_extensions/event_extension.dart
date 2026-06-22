@@ -47,7 +47,11 @@ extension LocalizedBody on Event {
     }
   }
 
-  Future<void> autoSaveToDevice(BuildContext context) async {
+  Future<void> autoSaveToDevice(BuildContext context) async =>
+      autoSaveBackground();
+
+  /// Auto-save image/video to gallery without requiring a BuildContext.
+  Future<void> autoSaveBackground() async {
     if (kIsWeb || !PlatformInfos.isMobile) return;
     if (!AppSettings.autoSaveMedia.value) return;
     if (messageType != MessageTypes.Image &&
@@ -61,7 +65,21 @@ extension LocalizedBody on Event {
 
     try {
       final file = await downloadAndDecryptAttachment();
-      final saved = await file.saveToGallery();
+      // Name the saved file "<chatType>_<full timestamp>.<ext>" so the gallery
+      // shows where it came from and when.
+      final roomId = room.id;
+      final chatType = roomId.startsWith('!wa_')
+          ? 'wa'
+          : roomId.startsWith('!sig_')
+              ? 'signal'
+              : 'matrix';
+      final fileName = MatrixFileExtension.galleryName(
+        chatType,
+        mimeType: attachmentMimetype,
+        originalName: file.name,
+        video: messageType == MessageTypes.Video,
+      );
+      final saved = await file.saveToGallery(fileName: fileName);
       if (!saved) await AppSettings.store.remove(savedKey);
     } catch (_) {
       await AppSettings.store.remove(savedKey);

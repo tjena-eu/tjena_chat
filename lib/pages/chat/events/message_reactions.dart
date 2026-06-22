@@ -5,6 +5,7 @@
 
 import 'package:collection/collection.dart' show IterableExtension;
 import 'package:fluffychat/config/app_config.dart';
+import 'package:fluffychat/utils/wa_matrix_bridge.dart';
 import 'package:fluffychat/widgets/avatar.dart';
 import 'package:fluffychat/widgets/future_loading_dialog.dart';
 import 'package:fluffychat/widgets/matrix.dart';
@@ -60,6 +61,15 @@ class MessageReactions extends StatelessWidget {
             count: r.count,
             reacted: r.reacted,
             onTap: () {
+              if (WaMatrixBridge.instance.isWaRoom(event.room.id)) {
+                // Route through the WA bridge: empty emoji = remove reaction.
+                WaMatrixBridge.instance.sendReaction(
+                  event.room.id,
+                  event.eventId,
+                  r.reacted ? '' : r.key,
+                );
+                return;
+              }
               if (r.reacted) {
                 final evt = allReactionEvents.firstWhereOrNull(
                   (e) =>

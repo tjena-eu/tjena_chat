@@ -1,0 +1,38 @@
+group 'tjena.eu.tjena_bridge'
+version '1.0'
+
+buildscript {
+    repositories {
+        google()
+        mavenCentral()
+    }
+    dependencies {
+        classpath 'com.android.tools.build:gradle:8.1.0'
+    }
+}
+
+apply plugin: 'com.android.library'
+
+android {
+    compileSdkVersion 34
+    namespace 'tjena.eu.tjena_bridge'
+
+    defaultConfig {
+        minSdkVersion 24
+        targetSdkVersion 34
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+}
+
+dependencies {
+    implementation 'com.google.android.material:material:1.9.0'
+    // The Go bridge AAR lives in the main app's android/app/libs/.
+    // compileOnly lets this plugin's Kotlin compile against ffi.* classes
+    // without re-embedding the AAR (which AGP forbids in library modules).
+    compileOnly fileTree(dir: 'libs', include: ['*.aar'])
+}

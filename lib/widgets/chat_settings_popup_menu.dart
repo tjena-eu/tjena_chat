@@ -6,12 +6,13 @@
 import 'dart:async';
 
 import 'package:fluffychat/l10n/l10n.dart';
+import 'package:fluffychat/utils/platform_infos.dart';
+import 'package:fluffychat/utils/wa_matrix_bridge.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.dart';
 import 'package:fluffychat/widgets/future_loading_dialog.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:matrix/matrix.dart';
-
 import 'matrix.dart';
 
 enum ChatPopupMenuActions {
@@ -22,6 +23,9 @@ enum ChatPopupMenuActions {
   emote,
   leave,
   search,
+  media,
+  syncWaRoom,
+  loadWaBackfill,
 }
 
 class ChatSettingsPopupMenu extends StatefulWidget {
@@ -107,10 +111,30 @@ class ChatSettingsPopupMenuState extends State<ChatSettingsPopupMenu> {
               case ChatPopupMenuActions.search:
                 context.go('/rooms/${widget.room.id}/search');
                 break;
+              case ChatPopupMenuActions.media:
+                context.go('/rooms/${widget.room.id}/search?tab=1');
+                break;
               case ChatPopupMenuActions.emote:
                 goToEmoteSettings();
               case ChatPopupMenuActions.encryption:
                 context.go('/rooms/${widget.room.id}/encryption');
+                break;
+              case ChatPopupMenuActions.syncWaRoom:
+                try {
+                  await WaMatrixBridge.instance.refreshRoom(widget.room.id);
+                  if (!context.mounted) return;
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Refreshing name and photo…')),
+                  );
+                } catch (e) {
+                  if (!context.mounted) return;
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('Refresh failed: $e')),
+                  );
+                }
+                break;
+              case ChatPopupMenuActions.loadWaBackfill:
+                await _loadWaBackfill();
                 break;
             }
           },
@@ -159,6 +183,16 @@ class ChatSettingsPopupMenuState extends State<ChatSettingsPopupMenu> {
               ),
             ),
             PopupMenuItem<ChatPopupMenuActions>(
+              value: ChatPopupMenuActions.media,
+              child: const Row(
+                children: [
+                  Icon(Icons.photo_library_outlined),
+                  SizedBox(width: 12),
+                  Text('Media'),
+                ],
+              ),
+            ),
+            PopupMenuItem<ChatPopupMenuActions>(
               value: ChatPopupMenuActions.encryption,
               child: Row(
                 children: [
@@ -178,6 +212,30 @@ class ChatSettingsPopupMenuState extends State<ChatSettingsPopupMenu> {
                 ],
               ),
             ),
+            if (PlatformInfos.isAndroid &&
+                WaMatrixBridge.instance.isWaRoom(widget.room.id))
+              PopupMenuItem<ChatPopupMenuActions>(
+                value: ChatPopupMenuActions.syncWaRoom,
+                child: const Row(
+                  children: [
+                    Icon(Icons.sync_outlined),
+                    SizedBox(width: 12),
+                    Text('WA sync'),
+                  ],
+                ),
+              ),
+            if (PlatformInfos.isAndroid &&
+                WaMatrixBridge.instance.isWaRoom(widget.room.id))
+              PopupMenuItem<ChatPopupMenuActions>(
+                value: ChatPopupMenuActions.loadWaBackfill,
+                child: const Row(
+                  children: [
+                    Icon(Icons.history_outlined),
+                    SizedBox(width: 12),
+                    Text('Load history'),
+                  ],
+                ),
+              ),
             PopupMenuItem<ChatPopupMenuActions>(
               value: ChatPopupMenuActions.leave,
               child: Row(
@@ -192,6 +250,61 @@ class ChatSettingsPopupMenuState extends State<ChatSettingsPopupMenu> {
         ),
       ],
     );
+  }
+
+  Future<void> _loadWaBackfill() async {
+    final controller = TextEditingController(text: '7');
+    final days = await showDialog<int>(
+      context: context,
+      useRootNavigator: true,
+      builder: (context) => AlertDialog(
+        title: const Text('Load history'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text('How many days of history should be loaded?'),
+            const SizedBox(height: 16),
+            TextField(
+              controller: controller,
+              keyboardType: TextInputType.number,
+              autofocus: true,
+              decoration: const InputDecoration(
+                labelText: 'Days',
+                border: OutlineInputBorder(),
+                suffixText: 'days',
+              ),
+              onSubmitted: (v) =>
+                  Navigator.of(context).pop(int.tryParse(v.trim())),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () =>
+                Navigator.of(context).pop(int.tryParse(controller.text.trim())),
+            child: const Text('Load'),
+          ),
+        ],
+      ),
+    );
+    if (days == null || days < 1) return;
+    if (!mounted) return;
+    try {
+      await WaMatrixBridge.instance.requestBackfill(widget.room.id, days);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Loading the last $days days of history…')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Load history failed: $e')),
+      );
+    }
   }
 
   void _showChatDetails() {

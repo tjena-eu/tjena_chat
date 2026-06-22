@@ -66,6 +66,7 @@ class SpaceView extends StatefulWidget {
 class _SpaceViewState extends State<SpaceView> {
   final List<SpaceRoomsChunk$2> _discoveredChildren = [];
   final TextEditingController _filterController = TextEditingController();
+  final ScrollController _scrollController = ScrollController();
   String? _nextBatch;
   bool _noMoreRooms = false;
   bool _isLoading = false;
@@ -85,17 +86,32 @@ class _SpaceViewState extends State<SpaceView> {
   void initState() {
     _loadPrefs();
     _loadHierarchy();
+    _scrollController.addListener(_onScroll);
     _childStateSub = Matrix.of(context).client.onSync.stream
-        .where(
-          (syncUpdate) =>
-              syncUpdate.rooms?.join?[widget.spaceId]?.timeline?.events?.any(
-                (event) => event.type == EventTypes.SpaceChild,
+        .where((syncUpdate) {
+          final roomUpdate = syncUpdate.rooms?.join?[widget.spaceId];
+          // Check both timeline AND state — bridge spaces inject m.space.child
+          // as state events, not timeline events.
+          final inTimeline = roomUpdate?.timeline?.events?.any(
+                (e) => e.type == EventTypes.SpaceChild,
               ) ??
-              false,
-        )
-        // Always reset to page 1 on space-child changes so sort/pins stay correct.
+              false;
+          final inState = roomUpdate?.state?.any(
+                (e) => e.type == EventTypes.SpaceChild,
+              ) ??
+              false;
+          return inTimeline || inState;
+        })
         .listen((_) => _refreshHierarchy());
     super.initState();
+  }
+
+  void _onScroll() {
+    if (!_isLoading &&
+        !_noMoreRooms &&
+        _scrollController.position.extentAfter < 300) {
+      _loadHierarchy();
+    }
   }
 
   Future<void> _loadPrefs() async {
@@ -233,6 +249,7 @@ class _SpaceViewState extends State<SpaceView> {
 
   @override
   void dispose() {
+    _scrollController.dispose();
     _childStateSub?.cancel();
     super.dispose();
   }
@@ -249,7 +266,10 @@ class _SpaceViewState extends State<SpaceView> {
   /// Loads the next page (or first page when [_nextBatch] is null).
   /// Deduplicates against already-loaded rooms so loading more never
   /// corrupts the list that sort and pins operate on.
+  /// Auto-chains pages until all rooms are loaded so the full list is
+  /// available for sorting without any manual "load more" interaction.
   Future<void> _loadHierarchy() async {
+    if (_isLoading || _noMoreRooms) return;
     final matrix = Matrix.of(context);
     final room = matrix.client.getRoomById(widget.spaceId);
     if (room == null) return;
@@ -300,7 +320,7 @@ class _SpaceViewState extends State<SpaceView> {
         _isLoading = false;
       });
 
-      // Cache only when we have a complete first-page load.
+      // Cache the complete list once all pages are loaded.
       if (_nextBatch == null) {
         matrix.store.setStringList(
           cacheKey,
@@ -308,10 +328,44 @@ class _SpaceViewState extends State<SpaceView> {
               .map((child) => jsonEncode(child.toJson()))
               .toList(),
         );
+      } else {
+        // More pages exist — load them immediately so the full list is
+        // available for sorting without any user interaction.
+        _loadHierarchy();
       }
     } catch (e, s) {
       Logs().w('Unable to load hierarchy', e, s);
       if (!mounted) return;
+      // For local/virtual spaces (e.g. WA bridge) the homeserver doesn't know
+      // about the room. Fall back to reading m.space.child state events locally.
+      if (e is MatrixException && e.error == MatrixError.M_FORBIDDEN) {
+        final childStates = room.states['m.space.child']?.values ?? [];
+        final fallback = childStates
+            .map((state) {
+              final childId = state.stateKey;
+              if (childId == null || childId.isEmpty) return null;
+              final child = matrix.client.getRoomById(childId);
+              if (child == null) return null;
+              return SpaceRoomsChunk$2(
+                guestCanJoin: false,
+                numJoinedMembers:
+                    child.summary.mJoinedMemberCount ?? 1,
+                roomId: childId,
+                worldReadable: false,
+                childrenState: [],
+                name: child.getLocalizedDisplayname(),
+                avatarUrl: child.avatar,
+              );
+            })
+            .whereType<SpaceRoomsChunk$2>()
+            .toList();
+        setState(() {
+          _discoveredChildren.addAll(fallback);
+          _noMoreRooms = true;
+          _isLoading = false;
+        });
+        return;
+      }
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(e.toLocalizedString(context))),
       );
@@ -732,6 +786,7 @@ class _SpaceViewState extends State<SpaceView> {
                   room.client,
                 );
                 return CustomScrollView(
+                  controller: _scrollController,
                   slivers: [
                     SliverAppBar(
                       floating: true,
@@ -770,19 +825,13 @@ class _SpaceViewState extends State<SpaceView> {
                       itemCount: sortedChildren.length + 1,
                       itemBuilder: (context, i) {
                         if (i == sortedChildren.length) {
-                          if (_noMoreRooms) {
+                          if (_noMoreRooms || !_isLoading) {
                             return const SizedBox.shrink();
                           }
-                          return Padding(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 12.0,
-                              vertical: 2.0,
-                            ),
-                            child: TextButton(
-                              onPressed: _isLoading ? null : _loadHierarchy,
-                              child: _isLoading
-                                  ? const CircularProgressIndicator.adaptive()
-                                  : Text(L10n.of(context).loadMore),
+                          return const Padding(
+                            padding: EdgeInsets.symmetric(vertical: 12),
+                            child: Center(
+                              child: CircularProgressIndicator.adaptive(),
                             ),
                           );
                         }

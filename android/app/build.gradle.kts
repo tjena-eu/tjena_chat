@@ -15,6 +15,8 @@ if (file("google-services.json").exists()) {
 dependencies {
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4") // For flutter_local_notifications // Workaround for: https://github.com/MaikuB/flutter_local_notifications/issues/2286
     implementation("androidx.core:core-ktx:1.17.0") // For Android Auto
+    // Go bridge AAR (gomobile bind of tjena.eu/tjena-bridge/ffi).
+    implementation(fileTree(mapOf("dir" to "libs", "include" to listOf("*.aar"))))
 }
 
 
@@ -71,7 +73,7 @@ android {
 
     defaultConfig {
         applicationId = "tjena.tjenachat"
-        minSdk = flutter.minSdkVersion
+        minSdk = 26 // WhatsApp bridge AAR requires API 26
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
