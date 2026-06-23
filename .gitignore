@@ -207,3 +207,6 @@ packages/tjena_bridge/android/libs/*.aar
 packages/tjena_bridge/android/libs/*.jar
 android/app/libs/*.aar
 android/app/libs/*.jar
+
+# Call-stack deployment secrets
+deploy/.env

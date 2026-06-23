@@ -175,6 +175,10 @@ class TjenaBridgePlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamH
                     val roomID = call.argument<String>("roomID") ?: ""
                     result.success(bridge?.getChatAvatarURL(acc(call), roomID) ?: "")
                 }
+                "getGroupMembers" -> {
+                    val roomID = call.argument<String>("roomID") ?: ""
+                    result.success(bridge?.getGroupMembersJSON(acc(call), roomID) ?: "[]")
+                }
                 "getLogs" -> result.success(bridge?.getLogs(acc(call)) ?: "(no bridge)")
                 "onForeground" -> { bridge?.onForeground(); result.success(null) }
                 "onBackground" -> { bridge?.onBackground(); result.success(null) }

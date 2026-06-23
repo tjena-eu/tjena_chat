@@ -172,6 +172,37 @@ class _SettingsDebugState extends State<SettingsDebug> {
                   ),
                 ),
                 const SizedBox(height: 24),
+                _sectionLabel(theme, 'ENCRYPTION / KEY BACKUP'),
+                const SizedBox(height: 8),
+                Card(
+                  margin: EdgeInsets.zero,
+                  child: Column(
+                    children: [
+                      ListTile(
+                        leading: const Icon(Icons.vpn_key_outlined),
+                        title: const Text('Recovery key & chat backup'),
+                        subtitle: const Text(
+                          'Set up, unlock, or restore your encryption key '
+                          'backup; view/enter the recovery key',
+                        ),
+                        trailing: const Icon(Icons.chevron_right),
+                        onTap: () => context.go('/backup'),
+                      ),
+                      const Divider(height: 1),
+                      ListTile(
+                        leading: const Icon(Icons.key_off_outlined),
+                        title: const Text('Reset recovery key'),
+                        subtitle: const Text(
+                          'Generate a new recovery key (shows it once). Old key '
+                          'and backup are replaced.',
+                        ),
+                        trailing: const Icon(Icons.chevron_right),
+                        onTap: () => context.go('/backup?wipe=true'),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 24),
                 _sectionLabel(theme, 'NOTE'),
                 const SizedBox(height: 8),
                 Container(

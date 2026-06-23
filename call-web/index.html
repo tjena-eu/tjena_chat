@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Tjena Call</title>
+    <style>
+      :root { color-scheme: dark; }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; height: 100%; background: #0d1117; color: #e6edf3;
+        font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+      #app { position: fixed; inset: 0; display: flex; flex-direction: column; }
+      #remote { width: 100%; height: 100%; object-fit: cover; background: #000; }
+      #local { position: absolute; right: 12px; bottom: 96px; width: 110px; height: 150px;
+        object-fit: cover; border-radius: 12px; border: 2px solid #30363d; background: #000; z-index: 2; }
+      #overlay { position: absolute; inset: 0; display: flex; flex-direction: column;
+        align-items: center; justify-content: center; gap: 16px; text-align: center; padding: 24px; z-index: 3; }
+      #overlay.hidden { display: none; }
+      #status { position: absolute; top: 16px; left: 0; right: 0; text-align: center;
+        font-size: 14px; color: #9da7b3; z-index: 2; pointer-events: none; }
+      .btn { border: none; border-radius: 999px; padding: 16px 28px; font-size: 17px;
+        font-weight: 600; cursor: pointer; }
+      .join { background: #25d366; color: #03260f; }
+      .controls { position: absolute; bottom: 24px; left: 0; right: 0; display: flex;
+        gap: 18px; justify-content: center; z-index: 3; }
+      .controls.hidden { display: none; }
+      .ctl { width: 60px; height: 60px; border-radius: 50%; border: none; cursor: pointer;
+        font-size: 22px; background: #21262d; color: #e6edf3; }
+      .ctl.hang { background: #da3633; color: #fff; }
+      .ctl.on { background: #f0f6fc; color: #0d1117; }
+      h1 { font-size: 22px; margin: 0; }
+      p { margin: 0; color: #9da7b3; max-width: 320px; }
+      .err { color: #ff7b72; }
+    </style>
+  </head>
+  <body>
+    <div id="app">
+      <video id="remote" autoplay playsinline></video>
+      <video id="local" autoplay playsinline muted></video>
+      <div id="status"></div>
+      <div id="overlay">
+        <h1>Tjena Call</h1>
+        <p id="hint">You've been invited to a call. Tap below to join.</p>
+        <button id="join" class="btn join">Join call</button>
+      </div>
+      <div id="controls" class="controls hidden">
+        <button id="mic" class="ctl" title="Mute mic">🎙️</button>
+        <button id="cam" class="ctl" title="Mute camera">🎥</button>
+        <button id="hangup" class="ctl hang" title="Hang up">📴</button>
+      </div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

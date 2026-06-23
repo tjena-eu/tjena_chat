@@ -349,6 +349,16 @@ func (b *Bridge) GetChatAvatarURL(accountID, roomID string) string {
 	return c.GetChatAvatarURL(roomID)
 }
 
+// GetGroupMembersJSON returns a group's participants for the member list /
+// @-mention autocomplete.
+func (b *Bridge) GetGroupMembersJSON(accountID, roomID string) string {
+	c := b.coreOf(accountID)
+	if c == nil {
+		return "[]"
+	}
+	return c.GetGroupMembersJSON(roomID)
+}
+
 func (b *Bridge) GetLogs(accountID string) string {
 	c := b.coreOf(accountID)
 	if c == nil {

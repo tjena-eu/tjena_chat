@@ -1,0 +1,67 @@
+# Tjena call stack: provisioner backend + static guest web client.
+# Copy .env.example -> .env, fill it in, then:  docker compose up -d --build
+#
+# Routing (behind your Cloudflare Tunnel, HTTP only):
+#   call.tjena.eu        -> this "web" service (static SPA)
+#   call.tjena.eu/api/*  -> proxied by web -> "provisioner" service
+#   matrix.tjena.eu      -> your existing Synapse
+#   coturn               -> public/direct (NOT through the tunnel)
+
+services:
+  provisioner:
+    # Pre-built image — load it first with:
+    #   docker load -i tjena-call-provisioner-0.1.0.tar.gz
+    # (or import the tarball in Portainer → Images). pull_policy:never keeps
+    # Portainer from trying to fetch it from a registry.
+    image: tjena-call-provisioner:0.1.0
+    pull_policy: never
+    # For local dev you can build instead of using the image above:
+    # build:
+    #   context: ../call-provisioner
+    container_name: call-provisioner
+    restart: unless-stopped
+    environment:
+      # Internal admin/client base. If Synapse runs on the host, use
+      # http://host.docker.internal:8008 (see extra_hosts below); if it's a
+      # compose service, put it on the same network and use http://synapse:8008.
+      SYNAPSE_BASE_URL: ${SYNAPSE_BASE_URL}
+      # Public homeserver URL the GUEST's browser connects to.
+      PUBLIC_HS_URL: ${PUBLIC_HS_URL}
+      # Public base where this web client is served.
+      PUBLIC_WEB_BASE: ${PUBLIC_WEB_BASE}
+      # @callbot admin access token + the homeserver.yaml shared secret.
+      ADMIN_TOKEN: ${ADMIN_TOKEN}
+      REGISTRATION_SHARED_SECRET: ${REGISTRATION_SHARED_SECRET}
+      CALL_TTL_MINUTES: ${CALL_TTL_MINUTES:-30}
+      LISTEN_ADDR: ":8090"
+    expose:
+      - "8090"
+    # Lets the container reach a Synapse running on the host machine.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  web:
+    # Pre-built image — load it first with:
+    #   docker load -i tjena-call-web-0.1.0.tar.gz
+    image: tjena-call-web:0.1.0
+    pull_policy: never
+    # build:
+    #   context: ../call-web
+    container_name: call-web
+    restart: unless-stopped
+    depends_on:
+      - provisioner
+    environment:
+      # Where the web container proxies /api/* to. Default matches the service
+      # name above; only change if you run the provisioner elsewhere.
+      PROVISIONER_URL: ${PROVISIONER_URL:-http://provisioner:8090}
+    ports:
+      # Host port your tunnel points at -> container :80
+      - "${WEB_PORT:-8080}:80"
+
+# If your Synapse is itself a compose service on another network, uncomment and
+# attach both services to it, then set SYNAPSE_BASE_URL=http://synapse:8008
+# networks:
+#   default:
+#     name: ${SHARED_NETWORK:-matrix_default}
+#     external: true

@@ -71,6 +71,10 @@ type Bridge struct {
 	oldestMsg      map[string]*types.MessageInfo
 	backfillCutoff map[string]int64
 
+	// Last incoming (not own) message per chat, used to send WhatsApp read
+	// receipts when the user reads the chat in Tjena.
+	lastRecv map[string]*types.MessageInfo
+
 	logMu  sync.Mutex
 	logBuf []string // ring buffer, last 100 lines
 }
@@ -226,10 +230,16 @@ func (b *Bridge) Start(ctx context.Context) error {
 	}
 	b.waStore = container
 
-	// Get or create device.
+	// Get or create device. A corrupted store ("database disk image is
+	// malformed") makes this fail; recover by wiping the store files so the user
+	// can re-link instead of the bridge failing to start entirely.
 	deviceStore, err := container.GetFirstDevice(ctx)
 	if err != nil {
-		return fmt.Errorf("get device: %w", err)
+		b.appendLog("[Bridge] whatsmeow store unusable (" + err.Error() + "); resetting it for a fresh link")
+		deviceStore, err = b.freshDevice(ctx)
+		if err != nil {
+			return fmt.Errorf("get device after store reset: %w", err)
+		}
 	}
 	b.linked = deviceStore.ID != nil
 
@@ -554,10 +564,27 @@ func (b *Bridge) SendRedaction(portalID, targetEventID string) error {
 	return err
 }
 
-// MarkRead sends a read receipt for the given event.
+// MarkRead sends a WhatsApp read receipt for the chat's latest incoming
+// message, so the sender sees blue ticks. portalID is the WA chat JID.
 func (b *Bridge) MarkRead(portalID, _ string) error {
-	// whatsmeow doesn't expose a direct mark-read; we track locally.
-	return nil
+	b.mu.Lock()
+	client := b.waClient
+	last := b.lastRecv[portalID]
+	b.mu.Unlock()
+	if client == nil || last == nil {
+		return nil
+	}
+	sender := last.Sender
+	if sender.IsEmpty() {
+		sender = last.Chat
+	}
+	return client.MarkRead(
+		context.Background(),
+		[]types.MessageID{last.ID},
+		time.Now(),
+		last.Chat,
+		sender,
+	)
 }
 
 // SetTyping sends a typing presence update.
@@ -580,8 +607,36 @@ func (b *Bridge) SetTyping(portalID string, typing bool) error {
 		types.ChatPresencePaused, types.ChatPresenceMediaText)
 }
 
+// freshDevice tears down the whatsmeow store by deleting its SQLite files and
+// recreating an empty container with a fresh (unregistered) device. Deleting the
+// files — rather than using the store API — is what lets us recover from a
+// corrupted store ("sqlite3: database disk image is malformed"), where
+// GetAllDevices/Delete/GetFirstDevice themselves fail. The caller must hold b.mu
+// and should have disconnected any client first; b.waStore is replaced and the
+// returned device should be used to build a new client.
+func (b *Bridge) freshDevice(ctx context.Context) (*store.Device, error) {
+	if b.waStore != nil {
+		_ = b.waStore.Close()
+		b.waStore = nil
+	}
+	base := b.dataDir + "/whatsmeow.db"
+	// Remove the DB plus its WAL/SHM/journal sidecars.
+	for _, suffix := range []string{"", "-wal", "-shm", "-journal"} {
+		_ = os.Remove(base + suffix)
+	}
+	storeLog := &bridgeLogger{prefix: "WA-Store", br: b}
+	container, err := sqlstore.New(ctx, "sqlite3",
+		"file:"+base+"?_foreign_keys=on&_journal_mode=WAL", storeLog)
+	if err != nil {
+		return nil, fmt.Errorf("recreate whatsmeow store: %w", err)
+	}
+	b.waStore = container
+	return container.GetFirstDevice(ctx)
+}
+
 // ForceReset deletes all local WhatsApp credentials and prepares for fresh linking.
-// Use this when the device store has stale credentials that prevent re-linking.
+// Use this when the device store has stale or corrupted credentials that prevent
+// re-linking (it deletes the store files, so it recovers even from a malformed DB).
 func (b *Bridge) ForceReset() error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -590,24 +645,13 @@ func (b *Bridge) ForceReset() error {
 		b.waClient.Disconnect()
 	}
 
-	if b.waStore != nil {
-		// Delete all stored devices so we start as a fresh (unlinked) device.
-		devices, err := b.waStore.GetAllDevices(context.Background())
-		if err == nil {
-			for _, dev := range devices {
-				_ = dev.Delete(context.Background())
-			}
-		}
-
-		// Re-create the whatsmeow client with a fresh device store entry.
-		deviceStore, err := b.waStore.GetFirstDevice(context.Background())
-		if err != nil {
-			return fmt.Errorf("get fresh device: %w", err)
-		}
-		clientLog := &bridgeLogger{prefix: "WA-Client", br: b}
-		b.waClient = whatsmeow.NewClient(deviceStore, clientLog)
-		b.waClient.AddEventHandler(b.handleWAEvent)
+	deviceStore, err := b.freshDevice(context.Background())
+	if err != nil {
+		return fmt.Errorf("reset whatsmeow store: %w", err)
 	}
+	clientLog := &bridgeLogger{prefix: "WA-Client", br: b}
+	b.waClient = whatsmeow.NewClient(deviceStore, clientLog)
+	b.waClient.AddEventHandler(b.handleWAEvent)
 
 	b.linked = false
 	b.connected = false
@@ -812,20 +856,19 @@ func (b *Bridge) handleWAEvent(rawEvt any) {
 		b.linked = false
 		b.connected = false
 		b.pairingPhone = false
-		// Automatically purge stale credentials so the next QR attempt
-		// starts with a fresh (unregistered) device identity. Without this
-		// Connect() reuses the revoked session and WhatsApp immediately
-		// closes the WebSocket, killing the QR channel before a code renders.
-		if b.waStore != nil {
-			devices, _ := b.waStore.GetAllDevices(context.Background())
-			for _, dev := range devices {
-				_ = dev.Delete(context.Background())
-			}
-			if deviceStore, err := b.waStore.GetFirstDevice(context.Background()); err == nil {
-				clientLog := &bridgeLogger{prefix: "WA-Client", br: b}
-				b.waClient = whatsmeow.NewClient(deviceStore, clientLog)
-				b.waClient.AddEventHandler(b.handleWAEvent)
-			}
+		// Automatically purge stale credentials so the next QR attempt starts
+		// with a fresh (unregistered) device identity. Without this Connect()
+		// reuses the revoked session and WhatsApp immediately closes the
+		// WebSocket, killing the QR channel before a code renders. We delete the
+		// store files (via freshDevice) rather than using the store API, because
+		// a 401 logout often coincides with a corrupted store that the API can't
+		// clean up ("failed to delete store after 401 failure: ... malformed").
+		if deviceStore, err := b.freshDevice(context.Background()); err == nil {
+			clientLog := &bridgeLogger{prefix: "WA-Client", br: b}
+			b.waClient = whatsmeow.NewClient(deviceStore, clientLog)
+			b.waClient.AddEventHandler(b.handleWAEvent)
+		} else {
+			b.appendLog("[Bridge] store reset after logout failed: " + err.Error())
 		}
 		b.mu.Unlock()
 		b.emitter.Emit(map[string]any{
@@ -1132,6 +1175,18 @@ func (b *Bridge) handleWAMessage(evt *waevents.Message) {
 	// history requests.
 	b.recordOldest(roomID, &evt.Info)
 
+	// Remember the latest incoming message so reading the chat can send a WA
+	// read receipt for it.
+	if !isOwn {
+		b.mu.Lock()
+		if b.lastRecv == nil {
+			b.lastRecv = make(map[string]*types.MessageInfo)
+		}
+		cp := evt.Info
+		b.lastRecv[roomID] = &cp
+		b.mu.Unlock()
+	}
+
 	// For DMs only: promote the room name from bare phone number to the
 	// sender's push name when we first see it.
 	// DMs are addressed either by phone number (s.whatsapp.net) or, increasingly,
@@ -1348,6 +1403,50 @@ func (b *Bridge) ListChatsJSON() string {
 		return "[]"
 	}
 	b.appendLog(fmt.Sprintf("[Bridge] ListChats: returning %d chats", len(out)))
+	return string(data)
+}
+
+// GetGroupMembersJSON returns a group's participants as JSON for the member
+// list / @-mention autocomplete: [{"jid","user","name","is_admin"}].
+func (b *Bridge) GetGroupMembersJSON(roomID string) string {
+	b.mu.Lock()
+	client := b.waClient
+	b.mu.Unlock()
+	if client == nil {
+		return "[]"
+	}
+	jid, err := types.ParseJID(roomID)
+	if err != nil || jid.Server != types.GroupServer {
+		return "[]"
+	}
+	gi, err := client.GetGroupInfo(context.Background(), jid)
+	if err != nil {
+		b.appendLog("[Bridge] GetGroupMembers failed: " + err.Error())
+		return "[]"
+	}
+	type member struct {
+		JID     string `json:"jid"`
+		User    string `json:"user"`
+		Name    string `json:"name"`
+		IsAdmin bool   `json:"is_admin"`
+	}
+	out := make([]member, 0, len(gi.Participants))
+	for _, p := range gi.Participants {
+		pj := p.JID
+		if pj.IsEmpty() {
+			continue
+		}
+		out = append(out, member{
+			JID:     pj.User + "@" + string(pj.Server),
+			User:    pj.User,
+			Name:    b.senderDisplayName(pj, p.DisplayName),
+			IsAdmin: p.IsAdmin || p.IsSuperAdmin,
+		})
+	}
+	data, err := json.Marshal(out)
+	if err != nil {
+		return "[]"
+	}
 	return string(data)
 }
 

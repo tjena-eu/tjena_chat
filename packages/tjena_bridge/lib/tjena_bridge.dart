@@ -344,6 +344,15 @@ class TjenaBridge {
           'getChatAvatarUrl', {'accountID': accountID, 'roomID': roomID}) ??
       '';
 
+  /// Returns a WhatsApp group's participants: [{jid, user, name, is_admin}].
+  Future<List<Map<String, dynamic>>> getGroupMembers(String roomID,
+      {String accountID = 'default'}) async {
+    final raw = await _method.invokeMethod<String>(
+            'getGroupMembers', {'accountID': accountID, 'roomID': roomID}) ??
+        '[]';
+    return (jsonDecode(raw) as List<dynamic>).cast<Map<String, dynamic>>();
+  }
+
   /// Pull on-demand WhatsApp message history for [roomID]. Anchor params kept for
   /// compatibility; backfill now reads from the local cache.
   Future<void> requestBackfill(

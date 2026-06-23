@@ -50,6 +50,7 @@ import 'package:universal_html/universal_html.dart' as web;
 import '../../utils/account_bundles.dart';
 import '../../utils/localized_exception_extension.dart';
 import '../../utils/wa_matrix_bridge.dart';
+import '../../utils/wa_call_link.dart';
 import '../../utils/signal_matrix_bridge.dart';
 import 'send_file_dialog.dart';
 import 'send_live_location_dialog.dart';
@@ -1565,6 +1566,13 @@ class ChatController extends State<ChatPageWithRoom>
       (event ?? selectedEvents.single).showInfoDialog(context);
 
   Future<void> onPhoneButtonTap() async {
+    // WhatsApp-bridged chat: there's no native WA call path. Mint a guest call
+    // link (temp unencrypted Matrix room) and send it into the WhatsApp chat;
+    // the existing legacy-VoIP UI rings/answers when the contact joins.
+    if (WaMatrixBridge.instance.isWaRoom(room.id)) {
+      await _startWhatsAppCall();
+      return;
+    }
     // VoIP required Android SDK 21
     if (PlatformInfos.isAndroid) {
       final androidInfo = await DeviceInfoPlugin().androidInfo;
@@ -1610,6 +1618,44 @@ class ChatController extends State<ChatPageWithRoom>
         context,
       ).showSnackBar(SnackBar(content: Text(e.toLocalizedString(context))));
     }
+  }
+
+  /// Place a "call" to a WhatsApp contact: provision a guest call link and send
+  /// it (plus a couple of notification buzzes) into the WhatsApp chat. The host
+  /// is force-joined into the temp call room, so the existing incoming-call UI
+  /// rings automatically once the contact opens the link and joins.
+  Future<void> _startWhatsAppCall() async {
+    final scaffold = ScaffoldMessenger.of(context);
+    final client = Matrix.of(context).client;
+    final result = await showFutureLoadingDialog(
+      context: context,
+      future: () => requestCallLink(client),
+    );
+    final callLink = result.result;
+    if (callLink == null || !mounted) return; // error already surfaced
+
+    final bridge = WaMatrixBridge.instance;
+    try {
+      // Send the link plus a short "buzz" so the contact sees it's a call.
+      await bridge.sendText(
+        room.id,
+        '📞 Tjena call — tap to join:\n${callLink.link}',
+      );
+      await bridge.sendText(
+        room.id,
+        '☎️ Incoming call — open the link above to join.',
+      );
+    } catch (e) {
+      if (!mounted) return;
+      scaffold.showSnackBar(SnackBar(content: Text('Could not send link: $e')));
+      return;
+    }
+    if (!mounted) return;
+    scaffold.showSnackBar(
+      const SnackBar(
+        content: Text('Call link sent — your phone will ring when they join.'),
+      ),
+    );
   }
 
   void cancelReplyEventAction() => setState(() {

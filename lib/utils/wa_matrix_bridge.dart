@@ -383,6 +383,11 @@ class WaMatrixBridge {
     } catch (e) {
       Logs().w('[WaBridge] refreshRoom failed: $e');
     }
+    // Refresh the group member list on manual sync.
+    if (waId.endsWith('@g.us')) {
+      // ignore: unawaited_futures
+      syncGroupMembers(matrixRoomId);
+    }
   }
 
   /// Pull WhatsApp message history for a chat going back [days] days from the
@@ -393,6 +398,50 @@ class WaMatrixBridge {
     if (waId == null) throw Exception('not a WhatsApp chat');
     await TjenaBridge.instance
         .backfillFromCache(waId, days, accountID: _accOf(matrixRoomId));
+  }
+
+  /// Fetch a WhatsApp group's participants and inject them as room members, so
+  /// FluffyChat shows the member list and @-mention autocomplete works. The
+  /// member ghost ids match message senders (@wa_<user>:tjena.local).
+  Future<void> syncGroupMembers(String matrixRoomId) async {
+    final waId = _matrixToWa[matrixRoomId];
+    final client = _client;
+    if (waId == null || client?.userID == null || !waId.endsWith('@g.us')) {
+      return;
+    }
+    try {
+      final members = await TjenaBridge.instance
+          .getGroupMembers(waId, accountID: _accOf(matrixRoomId));
+      if (members.isEmpty) return;
+      final now = DateTime.now();
+      final stateEvents = <MatrixEvent>[];
+      for (final m in members) {
+        final user = m['user'] as String? ?? '';
+        if (user.isEmpty) continue;
+        final ghost = '@wa_$user:tjena.local';
+        final name = m['name'] as String? ?? '';
+        final content = <String, dynamic>{'membership': 'join'};
+        if (name.isNotEmpty) content['displayname'] = name;
+        stateEvents.add(MatrixEvent(
+          type: EventTypes.RoomMember,
+          content: content,
+          senderId: ghost,
+          eventId: '\$wamember_${_safe(ghost)}_${_safe(matrixRoomId)}',
+          originServerTs: now,
+          stateKey: ghost,
+        ));
+      }
+      if (stateEvents.isEmpty) return;
+      // ignore: unawaited_futures
+      _inject(SyncUpdate(
+        nextBatch: client!.prevBatch ?? '',
+        rooms: RoomsUpdate(join: {
+          matrixRoomId: JoinedRoomUpdate(state: stateEvents),
+        }),
+      ));
+    } catch (e) {
+      Logs().w('[WaBridge] syncGroupMembers failed: $e');
+    }
   }
 
   // ── Chat picker + cached-history sync ───────────────────────────────────────
@@ -697,6 +746,14 @@ class WaMatrixBridge {
     } catch (e) {
       Logs().w('[WaBridge] clearCache failed: $e');
     }
+    // Reset the whatsmeow session store too, so "Start fresh" recovers even from
+    // a corrupted store ("database disk image is malformed") that would
+    // otherwise block re-linking.
+    try {
+      await TjenaBridge.instance.forceReset(accountID: accountId);
+    } catch (e) {
+      Logs().w('[WaBridge] forceReset failed: $e');
+    }
   }
 
   // ── Bridge event dispatch ─────────────────────────────────────────────────────
@@ -935,6 +992,11 @@ class WaMatrixBridge {
       _initSpace(accountId, _connectedPhones[accountId]!);
     }
     _addRoomToSpace(accountId, matrixId);
+    // For groups, populate the participant list (member list + @-mentions).
+    if (!isDM && waId.endsWith('@g.us')) {
+      // ignore: unawaited_futures
+      syncGroupMembers(matrixId);
+    }
   }
 
   void _createRoom(

@@ -88,7 +88,13 @@ enum AppSettings<T> {
   hideRoomsInSpaces<bool>('chat.fluffy.hideRoomsInSpaces', false),
   spaceRoomPreview<bool>('chat.fluffy.space_room_preview', false),
   showThumbnailsInTimeline<bool>('chat.fluffy.showThumbnailsInTimeline', true),
-  debugPush<bool>('chat.fluffy.debug_push', false);
+  debugPush<bool>('chat.fluffy.debug_push', false),
+  // Base URL of the call-provisioner backend that mints guest call links for
+  // calling WhatsApp-bridged contacts (e.g. https://call.tjena.eu).
+  callProvisionerBaseUrl<String>(
+    'chat.fluffy.call_provisioner_base_url',
+    'https://call.tjena.eu',
+  );
 
   final String key;
   final T defaultValue;
