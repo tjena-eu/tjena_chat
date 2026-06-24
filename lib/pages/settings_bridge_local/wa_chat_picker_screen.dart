@@ -7,13 +7,24 @@ import 'package:fluffychat/utils/wa_matrix_bridge.dart';
 
 enum _SortKey { recent, name }
 
-/// Lists every WhatsApp chat (saved contacts + joined groups) and lets the user
-/// pick which ones to sync into the bridge as rooms. Newly-checked chats get a
-/// room created and (optionally) N days of history backfilled; unchecked chats
-/// have their room removed.
+/// Lists every WhatsApp chat (saved contacts + joined groups) with avatars,
+/// search and sorting.
+///
+/// Two modes:
+/// - default (sync mode): multi-select which chats to sync into the bridge as
+///   rooms. Newly-checked chats get a room + optional backfill; unchecked chats
+///   have their room removed.
+/// - [pickToOpen]: single-tap to open a chat (creating the room if needed) and
+///   pop the chosen Matrix room id. Used by "New chat → WhatsApp → choose an
+///   existing chat", so both entry points share this one advanced view.
 class WaChatPickerScreen extends StatefulWidget {
   final String accountId;
-  const WaChatPickerScreen({this.accountId = 'default', super.key});
+  final bool pickToOpen;
+  const WaChatPickerScreen({
+    this.accountId = 'default',
+    this.pickToOpen = false,
+    super.key,
+  });
 
   @override
   State<WaChatPickerScreen> createState() => _WaChatPickerScreenState();
@@ -29,6 +40,7 @@ class _WaChatPickerScreenState extends State<WaChatPickerScreen> {
   String _filter = '';
   _SortKey _sortKey = _SortKey.recent;
   bool _sortDescending = true; // recent: newest first; name: Z→A
+  String? _opening; // jid currently being opened (pickToOpen mode)
 
   // jid → resolved avatar URL ('' = none, missing = not yet fetched).
   final _avatarUrls = <String, String>{};
@@ -117,6 +129,29 @@ class _WaChatPickerScreenState extends State<WaChatPickerScreen> {
         ],
       ),
     );
+  }
+
+  /// pickToOpen mode: open (creating if needed) the tapped chat and pop its
+  /// Matrix room id to the caller.
+  Future<void> _openChat(Map<String, dynamic> c) async {
+    final jid = c['jid'] as String;
+    setState(() => _opening = jid);
+    try {
+      final roomId = await WaMatrixBridge.instance.openChatRoom(
+        jid,
+        c['name'] as String? ?? '',
+        c['is_group'] as bool? ?? false,
+        accountId: widget.accountId,
+      );
+      if (!mounted) return;
+      Navigator.of(context).pop(roomId);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _opening = null);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to open chat: $e')),
+      );
+    }
   }
 
   Future<void> _save() async {
@@ -218,9 +253,10 @@ class _WaChatPickerScreenState extends State<WaChatPickerScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Choose WhatsApp chats'),
+        title: Text(
+            widget.pickToOpen ? 'Open WhatsApp chat' : 'Choose WhatsApp chats'),
         actions: [
-          if (!_loading && _error == null)
+          if (!widget.pickToOpen && !_loading && _error == null)
             IconButton(
               tooltip: allVisibleSelected ? 'Deselect all' : 'Select all',
               onPressed: () => setState(() {
@@ -269,7 +305,7 @@ class _WaChatPickerScreenState extends State<WaChatPickerScreen> {
           ),
         ],
       ),
-      floatingActionButton: _loading
+      floatingActionButton: (_loading || widget.pickToOpen)
           ? null
           : FloatingActionButton.extended(
               onPressed: _saving ? null : _save,
@@ -329,6 +365,30 @@ class _WaChatPickerScreenState extends State<WaChatPickerScreen> {
                               phone.isNotEmpty ? phone : jid.split('@').first;
                           final title =
                               name.isNotEmpty ? name : subtitle;
+                          final avatar = _ChatAvatar(
+                            jid: jid,
+                            isGroup: isGroup,
+                            urlFuture: _avatarUrl(jid),
+                          );
+                          if (widget.pickToOpen) {
+                            return ListTile(
+                              leading: avatar,
+                              title: Text(title),
+                              subtitle: name.isNotEmpty ? Text(subtitle) : null,
+                              trailing: _opening == jid
+                                  ? const SizedBox(
+                                      width: 18,
+                                      height: 18,
+                                      child: CircularProgressIndicator(
+                                          strokeWidth: 2),
+                                    )
+                                  : ((c['synced'] as bool? ?? false)
+                                      ? const Icon(Icons.check, size: 18)
+                                      : null),
+                              onTap:
+                                  _opening == null ? () => _openChat(c) : null,
+                            );
+                          }
                           return CheckboxListTile(
                             value: _selected.contains(jid),
                             onChanged: (v) => setState(() {
@@ -338,11 +398,7 @@ class _WaChatPickerScreenState extends State<WaChatPickerScreen> {
                                 _selected.remove(jid);
                               }
                             }),
-                            secondary: _ChatAvatar(
-                              jid: jid,
-                              isGroup: isGroup,
-                              urlFuture: _avatarUrl(jid),
-                            ),
+                            secondary: avatar,
                             title: Text(title),
                             subtitle: name.isNotEmpty ? Text(subtitle) : null,
                           );

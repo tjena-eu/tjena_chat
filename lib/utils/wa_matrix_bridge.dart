@@ -199,6 +199,16 @@ class WaMatrixBridge {
   }
 
   bool isWaRoom(String matrixRoomId) => _matrixToWa.containsKey(matrixRoomId);
+
+  /// True if [matrixRoomId] is a 1:1 WhatsApp chat (not a group/broadcast).
+  /// Used to show the call button (WhatsApp call links) in DM chats, whose
+  /// virtual rooms aren't flagged isDirectChat by the SDK.
+  bool isWaDirectChat(String matrixRoomId) {
+    final waId = _matrixToWa[matrixRoomId];
+    return waId != null &&
+        !waId.endsWith('@g.us') &&
+        !waId.endsWith('@broadcast');
+  }
   String? waRoomId(String matrixRoomId) => _matrixToWa[matrixRoomId];
   String? matrixRoomId(String waRoomId) => _waToMatrix[waRoomId];
 
@@ -481,22 +491,40 @@ class WaMatrixBridge {
       {String accountId = _defaultAccount}) async {
     final byJid = <String, Map<String, dynamic>>{};
 
-    // Cached chats first — these carry last_ts (recency) for every chat.
+    // Contact-store names first (saved contacts + group names) — these are the
+    // best source of real display names. Keyed by jid for name lookups below.
+    final contacts = <String, Map<String, dynamic>>{};
+    for (final c in await TjenaBridge.instance.listChats(accountID: accountId)) {
+      final jid = c['jid'] as String? ?? '';
+      if (jid.isEmpty) continue;
+      contacts[jid] = c;
+    }
+
+    // Cached chats first — these carry last_ts (recency) for every chat. The
+    // cached name can be a bare phone number (when the message arrived before
+    // the contact resolved); upgrade it with a real contact-store name so the
+    // picker shows names, not numbers.
     for (final c in await TjenaBridge.instance.listCachedChats(accountID: accountId)) {
       final jid = c['jid'] as String? ?? '';
       if (jid.isEmpty) continue;
+      var name = (c['name'] as String?) ?? '';
+      if (!_looksLikeName(name)) {
+        final contactName = (contacts[jid]?['name'] as String?) ?? '';
+        if (_looksLikeName(contactName)) name = contactName;
+      }
       byJid[jid] = {
         'jid': jid,
-        'name': c['name'] ?? '',
+        'name': name,
         'is_group': c['is_group'] ?? false,
         'phone': c['phone'] ?? '',
         'last_activity': ((c['last_ts'] as num?)?.toInt() ?? 0) * 1000,
       };
     }
     // Merge in contacts/groups without cached history.
-    for (final c in await TjenaBridge.instance.listChats(accountID: accountId)) {
-      final jid = c['jid'] as String? ?? '';
-      if (jid.isEmpty || byJid.containsKey(jid)) continue;
+    for (final entry in contacts.entries) {
+      final jid = entry.key;
+      if (byJid.containsKey(jid)) continue;
+      final c = entry.value;
       byJid[jid] = {
         'jid': jid,
         'name': c['name'] ?? '',
@@ -1131,10 +1159,11 @@ class WaMatrixBridge {
   // Enqueue a handleSync so it runs strictly after all previously-enqueued
   // injections complete. Returns a future that completes when this update has
   // been applied. Errors are swallowed so one bad update can't stall the chain.
-  Future<void> _inject(SyncUpdate update) {
+  Future<void> _inject(SyncUpdate update, {Direction? direction}) {
     final client = _client;
     if (client == null) return Future.value();
-    final next = _injectChain.then((_) => client.handleSync(update));
+    final next =
+        _injectChain.then((_) => client.handleSync(update, direction: direction));
     _injectChain = next.catchError((Object e, StackTrace s) {
       Logs().w('[WaBridge] inject failed', e, s);
     });
@@ -1276,7 +1305,12 @@ class WaMatrixBridge {
               : UnreadNotificationCounts(notificationCount: 1),
         ),
       }),
-    ));
+    ),
+        // Backfilled (historical) messages must be processed as backward
+        // pagination so the SDK appends them to the END (older side) of the
+        // timeline instead of the front — otherwise old messages show up below
+        // the recent ones (the "time jump"). Requires newest-first emit order.
+        direction: isBackfill ? Direction.b : null);
     // Read back the room name once the sync has applied, to see whether the
     // RoomName state actually stuck in the SDK.
     _injectChain.then((_) {

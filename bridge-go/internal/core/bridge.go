@@ -1653,7 +1653,11 @@ func (b *Bridge) BackfillFromCache(roomID string, days int) error {
 		return err
 	}
 	b.appendLog(fmt.Sprintf("[Bridge] BackfillFromCache %s days=%d -> %d msgs", roomID, days, len(msgs)))
-	for _, m := range msgs {
+	// GetCachedMessages returns oldest-first. Emit newest-first so the Dart side
+	// can inject them as backward-pagination history (appended to the older end
+	// of the timeline) in the correct order.
+	for i := len(msgs) - 1; i >= 0; i-- {
+		m := msgs[i]
 		b.emitter.Emit(map[string]any{
 			"type":    "message",
 			"room_id": roomID,

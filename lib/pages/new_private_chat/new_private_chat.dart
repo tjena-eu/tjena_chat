@@ -11,7 +11,7 @@ import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/pages/new_private_chat/new_private_chat_view.dart';
 import 'package:fluffychat/pages/new_private_chat/qr_scanner_modal.dart';
 import 'package:fluffychat/pages/settings_bridges/bridge_definition.dart';
-import 'package:fluffychat/pages/settings_bridge_local/wa_open_chat_screen.dart';
+import 'package:fluffychat/pages/settings_bridge_local/wa_chat_picker_screen.dart';
 import 'package:fluffychat/utils/adaptive_bottom_sheet.dart';
 import 'package:fluffychat/utils/fluffy_share.dart';
 import 'package:fluffychat/utils/signal_matrix_bridge.dart';
@@ -194,7 +194,9 @@ class NewPrivateChatController extends State<NewPrivateChat> {
       await openLocalBridgeChat(isSig: false);
     } else if (choice == 'existing') {
       final roomId = await Navigator.of(context).push<String>(
-        MaterialPageRoute(builder: (_) => const WaOpenChatScreen()),
+        MaterialPageRoute(
+          builder: (_) => const WaChatPickerScreen(pickToOpen: true),
+        ),
       );
       if (roomId != null && roomId.isNotEmpty && mounted) {
         context.go('/rooms/$roomId');
