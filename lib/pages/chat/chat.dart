@@ -1566,13 +1566,6 @@ class ChatController extends State<ChatPageWithRoom>
       (event ?? selectedEvents.single).showInfoDialog(context);
 
   Future<void> onPhoneButtonTap() async {
-    // WhatsApp-bridged chat: there's no native WA call path. Mint a guest call
-    // link (temp unencrypted Matrix room) and send it into the WhatsApp chat;
-    // the existing legacy-VoIP UI rings/answers when the contact joins.
-    if (WaMatrixBridge.instance.isWaRoom(room.id)) {
-      await _startWhatsAppCall();
-      return;
-    }
     // VoIP required Android SDK 21
     if (PlatformInfos.isAndroid) {
       final androidInfo = await DeviceInfoPlugin().androidInfo;
@@ -1609,6 +1602,15 @@ class ChatController extends State<ChatPageWithRoom>
     if (callType == null) return;
     if (!mounted) return;
 
+    // WhatsApp-bridged chat: there's no native WA call path. Mint a guest call
+    // link and send it into the WhatsApp chat; the contact joins from the web
+    // and places the call (voice or video per our choice), which rings our
+    // existing legacy-VoIP UI.
+    if (WaMatrixBridge.instance.isWaRoom(room.id)) {
+      await _startWhatsAppCall(callType);
+      return;
+    }
+
     final voipPlugin = Matrix.of(context).voipPlugin;
     try {
       await voipPlugin!.voip.inviteToCall(room, callType);
@@ -1624,7 +1626,7 @@ class ChatController extends State<ChatPageWithRoom>
   /// it (plus a couple of notification buzzes) into the WhatsApp chat. The host
   /// is force-joined into the temp call room, so the existing incoming-call UI
   /// rings automatically once the contact opens the link and joins.
-  Future<void> _startWhatsAppCall() async {
+  Future<void> _startWhatsAppCall(CallType callType) async {
     final scaffold = ScaffoldMessenger.of(context);
     final client = Matrix.of(context).client;
     final result = await showFutureLoadingDialog(
@@ -1634,12 +1636,19 @@ class ChatController extends State<ChatPageWithRoom>
     final callLink = result.result;
     if (callLink == null || !mounted) return; // error already surfaced
 
+    // The recipient's web page places the call; tell it whether to place a voice
+    // or video call via a fragment param so it matches our choice (and our side
+    // gets a voice call → proximity/screen-off kicks in for audio).
+    final mode = callType == CallType.kVoice ? 'audio' : 'video';
+    final link = '${callLink.link}&mode=$mode';
+
     // 1) Send ONE message containing the link to the WhatsApp recipient. (Two
     //    rapid messages could race and drop one.)
     try {
       await WaMatrixBridge.instance.sendText(
         room.id,
-        '📞 Incoming Tjena call — tap the link to join:\n${callLink.link}',
+        '📞 Incoming Tjena ${mode == 'audio' ? 'voice' : 'video'} call — '
+        'tap the link to join:\n$link',
       );
     } catch (e) {
       if (!mounted) return;

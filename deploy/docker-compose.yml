@@ -40,7 +40,7 @@ services:
     # Build the image from source in this repo (no tarball/registry needed).
     build:
       context: ../call-web
-    image: tjena-call-web:0.2.0
+    image: tjena-call-web:0.2.2
     container_name: call-web
     restart: unless-stopped
     depends_on:

@@ -41,6 +41,7 @@ const accessToken = p.get("token");
 const userId = p.get("user");
 const roomId = p.get("room");
 const deviceId = p.get("device") ?? undefined;
+const mode = p.get("mode"); // "audio" | "video" (defaults to video)
 
 /// Returns a human list of which required link params are missing, or '' if ok.
 function missingParams(): string {
@@ -54,6 +55,62 @@ function missingParams(): string {
 
 let client: MatrixClient | null = null;
 let activeCall: MatrixCall | null = null;
+
+// ── Screen wake lock + proximity (best-effort) ───────────────────────────────
+// A web page can't turn the device screen off like a native app, but we can keep
+// the screen awake during a call and, where the browser exposes a proximity
+// sensor, blank the controls with a touch-absorbing overlay near the ear.
+let wakeLock: any = null;
+let proxStarted = false;
+
+async function acquireWakeLock() {
+  try {
+    wakeLock = await (navigator as any).wakeLock?.request("screen");
+  } catch {
+    /* not supported / denied — ignore */
+  }
+}
+function releaseWakeLock() {
+  try {
+    wakeLock?.release?.();
+  } catch {
+    /* ignore */
+  }
+  wakeLock = null;
+}
+// Wake locks are dropped when the tab is hidden; re-acquire when visible again.
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible" && activeCall) acquireWakeLock();
+});
+
+function setProx(near: boolean) {
+  document.getElementById("prox")?.classList.toggle("hidden", !near);
+}
+
+async function startProximity() {
+  if (proxStarted) return;
+  proxStarted = true;
+  // Generic Sensor API (Chrome-experimental). near/distance → blank overlay.
+  try {
+    const Sensor = (window as any).ProximitySensor;
+    if (Sensor) {
+      const sensor = new Sensor();
+      sensor.addEventListener("reading", () => {
+        const near =
+          sensor.near === true ||
+          (typeof sensor.distance === "number" && sensor.distance < 5);
+        setProx(near);
+      });
+      sensor.addEventListener("error", () => setProx(false));
+      sensor.start();
+      return;
+    }
+  } catch {
+    /* fall through to legacy */
+  }
+  // Legacy event (very old Firefox). No-op on modern browsers.
+  window.addEventListener("userproximity" as any, (e: any) => setProx(!!e.near));
+}
 
 async function boot(): Promise<MatrixClient> {
   const miss = missingParams();
@@ -119,6 +176,8 @@ function endUI(msg: string) {
   hintEl.textContent = msg;
   joinBtn.textContent = "Re-join";
   joinBtn.style.display = "";
+  releaseWakeLock();
+  setProx(false);
 }
 
 async function joinCall() {
@@ -132,7 +191,15 @@ async function joinCall() {
     if (!call) throw new Error("Could not create the call");
     activeCall = call;
     wireMedia(call);
-    await call.placeVideoCall();
+    if (mode === "audio") {
+      camBtn.style.display = "none"; // no camera in a voice call
+      await call.placeVoiceCall();
+      // Voice call → keep screen awake and blank controls near the ear.
+      startProximity();
+    } else {
+      await call.placeVideoCall();
+    }
+    await acquireWakeLock(); // keep the screen on during the call
     overlay.classList.add("hidden");
     controls.classList.remove("hidden");
   } catch (e: any) {
