@@ -76,6 +76,12 @@ type Bridge struct {
 	// receipts when the user reads the chat in Tjena.
 	lastRecv map[string]*types.MessageInfo
 
+	// On-demand server history requests in flight, keyed by room ID. When a chat
+	// is backfilled but the local cache doesn't cover the requested window, we
+	// ask WhatsApp's primary device for older messages and keep paginating (on
+	// each ON_DEMAND HistorySync reply) until we reach the target or run out.
+	pendingHist map[string]*histReq
+
 	logMu  sync.Mutex
 	logBuf []string // ring buffer, last 100 lines
 }
@@ -1597,7 +1603,148 @@ func (b *Bridge) recordOldest(roomID string, info *types.MessageInfo) {
 // sync — reliable, unlike WhatsApp's flaky on-demand network API. The anchor
 // parameters are accepted for FFI compatibility but no longer used.
 func (b *Bridge) RequestBackfill(roomID string, days int, anchorMsgID string, anchorFromMe bool, anchorTS int64) error {
-	return b.BackfillFromCache(roomID, days)
+	_, err := b.BackfillFromCache(roomID, days)
+	return err
+}
+
+// histReq tracks an in-flight on-demand history pagination for a chat.
+type histReq struct {
+	days       int   // window the user asked to display
+	cutoff     int64 // target oldest unix-seconds (now - days); stop once reached
+	lastOldest int64 // oldest cached ts at the last request (progress detection)
+	attempts   int
+}
+
+// RequestServerHistory asks WhatsApp's primary device for older messages for a
+// chat when the local cache doesn't already cover the requested [days]. Replies
+// arrive asynchronously as ON_DEMAND HistorySync events (handled in
+// handleHistorySync), which cache the messages, re-display them, and keep
+// paginating until the window is covered or the server has no more.
+func (b *Bridge) RequestServerHistory(roomID string, days int) error {
+	b.mu.Lock()
+	client := b.waClient
+	b.mu.Unlock()
+	if client == nil {
+		return fmt.Errorf("not connected")
+	}
+	if days < 1 {
+		days = 1
+	}
+	chat, err := types.ParseJID(roomID)
+	if err != nil {
+		return err
+	}
+	cutoff := time.Now().AddDate(0, 0, -days).Unix()
+
+	// If the cache already reaches back past the cutoff, no server round-trip is
+	// needed.
+	var oldestTS int64
+	if b.st != nil {
+		if m, err := b.st.GetOldestCachedMessage(context.Background(), roomID); err == nil && m != nil {
+			oldestTS = m.TS
+		}
+	}
+	if oldestTS != 0 && oldestTS <= cutoff {
+		return nil
+	}
+
+	b.mu.Lock()
+	if b.pendingHist == nil {
+		b.pendingHist = make(map[string]*histReq)
+	}
+	b.pendingHist[roomID] = &histReq{days: days, cutoff: cutoff, lastOldest: oldestTS}
+	b.mu.Unlock()
+
+	return b.sendHistReq(roomID, chat)
+}
+
+// sendHistReq sends a single on-demand history request anchored at the oldest
+// message we currently have for the chat.
+func (b *Bridge) sendHistReq(roomID string, chat types.JID) error {
+	b.mu.Lock()
+	client := b.waClient
+	b.mu.Unlock()
+	if client == nil {
+		return fmt.Errorf("not connected")
+	}
+	anchor := b.oldestAnchor(roomID, chat)
+	if anchor == nil {
+		b.mu.Lock()
+		delete(b.pendingHist, roomID)
+		b.mu.Unlock()
+		return fmt.Errorf("no anchor message to request history from")
+	}
+	histMsg := client.BuildHistorySyncRequest(anchor, 50)
+	ownID := client.Store.ID.ToNonAD()
+	_, err := client.SendMessage(context.Background(), ownID, histMsg,
+		whatsmeow.SendRequestExtra{Peer: true})
+	if err != nil {
+		b.appendLog("[Bridge] history request send failed: " + err.Error())
+	}
+	return err
+}
+
+// oldestAnchor returns the oldest message we know about for the chat (preferring
+// the cache, falling back to the live oldest tracker) as a MessageInfo anchor.
+func (b *Bridge) oldestAnchor(roomID string, chat types.JID) *types.MessageInfo {
+	if b.st != nil {
+		if m, err := b.st.GetOldestCachedMessage(context.Background(), roomID); err == nil && m != nil {
+			return &types.MessageInfo{
+				MessageSource: types.MessageSource{Chat: chat, IsFromMe: m.IsOwn},
+				ID:            m.MsgID,
+				Timestamp:     time.Unix(m.TS, 0),
+			}
+		}
+	}
+	b.mu.Lock()
+	mi := b.oldestMsg[roomID]
+	b.mu.Unlock()
+	return mi
+}
+
+// continuePendingHistory is called after a HistorySync is cached: for each chat
+// with an in-flight request it re-displays the now-larger cache and, if the
+// target window still isn't covered and the server is still returning older
+// messages, requests the next page.
+func (b *Bridge) continuePendingHistory() {
+	b.mu.Lock()
+	if len(b.pendingHist) == 0 {
+		b.mu.Unlock()
+		return
+	}
+	pending := make(map[string]*histReq, len(b.pendingHist))
+	for k, v := range b.pendingHist {
+		pending[k] = v
+	}
+	b.mu.Unlock()
+
+	for roomID, req := range pending {
+		var newOldest int64
+		if b.st != nil {
+			if m, err := b.st.GetOldestCachedMessage(context.Background(), roomID); err == nil && m != nil {
+				newOldest = m.TS
+			}
+		}
+		// Re-display what we now have for the requested window.
+		_, _ = b.BackfillFromCache(roomID, req.days)
+
+		madeProgress := newOldest != 0 && (req.lastOldest == 0 || newOldest < req.lastOldest)
+		reachedTarget := newOldest != 0 && newOldest <= req.cutoff
+		req.attempts++
+		if reachedTarget || !madeProgress || req.attempts > 30 {
+			b.mu.Lock()
+			delete(b.pendingHist, roomID)
+			b.mu.Unlock()
+			continue
+		}
+		req.lastOldest = newOldest
+		b.mu.Lock()
+		b.pendingHist[roomID] = req
+		b.mu.Unlock()
+		if chat, err := types.ParseJID(roomID); err == nil {
+			_ = b.sendHistReq(roomID, chat)
+		}
+	}
 }
 
 // handleHistorySync caches every message from a HistorySync (the bulk dump WA
@@ -1629,6 +1776,8 @@ func (b *Bridge) handleHistorySync(data *waHistorySync.HistorySync) {
 		data.GetSyncType().String(), len(data.GetConversations()), cached))
 	// Tell Dart fresh history landed so it can (re)run an auto-sync if configured.
 	b.emitter.Emit(map[string]any{"type": "history_cached", "count": cached})
+	// Re-display and keep paginating any chats with an on-demand request in flight.
+	b.continuePendingHistory()
 }
 
 // cacheHistoricalMessage parses one WebMessageInfo and stores it in the cache.
@@ -1692,9 +1841,11 @@ func (b *Bridge) ClearCache() error {
 // BackfillFromCache emits cached messages for a chat (last `days` days) as
 // backfill events, so the Dart side can populate the room. Reliable — reads the
 // local DB rather than the flaky on-demand network.
-func (b *Bridge) BackfillFromCache(roomID string, days int) error {
+// BackfillFromCache emits cached messages for the chat and returns how many it
+// found (so the UI can report "loaded N" / "none found").
+func (b *Bridge) BackfillFromCache(roomID string, days int) (int, error) {
 	if b.st == nil {
-		return fmt.Errorf("no store")
+		return 0, fmt.Errorf("no store")
 	}
 	if days < 1 {
 		days = 1
@@ -1702,17 +1853,16 @@ func (b *Bridge) BackfillFromCache(roomID string, days int) error {
 	since := time.Now().AddDate(0, 0, -days).Unix()
 	msgs, err := b.st.GetCachedMessages(context.Background(), roomID, since)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	b.appendLog(fmt.Sprintf("[Bridge] BackfillFromCache %s days=%d -> %d msgs", roomID, days, len(msgs)))
-	// GetCachedMessages returns oldest-first. Emit newest-first so the Dart side
-	// can inject them as backward-pagination history (appended to the older end
-	// of the timeline) in the correct order. Send them as ONE batched "backfill"
-	// event so the Dart side can inject with periodic yields (no UI freeze)
-	// instead of a flood of individual message events.
+	// GetCachedMessages returns oldest-first; emit in that order. The Dart side
+	// clears the room timeline and re-injects these as normal timeline events
+	// (oldest-first → chronological), so everything is visible without server
+	// pagination. Send them as ONE batched "backfill" event so the Dart side can
+	// inject with periodic yields (no UI freeze) instead of a flood of events.
 	events := make([]map[string]any, 0, len(msgs))
-	for i := len(msgs) - 1; i >= 0; i-- {
-		m := msgs[i]
+	for _, m := range msgs {
 		ev := map[string]any{
 			"id":          "$wa_" + m.MsgID,
 			"sender":      m.Sender,
@@ -1733,7 +1883,7 @@ func (b *Bridge) BackfillFromCache(roomID string, days int) error {
 		"room_id": roomID,
 		"events":  events,
 	})
-	return nil
+	return len(events), nil
 }
 
 // ListCachedChatsJSON returns all cached chats (from the history cache) as JSON,

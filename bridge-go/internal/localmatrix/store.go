@@ -548,6 +548,24 @@ func (s *LocalStore) GetCachedMessages(ctx context.Context, chatJID string, sinc
 	return out, rows.Err()
 }
 
+// GetOldestCachedMessage returns the oldest cached message for a chat (the
+// anchor for an on-demand server history request), or nil if the cache is empty.
+func (s *LocalStore) GetOldestCachedMessage(ctx context.Context, chatJID string) (*CachedMessage, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT chat_jid, msg_id, sender, sender_name, ts, body, msgtype, is_own
+		FROM wa_history WHERE chat_jid=? ORDER BY ts ASC LIMIT 1`, chatJID)
+	var m CachedMessage
+	var isOwn int
+	if err := row.Scan(&m.ChatJID, &m.MsgID, &m.Sender, &m.SenderName, &m.TS, &m.Body, &m.MsgType, &isOwn); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	m.IsOwn = isOwn != 0
+	return &m, nil
+}
+
 // ListCachedChats returns all cached chat summaries, newest activity first.
 func (s *LocalStore) ListCachedChats(ctx context.Context) ([]CachedChat, error) {
 	rows, err := s.db.QueryContext(ctx, `

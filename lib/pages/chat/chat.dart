@@ -1634,26 +1634,35 @@ class ChatController extends State<ChatPageWithRoom>
     final callLink = result.result;
     if (callLink == null || !mounted) return; // error already surfaced
 
-    final bridge = WaMatrixBridge.instance;
+    // 1) Send ONE message containing the link to the WhatsApp recipient. (Two
+    //    rapid messages could race and drop one.)
     try {
-      // Send the link plus a short "buzz" so the contact sees it's a call.
-      await bridge.sendText(
+      await WaMatrixBridge.instance.sendText(
         room.id,
-        '📞 Tjena call — tap to join:\n${callLink.link}',
-      );
-      await bridge.sendText(
-        room.id,
-        '☎️ Incoming call — open the link above to join.',
+        '📞 Incoming Tjena call — tap the link to join:\n${callLink.link}',
       );
     } catch (e) {
       if (!mounted) return;
       scaffold.showSnackBar(SnackBar(content: Text('Could not send link: $e')));
       return;
     }
+    // 2) Join the temporary call room ourselves (we were invited). We must be
+    //    *joined* and syncing so that when the recipient opens the link and
+    //    places the call, our native incoming-call UI rings — the same proven
+    //    path as a Matrix↔Matrix call.
+    try {
+      await client.joinRoom(callLink.callRoomId);
+    } catch (e) {
+      Logs().d('[WA-Call] joinRoom: $e');
+    }
+    // Keep this client alive/syncing — it already is. The VoIP plugin will show
+    // the incoming-call overlay when the guest places the call.
     if (!mounted) return;
     scaffold.showSnackBar(
       const SnackBar(
-        content: Text('Call link sent — your phone will ring when they join.'),
+        content: Text(
+          'Call link sent — your phone will ring when they join the call.',
+        ),
       ),
     );
   }

@@ -314,9 +314,22 @@ func (b *Bridge) RequestBackfill(accountID, roomID string, days int, anchorMsgID
 	})
 }
 
-func (b *Bridge) BackfillFromCache(accountID, roomID string, days int) error {
+// BackfillFromCache re-pulls cached history and returns the number of messages
+// found (so the UI can report "loaded N" / "none found").
+func (b *Bridge) BackfillFromCache(accountID, roomID string, days int) (int, error) {
+	c := b.coreOf(accountID)
+	if c == nil {
+		return 0, fmt.Errorf("account %q not started", accountID)
+	}
+	return c.BackfillFromCache(roomID, days)
+}
+
+// RequestServerHistory asks WhatsApp for older messages for a chat when the
+// local cache doesn't cover the requested window. Results arrive asynchronously
+// and re-display the chat.
+func (b *Bridge) RequestServerHistory(accountID, roomID string, days int) error {
 	return b.withAccount(accountID, func(c *core.Bridge) error {
-		return c.BackfillFromCache(roomID, days)
+		return c.RequestServerHistory(roomID, days)
 	})
 }
 

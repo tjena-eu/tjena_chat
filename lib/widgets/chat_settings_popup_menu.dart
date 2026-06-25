@@ -294,11 +294,12 @@ class ChatSettingsPopupMenuState extends State<ChatSettingsPopupMenu> {
           WaMatrixBridge.instance.resyncRoom(widget.room.id, days),
     );
     if (result.error == null && mounted) {
+      final count = result.result ?? 0;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(
-            'Synced name & photo, reloaded the last $days days.',
-          ),
+          content: Text(count > 0
+              ? 'Synced name & photo · loaded $count message(s) · fetching older from WhatsApp…'
+              : 'Synced name & photo · no local history · fetching from WhatsApp…'),
         ),
       );
     }
@@ -307,16 +308,18 @@ class ChatSettingsPopupMenuState extends State<ChatSettingsPopupMenu> {
   Future<void> _loadWaBackfill() async {
     final days = await _askBackfillDays('Load history', 'Load');
     if (days == null || days < 1 || !mounted) return;
-    try {
-      await WaMatrixBridge.instance.requestBackfill(widget.room.id, days);
-      if (!mounted) return;
+    final result = await showFutureLoadingDialog(
+      context: context,
+      future: () => WaMatrixBridge.instance.requestBackfill(widget.room.id, days),
+    );
+    if (result.error == null && mounted) {
+      final count = result.result ?? 0;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Loading the last $days days of history…')),
-      );
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Load history failed: $e')),
+        SnackBar(
+          content: Text(count > 0
+              ? 'Loaded $count message(s) · fetching older from WhatsApp…'
+              : 'No local history · fetching from WhatsApp…'),
+        ),
       );
     }
   }

@@ -413,41 +413,48 @@ class WaMatrixBridge {
   ///  2) wipe this chat's local timeline so the re-pull is clean (no duplicate
   ///     or mis-ordered messages),
   ///  3) cleanly re-pull [days] days of history from the cache.
-  Future<void> resyncRoom(String matrixRoomId, int days) async {
+  ///
+  /// Returns the number of cached messages re-pulled (0 = nothing in the cache
+  /// for this chat/window).
+  Future<int> resyncRoom(String matrixRoomId, int days) async {
     final waId = _matrixToWa[matrixRoomId];
-    final client = _client;
-    if (waId == null || client == null) return;
+    if (waId == null || _client == null) return 0;
     final accountId = _accOf(matrixRoomId);
 
     // 1) name + photo (+ group members for in-chat contact names)
     await refreshRoom(matrixRoomId);
 
-    // 2) clear the room's local timeline. A "limited" timeline makes the SDK
-    //    drop the room's cached events from its database, giving a clean slate.
-    await _inject(SyncUpdate(
-      nextBatch: client.prevBatch ?? '',
-      rooms: RoomsUpdate(join: {
-        matrixRoomId: JoinedRoomUpdate(
-          timeline: TimelineUpdate(events: const [], limited: true),
-        ),
-      }),
-    ));
-
-    // 3) clean re-pull of N days from the cache (history-ordered, batched).
-    if (days > 0) {
-      await TjenaBridge.instance
-          .backfillFromCache(waId, days, accountID: accountId);
-    }
+    // 2+3) clean re-pull of N days from the cache. backfillFromCache → the
+    //      backfill handler wipes the room timeline first, then re-injects the
+    //      window chronologically, so there are no duplicates or mis-ordering.
+    if (days <= 0) return 0;
+    final count = await TjenaBridge.instance
+        .backfillFromCache(waId, days, accountID: accountId);
+    // Also ask WhatsApp for older messages if the cache doesn't cover the
+    // window. The Go side skips the round-trip when the cache already reaches
+    // back far enough; otherwise replies arrive async and re-display the chat.
+    // ignore: unawaited_futures
+    TjenaBridge.instance
+        .requestServerHistory(waId, days, accountID: accountId);
+    return count;
   }
 
   /// Pull WhatsApp message history for a chat going back [days] days from the
   /// local cache (populated by the link-time history sync). Reliable — no
   /// network anchor needed. Messages arrive as backfill events.
-  Future<void> requestBackfill(String matrixRoomId, int days) async {
+  /// Returns the number of cached messages found for the window (0 = the local
+  /// cache has no history for this chat/window).
+  Future<int> requestBackfill(String matrixRoomId, int days) async {
     final waId = _matrixToWa[matrixRoomId];
     if (waId == null) throw Exception('not a WhatsApp chat');
-    await TjenaBridge.instance
-        .backfillFromCache(waId, days, accountID: _accOf(matrixRoomId));
+    final accountId = _accOf(matrixRoomId);
+    final count = await TjenaBridge.instance
+        .backfillFromCache(waId, days, accountID: accountId);
+    // Pull older messages from WhatsApp if the cache is short (no-op when it
+    // already covers the window); replies arrive async and re-display the chat.
+    // ignore: unawaited_futures
+    TjenaBridge.instance.requestServerHistory(waId, days, accountID: accountId);
+    return count;
   }
 
   /// Fetch a WhatsApp group's participants and inject them as room members, so
@@ -1217,12 +1224,30 @@ class WaMatrixBridge {
     return _injectChain;
   }
 
-  /// Inject a batch of backfilled (historical) messages, yielding to the event
-  /// loop every few messages so a large backfill doesn't freeze the UI. Each
-  /// message is injected as backward-pagination history via _pushMessage (which
-  /// uses Direction.b for is_backfill events).
+  /// Inject a batch of backfilled (historical) messages as a clean re-pull:
+  /// first wipe the room's timeline (so there are no duplicates or the old
+  /// "time jump"), then re-inject the whole window oldest-first as normal
+  /// timeline events. This keeps everything in the initially-loaded set so it's
+  /// visible immediately — virtual rooms can't paginate from a homeserver.
+  /// Yields to the event loop every few messages so large backfills don't
+  /// freeze the UI.
   Future<void> _pushBackfill(
       String accountId, String waRoomId, List<Map<String, dynamic>> events) async {
+    final matrixId = _waToMatrix[_key(accountId, waRoomId)];
+    final client = _client;
+    if (matrixId == null || client == null) return;
+
+    // Clear the room timeline. limited:true makes the SDK drop the room's cached
+    // events from its database AND clears any open Timeline's in-memory list.
+    await _inject(SyncUpdate(
+      nextBatch: client.prevBatch ?? '',
+      rooms: RoomsUpdate(join: {
+        matrixId: JoinedRoomUpdate(
+          timeline: TimelineUpdate(events: const [], limited: true),
+        ),
+      }),
+    ));
+
     var n = 0;
     for (final e in events) {
       _pushMessage(accountId, waRoomId, e);
@@ -1376,12 +1401,7 @@ class WaMatrixBridge {
               : UnreadNotificationCounts(notificationCount: 1),
         ),
       }),
-    ),
-        // Backfilled (historical) messages must be processed as backward
-        // pagination so the SDK appends them to the END (older side) of the
-        // timeline instead of the front — otherwise old messages show up below
-        // the recent ones (the "time jump"). Requires newest-first emit order.
-        direction: isBackfill ? Direction.b : null);
+    ));
     // Read back the room name once the sync has applied, to see whether the
     // RoomName state actually stuck in the SDK.
     _injectChain.then((_) {

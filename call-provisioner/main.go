@@ -120,7 +120,7 @@ func (s *server) handleCalls(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	guestID, guestToken, err := s.registerGuest(r.Context())
+	guestID, guestToken, guestDevice, err := s.registerGuest(r.Context())
 	if err != nil {
 		log.Printf("registerGuest: %v", err)
 		http.Error(w, "guest registration failed", http.StatusBadGateway)
@@ -146,6 +146,9 @@ func (s *server) handleCalls(w http.ResponseWriter, r *http.Request) {
 	frag.Set("room", roomID)
 	frag.Set("user", guestID)
 	frag.Set("token", guestToken)
+	if guestDevice != "" {
+		frag.Set("device", guestDevice)
+	}
 	link := s.cfg.publicWeb + "/#" + frag.Encode()
 
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -185,7 +188,7 @@ func (s *server) whoami(ctx context.Context, token string) (string, error) {
 	return out.UserID, nil
 }
 
-func (s *server) registerGuest(ctx context.Context) (userID, token string, err error) {
+func (s *server) registerGuest(ctx context.Context) (userID, token, deviceID string, err error) {
 	// 1. fetch nonce
 	nreq, _ := http.NewRequestWithContext(ctx, http.MethodGet,
 		s.cfg.synapseBase+"/_synapse/admin/v1/register", nil)
@@ -193,7 +196,7 @@ func (s *server) registerGuest(ctx context.Context) (userID, token string, err e
 		Nonce string `json:"nonce"`
 	}
 	if err = s.do(nreq, &nres); err != nil {
-		return "", "", fmt.Errorf("nonce: %w", err)
+		return "", "", "", fmt.Errorf("nonce: %w", err)
 	}
 	username := "guest-" + randHex(10)
 	password := randHex(24)
@@ -213,11 +216,12 @@ func (s *server) registerGuest(ctx context.Context) (userID, token string, err e
 	var rres struct {
 		UserID      string `json:"user_id"`
 		AccessToken string `json:"access_token"`
+		DeviceID    string `json:"device_id"`
 	}
 	if err = s.do(rreq, &rres); err != nil {
-		return "", "", fmt.Errorf("register: %w", err)
+		return "", "", "", fmt.Errorf("register: %w", err)
 	}
-	return rres.UserID, rres.AccessToken, nil
+	return rres.UserID, rres.AccessToken, rres.DeviceID, nil
 }
 
 func (s *server) createRoom(ctx context.Context, hostID, guestID string) (string, error) {
@@ -335,5 +339,9 @@ func randHex(n int) string {
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(v)
+	enc := json.NewEncoder(w)
+	// Don't HTML-escape: the call link's "&" separators would become "&",
+	// which breaks the URL if it's copied from raw output rather than parsed.
+	enc.SetEscapeHTML(false)
+	enc.Encode(v)
 }

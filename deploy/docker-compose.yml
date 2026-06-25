@@ -1,5 +1,6 @@
 # Tjena call stack: provisioner backend + static guest web client.
-# Copy .env.example -> .env, fill it in, then:  docker compose up -d --build
+# Build + run (from this repo on the server):  docker compose up -d --build
+# Copy .env.example -> .env and fill it in first.
 #
 # Routing (behind your Cloudflare Tunnel, HTTP only):
 #   call.tjena.eu        -> this "web" service (static SPA)
@@ -9,15 +10,10 @@
 
 services:
   provisioner:
-    # Pre-built image — load it first with:
-    #   docker load -i tjena-call-provisioner-0.1.0.tar.gz
-    # (or import the tarball in Portainer → Images). pull_policy:never keeps
-    # Portainer from trying to fetch it from a registry.
-    image: tjena-call-provisioner:0.1.0
-    pull_policy: never
-    # For local dev you can build instead of using the image above:
-    # build:
-    #   context: ../call-provisioner
+    # Build the image from source in this repo (no tarball/registry needed).
+    build:
+      context: ../call-provisioner
+    image: tjena-call-provisioner:0.1.1
     container_name: call-provisioner
     restart: unless-stopped
     environment:
@@ -41,12 +37,10 @@ services:
       - "host.docker.internal:host-gateway"
 
   web:
-    # Pre-built image — load it first with:
-    #   docker load -i tjena-call-web-0.1.0.tar.gz
-    image: tjena-call-web:0.1.0
-    pull_policy: never
-    # build:
-    #   context: ../call-web
+    # Build the image from source in this repo (no tarball/registry needed).
+    build:
+      context: ../call-web
+    image: tjena-call-web:0.2.0
     container_name: call-web
     restart: unless-stopped
     depends_on:

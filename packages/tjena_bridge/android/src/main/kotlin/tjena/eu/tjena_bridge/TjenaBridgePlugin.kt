@@ -164,7 +164,13 @@ class TjenaBridgePlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamH
                 "backfillFromCache" -> {
                     val roomID = call.argument<String>("roomID") ?: ""
                     val days = call.argument<Int>("days") ?: 30
-                    bridge!!.backfillFromCache(acc(call), roomID, days.toLong())
+                    val count = bridge!!.backfillFromCache(acc(call), roomID, days.toLong())
+                    result.success(count)
+                }
+                "requestServerHistory" -> {
+                    val roomID = call.argument<String>("roomID") ?: ""
+                    val days = call.argument<Int>("days") ?: 30
+                    bridge!!.requestServerHistory(acc(call), roomID, days.toLong())
                     result.success(null)
                 }
                 "clearCache" -> {

@@ -325,9 +325,23 @@ class TjenaBridge {
   }
 
   /// Emit cached history for [roomID] (last [days] days) as backfill events.
-  Future<void> backfillFromCache(String roomID, int days,
+  /// Returns the number of cached messages found (0 = nothing in the cache for
+  /// that window).
+  Future<int> backfillFromCache(String roomID, int days,
+          {String accountID = 'default'}) async =>
+      await _method.invokeMethod<int>('backfillFromCache', {
+        'accountID': accountID,
+        'roomID': roomID,
+        'days': days,
+      }) ??
+      0;
+
+  /// Ask WhatsApp's primary device for older messages for [roomID] when the
+  /// local cache doesn't cover [days]. Results arrive asynchronously (as history
+  /// is cached) and re-display the chat.
+  Future<void> requestServerHistory(String roomID, int days,
           {String accountID = 'default'}) =>
-      _method.invokeMethod<void>('backfillFromCache', {
+      _method.invokeMethod<void>('requestServerHistory', {
         'accountID': accountID,
         'roomID': roomID,
         'days': days,
