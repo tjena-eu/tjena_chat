@@ -7,6 +7,8 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:tjena_bridge/tjena_bridge.dart';
 
+import 'package:fluffychat/config/setting_keys.dart';
+import 'package:fluffychat/utils/wa_call_link.dart';
 import '../bridge/bridge_link_screen.dart';
 
 /// Hub for the on-device (local) bridges. WhatsApp supports multiple accounts;
@@ -24,12 +26,20 @@ class _LocalBridgesHubState extends State<LocalBridgesHub> {
   List<Map<String, dynamic>> _waAccounts = [];
   SignalBridgeState _sig = SignalBridgeState.empty;
   bool _busy = false;
+  bool _waCallsEnabled = AppSettings.waCallsEnabled.value;
+  bool? _callOnline; // null = checking
 
   @override
   void initState() {
     super.initState();
     _refresh();
+    _checkCallFeature();
     _sub = TjenaBridge.instance.events.listen((_) => _refresh());
+  }
+
+  Future<void> _checkCallFeature() async {
+    final online = await callFeatureOnline();
+    if (mounted) setState(() => _callOnline = online);
   }
 
   @override
@@ -220,6 +230,64 @@ class _LocalBridgesHubState extends State<LocalBridgesHub> {
               trailing: Icon(Icons.circle,
                   size: 12, color: dot(_sig.connected, _sig.linked)),
               onTap: () => context.go('/rooms/settings/signal'),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
+            child: Text('WHATSAPP CALLS',
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                  letterSpacing: 1.2,
+                )),
+          ),
+          Card(
+            margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+            child: Column(
+              children: [
+                SwitchListTile(
+                  secondary: const Icon(Icons.call_outlined),
+                  title: const Text('WhatsApp web calls'),
+                  subtitle: const Text(
+                    'Show a call button in WhatsApp chats that sends the '
+                    'contact a web call link.',
+                  ),
+                  value: _waCallsEnabled,
+                  onChanged: (v) {
+                    setState(() => _waCallsEnabled = v);
+                    AppSettings.waCallsEnabled.setItem(v);
+                    if (v) _checkCallFeature();
+                  },
+                ),
+                if (_waCallsEnabled) ...[
+                  const Divider(height: 1),
+                  ListTile(
+                    leading: Icon(
+                      _callOnline == null
+                          ? Icons.hourglass_empty
+                          : (_callOnline!
+                              ? Icons.cloud_done_outlined
+                              : Icons.cloud_off_outlined),
+                      color: _callOnline == null
+                          ? theme.colorScheme.onSurfaceVariant
+                          : (_callOnline!? Colors.green : theme.colorScheme.error),
+                    ),
+                    title: Text(_callOnline == null
+                        ? 'Checking call service…'
+                        : (_callOnline!
+                            ? 'Call service online'
+                            : 'Call service offline')),
+                    subtitle: Text(AppSettings.callProvisionerBaseUrl.value),
+                    trailing: IconButton(
+                      tooltip: 'Recheck',
+                      icon: const Icon(Icons.refresh),
+                      onPressed: () {
+                        setState(() => _callOnline = null);
+                        _checkCallFeature();
+                      },
+                    ),
+                  ),
+                ],
+              ],
             ),
           ),
         ],

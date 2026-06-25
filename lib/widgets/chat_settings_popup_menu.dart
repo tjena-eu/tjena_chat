@@ -120,18 +120,7 @@ class ChatSettingsPopupMenuState extends State<ChatSettingsPopupMenu> {
                 context.go('/rooms/${widget.room.id}/encryption');
                 break;
               case ChatPopupMenuActions.syncWaRoom:
-                try {
-                  await WaMatrixBridge.instance.refreshRoom(widget.room.id);
-                  if (!context.mounted) return;
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Refreshing name and photo…')),
-                  );
-                } catch (e) {
-                  if (!context.mounted) return;
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('Refresh failed: $e')),
-                  );
-                }
+                await _waSync();
                 break;
               case ChatPopupMenuActions.loadWaBackfill:
                 await _loadWaBackfill();
@@ -252,13 +241,14 @@ class ChatSettingsPopupMenuState extends State<ChatSettingsPopupMenu> {
     );
   }
 
-  Future<void> _loadWaBackfill() async {
+  /// Prompts for a number of days of history. Returns null if cancelled.
+  Future<int?> _askBackfillDays(String title, String actionLabel) async {
     final controller = TextEditingController(text: '7');
-    final days = await showDialog<int>(
+    return showDialog<int>(
       context: context,
       useRootNavigator: true,
       builder: (context) => AlertDialog(
-        title: const Text('Load history'),
+        title: Text(title),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -286,13 +276,37 @@ class ChatSettingsPopupMenuState extends State<ChatSettingsPopupMenu> {
           FilledButton(
             onPressed: () =>
                 Navigator.of(context).pop(int.tryParse(controller.text.trim())),
-            child: const Text('Load'),
+            child: Text(actionLabel),
           ),
         ],
       ),
     );
-    if (days == null || days < 1) return;
-    if (!mounted) return;
+  }
+
+  /// The per-chat "WA sync": refresh name + photo (+ contact names), wipe the
+  /// local history for this chat and cleanly re-pull the requested days.
+  Future<void> _waSync() async {
+    final days = await _askBackfillDays('WA sync', 'Sync');
+    if (days == null || days < 1 || !mounted) return;
+    final result = await showFutureLoadingDialog(
+      context: context,
+      future: () =>
+          WaMatrixBridge.instance.resyncRoom(widget.room.id, days),
+    );
+    if (result.error == null && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Synced name & photo, reloaded the last $days days.',
+          ),
+        ),
+      );
+    }
+  }
+
+  Future<void> _loadWaBackfill() async {
+    final days = await _askBackfillDays('Load history', 'Load');
+    if (days == null || days < 1 || !mounted) return;
     try {
       await WaMatrixBridge.instance.requestBackfill(widget.room.id, days);
       if (!mounted) return;

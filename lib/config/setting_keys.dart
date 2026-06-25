@@ -94,7 +94,10 @@ enum AppSettings<T> {
   callProvisionerBaseUrl<String>(
     'chat.fluffy.call_provisioner_base_url',
     'https://call.tjena.eu',
-  );
+  ),
+  // Whether WhatsApp web-response calls (guest call links) are enabled. When
+  // off, the call button is hidden in WhatsApp chats.
+  waCallsEnabled<bool>('chat.fluffy.wa_calls_enabled', true);
 
   final String key;
   final T defaultValue;

@@ -223,8 +223,9 @@ class ChatView extends StatelessWidget {
                   ] else if (!controller.room.isArchived) ...[
                     if ((AppSettings.experimentalVoip.value &&
                             controller.room.isDirectChat) ||
-                        WaMatrixBridge.instance
-                            .isWaDirectChat(controller.room.id))
+                        (AppSettings.waCallsEnabled.value &&
+                            WaMatrixBridge.instance
+                                .isWaDirectChat(controller.room.id)))
                       IconButton(
                         onPressed: controller.onPhoneButtonTap,
                         icon: const Icon(Icons.call_outlined),

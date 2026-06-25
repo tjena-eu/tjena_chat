@@ -161,6 +161,16 @@ class SettingsSecurityView extends StatelessWidget {
                       style: const TextStyle(fontFamily: 'RobotoMono'),
                     ),
                   ),
+                  ListTile(
+                    leading: const Icon(Icons.vpn_key_outlined),
+                    trailing: const Icon(Icons.chevron_right_outlined),
+                    title: const Text('Encryption recovery key'),
+                    subtitle: const Text(
+                      'Set up or reset your secure key backup and view the '
+                      'recovery key used to restore your encrypted messages.',
+                    ),
+                    onTap: () => context.go('/backup'),
+                  ),
                   if (capabilities?.mChangePassword?.enabled != false ||
                       error != null)
                     ListTile(

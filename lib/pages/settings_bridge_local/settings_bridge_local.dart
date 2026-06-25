@@ -467,7 +467,9 @@ class _ConnectionCard extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'WhatsApp Direct',
+                    state.phone.isNotEmpty
+                        ? 'WhatsApp · ${state.phone}'
+                        : 'WhatsApp Direct',
                     style: theme.textTheme.titleMedium
                         ?.copyWith(fontWeight: FontWeight.bold),
                   ),

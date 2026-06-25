@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"html"
 	"log"
 	"net"
 	"net/http"
@@ -1211,20 +1212,25 @@ func (b *Bridge) handleWAMessage(evt *waevents.Message) {
 	}
 
 	senderName := b.senderDisplayName(evt.Info.Sender, evt.Info.PushName)
+	formattedBody := b.formatMentions(msg, body)
+	msgEvent := map[string]any{
+		"id":          "$wa_" + evt.Info.ID,
+		"sender":      "@wa_" + evt.Info.Sender.User + ":tjena.local",
+		"sender_name": senderName,
+		"chat_phone":  b.chatPhone(evt.Info.Chat),
+		"ts":          evt.Info.Timestamp.Unix(),
+		"body":        body,
+		"msgtype":     msgtype,
+		"is_own":      isOwn,
+		"is_backfill": false,
+	}
+	if formattedBody != "" {
+		msgEvent["formatted_body"] = formattedBody
+	}
 	b.emitter.Emit(map[string]any{
 		"type":    "message",
 		"room_id": roomID,
-		"event": map[string]any{
-			"id":          "$wa_" + evt.Info.ID,
-			"sender":      "@wa_" + evt.Info.Sender.User + ":tjena.local",
-			"sender_name": senderName,
-			"chat_phone":  b.chatPhone(evt.Info.Chat),
-			"ts":          evt.Info.Timestamp.Unix(),
-			"body":        body,
-			"msgtype":     msgtype,
-			"is_own":      isOwn,
-			"is_backfill": false,
-		},
+		"event":   msgEvent,
 	})
 
 	// Cache the live message too so the history cache stays current for future
@@ -1232,14 +1238,15 @@ func (b *Bridge) handleWAMessage(evt *waevents.Message) {
 	if b.st != nil {
 		// ignore: best-effort cache write
 		_ = b.st.CacheMessage(context.Background(), localmatrix.CachedMessage{
-			ChatJID:    roomID,
-			MsgID:      evt.Info.ID,
-			Sender:     "@wa_" + evt.Info.Sender.User + ":tjena.local",
-			SenderName: senderName,
-			TS:         evt.Info.Timestamp.Unix(),
-			Body:       body,
-			MsgType:    msgtype,
-			IsOwn:      isOwn,
+			ChatJID:       roomID,
+			MsgID:         evt.Info.ID,
+			Sender:        "@wa_" + evt.Info.Sender.User + ":tjena.local",
+			SenderName:    senderName,
+			TS:            evt.Info.Timestamp.Unix(),
+			Body:          body,
+			MsgType:       msgtype,
+			IsOwn:         isOwn,
+			FormattedBody: formattedBody,
 		}, evt.Info.PushName, evt.Info.Chat.Server == types.GroupServer)
 	}
 
@@ -1251,6 +1258,50 @@ func (b *Bridge) handleWAMessage(evt *waevents.Message) {
 			evt.Info.Timestamp.Unix(), isOwn, msg,
 		)
 	}
+}
+
+// formatMentions builds a Matrix HTML formatted_body for a message that
+// @-mentions group participants, turning each "@<number>" token into a
+// clickable pill that shows the participant's real name. Returns "" when the
+// message has no mentions (so the caller can omit formatted_body entirely).
+func (b *Bridge) formatMentions(msg *waE2E.Message, body string) string {
+	if msg == nil || body == "" {
+		return ""
+	}
+	var ci *waE2E.ContextInfo
+	if ext := msg.GetExtendedTextMessage(); ext != nil {
+		ci = ext.GetContextInfo()
+	}
+	if ci == nil {
+		return ""
+	}
+	mentioned := ci.GetMentionedJID()
+	if len(mentioned) == 0 {
+		return ""
+	}
+	formatted := html.EscapeString(body)
+	changed := false
+	for _, mj := range mentioned {
+		jid, err := types.ParseJID(mj)
+		if err != nil {
+			continue
+		}
+		name := b.senderDisplayName(jid, "")
+		if name == "" {
+			name = jid.User
+		}
+		token := "@" + jid.User // WhatsApp encodes mentions as @<user> in text
+		ghost := "@wa_" + jid.User + ":tjena.local"
+		link := `<a href="https://matrix.to/#/` + ghost + `">` + html.EscapeString(name) + `</a>`
+		if strings.Contains(formatted, token) {
+			formatted = strings.ReplaceAll(formatted, token, link)
+			changed = true
+		}
+	}
+	if !changed {
+		return ""
+	}
+	return formatted
 }
 
 // messageBodyType maps a WhatsApp message to a Matrix body string and msgtype.
@@ -1615,14 +1666,15 @@ func (b *Bridge) cacheHistoricalMessage(ctx context.Context, roomID string, chat
 		}
 	}
 	_ = b.st.CacheMessage(ctx, localmatrix.CachedMessage{
-		ChatJID:    roomID,
-		MsgID:      msgID,
-		Sender:     "@wa_" + senderUser + ":tjena.local",
-		SenderName: b.senderDisplayName(senderJID, wmi.GetPushName()),
-		TS:         int64(wmi.GetMessageTimestamp()),
-		Body:       body,
-		MsgType:    msgtype,
-		IsOwn:      key.GetFromMe(),
+		ChatJID:       roomID,
+		MsgID:         msgID,
+		Sender:        "@wa_" + senderUser + ":tjena.local",
+		SenderName:    b.senderDisplayName(senderJID, wmi.GetPushName()),
+		TS:            int64(wmi.GetMessageTimestamp()),
+		Body:          body,
+		MsgType:       msgtype,
+		IsOwn:         key.GetFromMe(),
+		FormattedBody: b.formatMentions(msg, body),
 	}, chatName, isGroup)
 	return true
 }
@@ -1655,24 +1707,32 @@ func (b *Bridge) BackfillFromCache(roomID string, days int) error {
 	b.appendLog(fmt.Sprintf("[Bridge] BackfillFromCache %s days=%d -> %d msgs", roomID, days, len(msgs)))
 	// GetCachedMessages returns oldest-first. Emit newest-first so the Dart side
 	// can inject them as backward-pagination history (appended to the older end
-	// of the timeline) in the correct order.
+	// of the timeline) in the correct order. Send them as ONE batched "backfill"
+	// event so the Dart side can inject with periodic yields (no UI freeze)
+	// instead of a flood of individual message events.
+	events := make([]map[string]any, 0, len(msgs))
 	for i := len(msgs) - 1; i >= 0; i-- {
 		m := msgs[i]
-		b.emitter.Emit(map[string]any{
-			"type":    "message",
-			"room_id": roomID,
-			"event": map[string]any{
-				"id":          "$wa_" + m.MsgID,
-				"sender":      m.Sender,
-				"sender_name": m.SenderName,
-				"ts":          m.TS,
-				"body":        m.Body,
-				"msgtype":     m.MsgType,
-				"is_own":      m.IsOwn,
-				"is_backfill": true,
-			},
-		})
+		ev := map[string]any{
+			"id":          "$wa_" + m.MsgID,
+			"sender":      m.Sender,
+			"sender_name": m.SenderName,
+			"ts":          m.TS,
+			"body":        m.Body,
+			"msgtype":     m.MsgType,
+			"is_own":      m.IsOwn,
+			"is_backfill": true,
+		}
+		if m.FormattedBody != "" {
+			ev["formatted_body"] = m.FormattedBody
+		}
+		events = append(events, ev)
 	}
+	b.emitter.Emit(map[string]any{
+		"type":    "backfill",
+		"room_id": roomID,
+		"events":  events,
+	})
 	return nil
 }
 

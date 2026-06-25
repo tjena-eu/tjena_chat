@@ -151,6 +151,14 @@ class WaMatrixBridge {
     // ignore: unawaited_futures
     _saveRoomMappings();
 
+    // ④ Ensure each account's WhatsApp space exists and (re-)parents all of its
+    // chats. This repairs chats that were created without a space (e.g. via the
+    // picker before the account had connected). _initSpace adds every known
+    // account room as a space child.
+    for (final accountId in _matrixToAccount.values.toSet()) {
+      _ensureSpace(accountId);
+    }
+
     _sub?.cancel();
     _sub = TjenaBridge.instance.events.listen(
       _onBridgeEvent,
@@ -397,6 +405,38 @@ class WaMatrixBridge {
     if (waId.endsWith('@g.us')) {
       // ignore: unawaited_futures
       syncGroupMembers(matrixRoomId);
+    }
+  }
+
+  /// Full re-sync of a WhatsApp chat (the per-chat "WA sync" action):
+  ///  1) refresh the chat name + profile picture (+ group member/contact names),
+  ///  2) wipe this chat's local timeline so the re-pull is clean (no duplicate
+  ///     or mis-ordered messages),
+  ///  3) cleanly re-pull [days] days of history from the cache.
+  Future<void> resyncRoom(String matrixRoomId, int days) async {
+    final waId = _matrixToWa[matrixRoomId];
+    final client = _client;
+    if (waId == null || client == null) return;
+    final accountId = _accOf(matrixRoomId);
+
+    // 1) name + photo (+ group members for in-chat contact names)
+    await refreshRoom(matrixRoomId);
+
+    // 2) clear the room's local timeline. A "limited" timeline makes the SDK
+    //    drop the room's cached events from its database, giving a clean slate.
+    await _inject(SyncUpdate(
+      nextBatch: client.prevBatch ?? '',
+      rooms: RoomsUpdate(join: {
+        matrixRoomId: JoinedRoomUpdate(
+          timeline: TimelineUpdate(events: const [], limited: true),
+        ),
+      }),
+    ));
+
+    // 3) clean re-pull of N days from the cache (history-ordered, batched).
+    if (days > 0) {
+      await TjenaBridge.instance
+          .backfillFromCache(waId, days, accountID: accountId);
     }
   }
 
@@ -855,9 +895,8 @@ class WaMatrixBridge {
         final waRoomId = evt.data['room_id'] as String? ?? '';
         final events =
             (evt.data['events'] as List?)?.cast<Map<String, dynamic>>() ?? [];
-        for (final e in events) {
-          _pushMessage(acc, waRoomId, e);
-        }
+        // ignore: unawaited_futures
+        _pushBackfill(acc, waRoomId, events);
 
       case BridgeEventType.mediaReady:
         final waRoomId = evt.data['room_id'] as String? ?? '';
@@ -886,10 +925,17 @@ class WaMatrixBridge {
 
   // ── Space management ──────────────────────────────────────────────────────────
 
+  /// Ensure this account's WhatsApp space exists so every WA chat can be parented
+  /// to it, even before the phone number is known (the name is refined later).
+  void _ensureSpace(String accountId) {
+    if (_spaceIds[accountId] != null) return;
+    _initSpace(accountId, _connectedPhones[accountId] ?? '');
+  }
+
   void _initSpace(String accountId, String phone) {
     final client = _client;
     if (client?.userID == null) return;
-    final name = 'WA-local ($phone)';
+    final name = phone.isNotEmpty ? 'WA-local ($phone)' : 'WhatsApp';
     final spaceRoomId = _spaceRoomIdFor(accountId);
 
     if (_spaceIds[accountId] != null) {
@@ -1016,9 +1062,10 @@ class WaMatrixBridge {
     // ignore: unawaited_futures
     _saveRoomMappings();
     _createRoom(accountId, matrixId, waId, name, isDM);
-    if (_spaceIds[accountId] == null && _connectedPhones[accountId] != null) {
-      _initSpace(accountId, _connectedPhones[accountId]!);
-    }
+    // Always parent the chat to this account's WhatsApp space — even if we don't
+    // know the phone number yet (picker chats are created from cache before the
+    // connected-state event arrives). The space name is refined once connected.
+    _ensureSpace(accountId);
     _addRoomToSpace(accountId, matrixId);
     // For groups, populate the participant list (member list + @-mentions).
     if (!isDM && waId.endsWith('@g.us')) {
@@ -1170,6 +1217,23 @@ class WaMatrixBridge {
     return _injectChain;
   }
 
+  /// Inject a batch of backfilled (historical) messages, yielding to the event
+  /// loop every few messages so a large backfill doesn't freeze the UI. Each
+  /// message is injected as backward-pagination history via _pushMessage (which
+  /// uses Direction.b for is_backfill events).
+  Future<void> _pushBackfill(
+      String accountId, String waRoomId, List<Map<String, dynamic>> events) async {
+    var n = 0;
+    for (final e in events) {
+      _pushMessage(accountId, waRoomId, e);
+      // Let pending injections drain and the UI render a frame periodically.
+      if (++n % 20 == 0) {
+        await _injectChain;
+        await Future<void>.delayed(Duration.zero);
+      }
+    }
+  }
+
   void _pushMessage(
       String accountId, String waRoomId, Map<String, dynamic> eventData) {
     final matrixId = _waToMatrix[_key(accountId, waRoomId)];
@@ -1198,6 +1262,13 @@ class WaMatrixBridge {
     };
     if (geoUri != null) {
       content['geo_uri'] = geoUri;
+    }
+    // HTML formatted body for @-mentions (clickable name pills). Built by the Go
+    // bridge from WhatsApp's mentionedJID list; present for live + backfill.
+    final formattedBody = eventData['formatted_body'] as String?;
+    if (formattedBody != null && formattedBody.isNotEmpty) {
+      content['format'] = 'org.matrix.custom.html';
+      content['formatted_body'] = formattedBody;
     }
 
     // For non-text, non-location msgtypes that need async media download,

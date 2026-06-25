@@ -16,6 +16,20 @@ class CallLink {
   const CallLink({required this.callRoomId, required this.link});
 }
 
+/// Pings the call-provisioner backend's /healthz to check whether the WhatsApp
+/// call feature is online. Returns true on a 2xx response.
+Future<bool> callFeatureOnline() async {
+  final base = AppSettings.callProvisionerBaseUrl.value.trim();
+  if (base.isEmpty) return false;
+  try {
+    final uri = Uri.parse('${base.replaceAll(RegExp(r'/+$'), '')}/healthz');
+    final res = await http.get(uri).timeout(const Duration(seconds: 6));
+    return res.statusCode >= 200 && res.statusCode < 300;
+  } catch (_) {
+    return false;
+  }
+}
+
 /// Asks the call-provisioner backend to mint an ephemeral guest user + an
 /// unencrypted call room, force-join the current user (host), and return a
 /// shareable web link. Authenticated with the host's Matrix access token; the

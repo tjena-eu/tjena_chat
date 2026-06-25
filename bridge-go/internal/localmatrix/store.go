@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"maunium.net/go/mautrix/event"
@@ -145,6 +146,7 @@ func (s *LocalStore) RunMigrations(ctx context.Context) error {
 			body        TEXT NOT NULL DEFAULT '',
 			msgtype     TEXT NOT NULL DEFAULT 'm.text',
 			is_own      INTEGER NOT NULL DEFAULT 0,
+			formatted_body TEXT NOT NULL DEFAULT '',
 			PRIMARY KEY (chat_jid, msg_id)
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_wa_history_chat ON wa_history(chat_jid, ts)`,
@@ -159,6 +161,14 @@ func (s *LocalStore) RunMigrations(ctx context.Context) error {
 		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
 			return fmt.Errorf("migrate %q: %w", stmt[:30], err)
 		}
+	}
+	// Tolerant migration for DBs created before formatted_body existed (errors
+	// with "duplicate column name" if already present — ignore that).
+	if _, err := s.db.ExecContext(ctx,
+		`ALTER TABLE wa_history ADD COLUMN formatted_body TEXT NOT NULL DEFAULT ''`); err != nil &&
+		!strings.Contains(err.Error(), "duplicate column") {
+		// Non-fatal: log via returned error only if it's not the expected dup.
+		return fmt.Errorf("migrate add formatted_body: %w", err)
 	}
 	return nil
 }
@@ -473,14 +483,15 @@ func unmarshalContent(s string) *event.Content {
 
 // CachedMessage is one cached WhatsApp message.
 type CachedMessage struct {
-	ChatJID    string
-	MsgID      string
-	Sender     string
-	SenderName string
-	TS         int64 // unix seconds
-	Body       string
-	MsgType    string
-	IsOwn      bool
+	ChatJID       string
+	MsgID         string
+	Sender        string
+	SenderName    string
+	TS            int64 // unix seconds
+	Body          string
+	MsgType       string
+	IsOwn         bool
+	FormattedBody string // HTML formatted_body (mentions); '' if none
 }
 
 // CachedChat is a chat summary from the cache (for the picker).
@@ -495,10 +506,10 @@ type CachedChat struct {
 // the chat summary's name/last_ts up to date.
 func (s *LocalStore) CacheMessage(ctx context.Context, m CachedMessage, chatName string, isGroup bool) error {
 	if _, err := s.db.ExecContext(ctx, `
-		INSERT INTO wa_history (chat_jid, msg_id, sender, sender_name, ts, body, msgtype, is_own)
-		VALUES (?,?,?,?,?,?,?,?)
+		INSERT INTO wa_history (chat_jid, msg_id, sender, sender_name, ts, body, msgtype, is_own, formatted_body)
+		VALUES (?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(chat_jid, msg_id) DO NOTHING`,
-		m.ChatJID, m.MsgID, m.Sender, m.SenderName, m.TS, m.Body, m.MsgType, boolInt(m.IsOwn)); err != nil {
+		m.ChatJID, m.MsgID, m.Sender, m.SenderName, m.TS, m.Body, m.MsgType, boolInt(m.IsOwn), m.FormattedBody); err != nil {
 		return err
 	}
 	// Upsert chat summary: bump last_ts, set name if we have a better one.
@@ -517,7 +528,7 @@ func (s *LocalStore) CacheMessage(ctx context.Context, m CachedMessage, chatName
 // oldest first (ready to inject as backfill).
 func (s *LocalStore) GetCachedMessages(ctx context.Context, chatJID string, sinceUnix int64) ([]CachedMessage, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT chat_jid, msg_id, sender, sender_name, ts, body, msgtype, is_own
+		SELECT chat_jid, msg_id, sender, sender_name, ts, body, msgtype, is_own, formatted_body
 		FROM wa_history WHERE chat_jid=? AND ts>=? ORDER BY ts ASC`,
 		chatJID, sinceUnix)
 	if err != nil {
@@ -528,7 +539,7 @@ func (s *LocalStore) GetCachedMessages(ctx context.Context, chatJID string, sinc
 	for rows.Next() {
 		var m CachedMessage
 		var isOwn int
-		if err := rows.Scan(&m.ChatJID, &m.MsgID, &m.Sender, &m.SenderName, &m.TS, &m.Body, &m.MsgType, &isOwn); err != nil {
+		if err := rows.Scan(&m.ChatJID, &m.MsgID, &m.Sender, &m.SenderName, &m.TS, &m.Body, &m.MsgType, &isOwn, &m.FormattedBody); err != nil {
 			return nil, err
 		}
 		m.IsOwn = isOwn != 0
