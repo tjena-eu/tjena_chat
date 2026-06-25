@@ -333,6 +333,13 @@ func (b *Bridge) RequestServerHistory(accountID, roomID string, days int) error 
 	})
 }
 
+// RejectCall declines an incoming WhatsApp call (auto-decline).
+func (b *Bridge) RejectCall(accountID, callerJID, callID string) error {
+	return b.withAccount(accountID, func(c *core.Bridge) error {
+		return c.RejectCall(callerJID, callID)
+	})
+}
+
 // ClearCache wipes an account's cached WhatsApp history (not WhatsApp itself).
 func (b *Bridge) ClearCache(accountID string) error {
 	return b.withAccount(accountID, func(c *core.Bridge) error { return c.ClearCache() })

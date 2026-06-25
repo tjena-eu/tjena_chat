@@ -1,9 +1,8 @@
-// Command call-provisioner mints ephemeral guest users + temporary unencrypted
-// Matrix call rooms so a Tjena host can "call" a WhatsApp-bridged contact via a
-// shareable web link (legacy m.call.* VoIP, joined by a no-app browser guest).
-//
-// It holds two server secrets (a @callbot admin token and the registration
-// shared secret) and exposes a tiny HTTP API authenticated with the calling
+// Command call-provisioner backs the "call a WhatsApp contact via a web link"
+// feature. It reuses ONE persistent guest user and ONE persistent call room per
+// host (looked up by room alias), so repeated calls don't create trash users or
+// clutter the host's room list. It holds a @callbot admin token + the
+// registration shared secret, and authenticates each request with the calling
 // host's own Matrix access token. See README.md.
 package main
 
@@ -11,8 +10,8 @@ import (
 	"bytes"
 	"context"
 	"crypto/hmac"
-	"crypto/rand"
 	"crypto/sha1"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -21,8 +20,8 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -32,7 +31,7 @@ type config struct {
 	publicWeb   string // public web client base, e.g. https://call.tjena.eu
 	adminToken  string // @callbot admin access token
 	regSecret   string // registration_shared_secret
-	ttl         time.Duration
+	guestUser   string // localpart of the single reused guest user
 	listen      string
 }
 
@@ -51,57 +50,37 @@ func mustEnv(k string) string {
 	return v
 }
 
-type call struct {
-	roomID    string
-	guestID   string
-	createdAt time.Time
+type server struct {
+	cfg config
+	hc  *http.Client
 }
 
-type server struct {
-	cfg   config
-	hc    *http.Client
-	mu    sync.Mutex
-	calls map[string]*call // roomID -> call
-}
+const guestDeviceID = "tjena-call-web" // fixed device so the guest has one device
 
 func main() {
-	ttlMin := envOr("CALL_TTL_MINUTES", "30")
-	var ttl time.Duration
-	if _, err := fmt.Sscanf(ttlMin, "%d", new(int)); err == nil {
-		var m int
-		fmt.Sscanf(ttlMin, "%d", &m)
-		ttl = time.Duration(m) * time.Minute
-	} else {
-		ttl = 30 * time.Minute
-	}
 	cfg := config{
 		synapseBase: strings.TrimRight(mustEnv("SYNAPSE_BASE_URL"), "/"),
 		publicHS:    strings.TrimRight(envOr("PUBLIC_HS_URL", mustEnv("SYNAPSE_BASE_URL")), "/"),
 		publicWeb:   strings.TrimRight(mustEnv("PUBLIC_WEB_BASE"), "/"),
 		adminToken:  mustEnv("ADMIN_TOKEN"),
 		regSecret:   mustEnv("REGISTRATION_SHARED_SECRET"),
-		ttl:         ttl,
+		guestUser:   envOr("GUEST_USERNAME", "tjenacall-guest"),
 		listen:      envOr("LISTEN_ADDR", ":8090"),
 	}
-	s := &server{
-		cfg:   cfg,
-		hc:    &http.Client{Timeout: 20 * time.Second},
-		calls: map[string]*call{},
-	}
-	go s.sweepLoop()
+	s := &server{cfg: cfg, hc: &http.Client{Timeout: 20 * time.Second}}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/api/calls", s.handleCalls)       // POST
-	mux.HandleFunc("/api/calls/", s.handleDeleteCall) // DELETE /api/calls/{roomId}
+	mux.HandleFunc("/api/calls", s.handleCalls) // POST
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("ok"))
 	})
 
-	log.Printf("call-provisioner listening on %s (synapse=%s ttl=%s)", cfg.listen, cfg.synapseBase, cfg.ttl)
+	log.Printf("call-provisioner listening on %s (synapse=%s guest=%s)",
+		cfg.listen, cfg.synapseBase, cfg.guestUser)
 	log.Fatal(http.ListenAndServe(cfg.listen, mux))
 }
 
-// ---- HTTP handlers ----
+// ---- HTTP handler ----
 
 func (s *server) handleCalls(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -120,60 +99,38 @@ func (s *server) handleCalls(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	guestID, guestToken, guestDevice, err := s.registerGuest(r.Context())
+	// Reuse this host's own guest user (refreshing its token) and the host's
+	// single call room (found by alias, created on first use). Both are derived
+	// per-host so multiple users on the server stay isolated.
+	guestID, guestToken, err := s.ensureGuest(r.Context(), hostID)
 	if err != nil {
-		log.Printf("registerGuest: %v", err)
-		http.Error(w, "guest registration failed", http.StatusBadGateway)
+		log.Printf("ensureGuest: %v", err)
+		http.Error(w, "guest setup failed", http.StatusBadGateway)
 		return
 	}
-	roomID, err := s.createRoom(r.Context(), hostID, guestID)
+	roomID, err := s.ensureRoom(r.Context(), hostID, guestID)
 	if err != nil {
-		log.Printf("createRoom: %v", err)
-		http.Error(w, "room creation failed", http.StatusBadGateway)
+		log.Printf("ensureRoom: %v", err)
+		http.Error(w, "room setup failed", http.StatusBadGateway)
 		return
 	}
-	if err := s.forceJoin(r.Context(), roomID, hostID); err != nil {
-		log.Printf("forceJoin host: %v", err)
-		// non-fatal: host can still join via invite, but log it
-	}
-
-	s.mu.Lock()
-	s.calls[roomID] = &call{roomID: roomID, guestID: guestID, createdAt: time.Now()}
-	s.mu.Unlock()
 
 	frag := url.Values{}
 	frag.Set("hs", s.cfg.publicHS)
 	frag.Set("room", roomID)
 	frag.Set("user", guestID)
 	frag.Set("token", guestToken)
-	if guestDevice != "" {
-		frag.Set("device", guestDevice)
-	}
+	frag.Set("device", guestDeviceID)
 	link := s.cfg.publicWeb + "/#" + frag.Encode()
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"callId":    roomID,
-		"room":      roomID,
-		"expiresAt": time.Now().Add(s.cfg.ttl).UTC().Format(time.RFC3339),
-		"link":      link,
+		"callId": roomID,
+		"room":   roomID,
+		"link":   link,
 	})
 }
 
-func (s *server) handleDeleteCall(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodDelete {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	roomID := strings.TrimPrefix(r.URL.Path, "/api/calls/")
-	if roomID == "" {
-		http.Error(w, "missing room id", http.StatusBadRequest)
-		return
-	}
-	s.teardown(r.Context(), roomID)
-	w.WriteHeader(http.StatusNoContent)
-}
-
-// ---- Synapse calls ----
+// ---- Synapse: identity ----
 
 func (s *server) whoami(ctx context.Context, token string) (string, error) {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet,
@@ -188,24 +145,76 @@ func (s *server) whoami(ctx context.Context, token string) (string, error) {
 	return out.UserID, nil
 }
 
-func (s *server) registerGuest(ctx context.Context) (userID, token, deviceID string, err error) {
-	// 1. fetch nonce
+// ---- Synapse: the single reused guest ----
+
+// ensureGuest logs in as THIS host's persistent guest (registering it the first
+// time), returning its user id and a fresh access token. The guest is per-host
+// so concurrent callers on the same server never share an identity or token.
+// A fixed device id keeps each guest to one device; re-login refreshes the token.
+func (s *server) ensureGuest(ctx context.Context, hostID string) (userID, token string, err error) {
+	user := s.guestUsername(hostID)
+	password := guestPassword(s.cfg.regSecret, user)
+	userID, token, err = s.login(ctx, user, password)
+	if err == nil {
+		return userID, token, nil
+	}
+	// First run for this host (or password mismatch): register, then log in.
+	if rerr := s.registerUser(ctx, user, password); rerr != nil {
+		return "", "", fmt.Errorf("register guest: %w (login also failed: %v)", rerr, err)
+	}
+	return s.login(ctx, user, password)
+}
+
+// guestUsername derives a per-host guest localpart (e.g. tjenacall-guest-niklas)
+// so each host has its own guest and they never collide.
+func (s *server) guestUsername(hostID string) string {
+	local := aliasSanitize.ReplaceAllString(strings.ToLower(localpart(hostID)), "-")
+	return s.cfg.guestUser + "-" + local
+}
+
+// guestPassword deterministically derives a guest's password from the
+// registration shared secret + username, so we never need to store it.
+func guestPassword(secret, user string) string {
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte("tjena-call-guest:" + user))
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+func (s *server) login(ctx context.Context, user, password string) (userID, token string, err error) {
+	body, _ := json.Marshal(map[string]any{
+		"type":                        "m.login.password",
+		"identifier":                  map[string]any{"type": "m.id.user", "user": user},
+		"password":                    password,
+		"device_id":                   guestDeviceID,
+		"initial_device_display_name": "Tjena Call (web)",
+	})
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost,
+		s.cfg.synapseBase+"/_matrix/client/v3/login", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	var out struct {
+		UserID      string `json:"user_id"`
+		AccessToken string `json:"access_token"`
+	}
+	if err := s.do(req, &out); err != nil {
+		return "", "", err
+	}
+	return out.UserID, out.AccessToken, nil
+}
+
+func (s *server) registerUser(ctx context.Context, user, password string) error {
 	nreq, _ := http.NewRequestWithContext(ctx, http.MethodGet,
 		s.cfg.synapseBase+"/_synapse/admin/v1/register", nil)
 	var nres struct {
 		Nonce string `json:"nonce"`
 	}
-	if err = s.do(nreq, &nres); err != nil {
-		return "", "", "", fmt.Errorf("nonce: %w", err)
+	if err := s.do(nreq, &nres); err != nil {
+		return fmt.Errorf("nonce: %w", err)
 	}
-	username := "guest-" + randHex(10)
-	password := randHex(24)
-	// 2. mac = HMAC-SHA1(secret, nonce\0user\0password\0notadmin)
 	mac := hmac.New(sha1.New, []byte(s.cfg.regSecret))
-	mac.Write([]byte(nres.Nonce + "\x00" + username + "\x00" + password + "\x00notadmin"))
+	mac.Write([]byte(nres.Nonce + "\x00" + user + "\x00" + password + "\x00notadmin"))
 	body, _ := json.Marshal(map[string]any{
 		"nonce":    nres.Nonce,
-		"username": username,
+		"username": user,
 		"password": password,
 		"admin":    false,
 		"mac":      hex.EncodeToString(mac.Sum(nil)),
@@ -213,27 +222,53 @@ func (s *server) registerGuest(ctx context.Context) (userID, token, deviceID str
 	rreq, _ := http.NewRequestWithContext(ctx, http.MethodPost,
 		s.cfg.synapseBase+"/_synapse/admin/v1/register", bytes.NewReader(body))
 	rreq.Header.Set("Content-Type", "application/json")
-	var rres struct {
-		UserID      string `json:"user_id"`
-		AccessToken string `json:"access_token"`
-		DeviceID    string `json:"device_id"`
-	}
-	if err = s.do(rreq, &rres); err != nil {
-		return "", "", "", fmt.Errorf("register: %w", err)
-	}
-	return rres.UserID, rres.AccessToken, rres.DeviceID, nil
+	return s.do(rreq, nil)
 }
 
-func (s *server) createRoom(ctx context.Context, hostID, guestID string) (string, error) {
+// ---- Synapse: the single reused room (per host, via alias) ----
+
+var aliasSanitize = regexp.MustCompile(`[^a-z0-9._-]+`)
+
+func (s *server) ensureRoom(ctx context.Context, hostID, guestID string) (string, error) {
+	local := aliasSanitize.ReplaceAllString(strings.ToLower(localpart(hostID)), "-")
+	aliasLocal := "tjenacall-" + local
+	alias := "#" + aliasLocal + ":" + serverName(hostID)
+
+	// Reuse the existing room if the alias resolves.
+	if roomID, err := s.resolveAlias(ctx, alias); err == nil && roomID != "" {
+		// Make sure both parties are (re-)invited in case someone left.
+		s.invite(ctx, roomID, hostID)
+		s.invite(ctx, roomID, guestID)
+		return roomID, nil
+	}
+	// First call for this host: create the room with the canonical alias.
+	return s.createRoom(ctx, aliasLocal, hostID, guestID)
+}
+
+func (s *server) resolveAlias(ctx context.Context, alias string) (string, error) {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet,
+		s.cfg.synapseBase+"/_matrix/client/v3/directory/room/"+url.PathEscape(alias), nil)
+	req.Header.Set("Authorization", "Bearer "+s.cfg.adminToken)
+	var out struct {
+		RoomID string `json:"room_id"`
+	}
+	if err := s.do(req, &out); err != nil {
+		return "", err
+	}
+	return out.RoomID, nil
+}
+
+func (s *server) createRoom(ctx context.Context, aliasLocal, hostID, guestID string) (string, error) {
 	body, _ := json.Marshal(map[string]any{
-		"preset":    "trusted_private_chat",
-		"is_direct": true,
-		"invite":    []string{hostID, guestID},
+		"name":            "Tjena Call",
+		"room_alias_name": aliasLocal,
+		"preset":          "trusted_private_chat",
+		"invite":          []string{hostID, guestID},
 		"initial_state": []map[string]any{
 			{"type": "m.room.guest_access", "state_key": "",
 				"content": map[string]any{"guest_access": "can_join"}},
 			{"type": "m.room.history_visibility", "state_key": "",
-				"content": map[string]any{"history_visibility": "joined"}},
+				"content": map[string]any{"history_visibility": "shared"}},
 		},
 	})
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPost,
@@ -249,62 +284,37 @@ func (s *server) createRoom(ctx context.Context, hostID, guestID string) (string
 	return out.RoomID, nil
 }
 
-func (s *server) forceJoin(ctx context.Context, roomID, userID string) error {
+// invite (re-)invites a user as @callbot; ignores "already in the room" errors.
+func (s *server) invite(ctx context.Context, roomID, userID string) {
 	body, _ := json.Marshal(map[string]any{"user_id": userID})
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPost,
-		s.cfg.synapseBase+"/_synapse/admin/v1/join/"+url.PathEscape(roomID), bytes.NewReader(body))
+		s.cfg.synapseBase+"/_matrix/client/v3/rooms/"+url.PathEscape(roomID)+"/invite",
+		bytes.NewReader(body))
 	req.Header.Set("Authorization", "Bearer "+s.cfg.adminToken)
 	req.Header.Set("Content-Type", "application/json")
-	return s.do(req, nil)
-}
-
-func (s *server) teardown(ctx context.Context, roomID string) {
-	s.mu.Lock()
-	c := s.calls[roomID]
-	delete(s.calls, roomID)
-	s.mu.Unlock()
-	if c != nil && c.guestID != "" {
-		body, _ := json.Marshal(map[string]any{"erase": true})
-		req, _ := http.NewRequestWithContext(ctx, http.MethodPost,
-			s.cfg.synapseBase+"/_synapse/admin/v1/deactivate/"+url.PathEscape(c.guestID), bytes.NewReader(body))
-		req.Header.Set("Authorization", "Bearer "+s.cfg.adminToken)
-		req.Header.Set("Content-Type", "application/json")
-		if err := s.do(req, nil); err != nil {
-			log.Printf("deactivate %s: %v", c.guestID, err)
-		}
-	}
-	// Purge the room (async on Synapse side).
-	body, _ := json.Marshal(map[string]any{"purge": true, "block": true})
-	req, _ := http.NewRequestWithContext(ctx, http.MethodDelete,
-		s.cfg.synapseBase+"/_synapse/admin/v2/rooms/"+url.PathEscape(roomID), bytes.NewReader(body))
-	req.Header.Set("Authorization", "Bearer "+s.cfg.adminToken)
-	req.Header.Set("Content-Type", "application/json")
-	if err := s.do(req, nil); err != nil {
-		log.Printf("purge %s: %v", roomID, err)
-	}
-}
-
-func (s *server) sweepLoop() {
-	t := time.NewTicker(5 * time.Minute)
-	defer t.Stop()
-	for range t.C {
-		now := time.Now()
-		s.mu.Lock()
-		var expired []string
-		for id, c := range s.calls {
-			if now.Sub(c.createdAt) > s.cfg.ttl {
-				expired = append(expired, id)
-			}
-		}
-		s.mu.Unlock()
-		for _, id := range expired {
-			log.Printf("sweep: tearing down expired call %s", id)
-			s.teardown(context.Background(), id)
-		}
+	if err := s.do(req, nil); err != nil &&
+		!strings.Contains(err.Error(), "already in the room") &&
+		!strings.Contains(err.Error(), "already joined") {
+		log.Printf("invite %s -> %s: %v", userID, roomID, err)
 	}
 }
 
 // ---- helpers ----
+
+func localpart(userID string) string {
+	u := strings.TrimPrefix(userID, "@")
+	if i := strings.IndexByte(u, ':'); i >= 0 {
+		return u[:i]
+	}
+	return u
+}
+
+func serverName(userID string) string {
+	if i := strings.IndexByte(userID, ':'); i >= 0 {
+		return userID[i+1:]
+	}
+	return ""
+}
 
 func (s *server) do(req *http.Request, out any) error {
 	res, err := s.hc.Do(req)
@@ -330,18 +340,12 @@ func bearer(r *http.Request) string {
 	return ""
 }
 
-func randHex(n int) string {
-	b := make([]byte, n)
-	rand.Read(b)
-	return hex.EncodeToString(b)
-}
-
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	enc := json.NewEncoder(w)
-	// Don't HTML-escape: the call link's "&" separators would become "&",
-	// which breaks the URL if it's copied from raw output rather than parsed.
+	// Don't HTML-escape: the call link's "&" separators would otherwise become
+	// "&", which breaks the URL if copied from raw output.
 	enc.SetEscapeHTML(false)
 	enc.Encode(v)
 }

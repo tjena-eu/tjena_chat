@@ -63,7 +63,7 @@ enum AppSettings<T> {
   displayChatDetailsColumn('chat.fluffy.display_chat_details_column', false),
   autoSaveMedia<bool>('chat.fluffy.auto_save_media', false),
   // AppConfig-mirrored settings
-  applicationName<String>('chat.fluffy.application_name', 'tjena!chat'),
+  applicationName<String>('chat.fluffy.application_name', 'tjena'),
   defaultHomeserver<String>('chat.fluffy.default_homeserver', 'tjena.eu'),
   // colorSchemeSeed stored as ARGB int
   colorSchemeSeedInt<int>('chat.fluffy.color_scheme_seed', 0xFF5625BA),
@@ -97,7 +97,12 @@ enum AppSettings<T> {
   ),
   // Whether WhatsApp web-response calls (guest call links) are enabled. When
   // off, the call button is hidden in WhatsApp chats.
-  waCallsEnabled<bool>('chat.fluffy.wa_calls_enabled', true);
+  waCallsEnabled<bool>('chat.fluffy.wa_calls_enabled', true),
+  // Auto-reply to incoming WhatsApp calls with a "unreachable, call me via this
+  // link" message; and optionally auto-decline the WhatsApp call so it stops
+  // ringing.
+  waCallAutoReply<bool>('chat.fluffy.wa_call_auto_reply', false),
+  waCallAutoDecline<bool>('chat.fluffy.wa_call_auto_decline', false);
 
   final String key;
   final T defaultValue;

@@ -13,7 +13,7 @@ services:
     # Build the image from source in this repo (no tarball/registry needed).
     build:
       context: ../call-provisioner
-    image: tjena-call-provisioner:0.1.1
+    image: tjena-call-provisioner:0.2.1
     container_name: call-provisioner
     restart: unless-stopped
     environment:

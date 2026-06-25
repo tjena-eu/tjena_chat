@@ -888,6 +888,9 @@ func (b *Bridge) handleWAEvent(rawEvt any) {
 	case *waevents.Receipt:
 		b.handleWAReceipt(evt)
 
+	case *waevents.CallOffer:
+		b.handleCallOffer(evt)
+
 	case *waevents.Presence:
 		b.emitter.Emit(map[string]any{
 			"type":      "presence",
@@ -1001,6 +1004,112 @@ func (b *Bridge) postConnectNameScan() {
 			})
 		}
 	}
+}
+
+// callerChatJID maps a call's caller JID to the JID of the contact's existing
+// chat room, trying its phone↔LID counterpart, so an incoming-call message
+// lands in the existing conversation instead of a new room.
+func (b *Bridge) callerChatJID(caller types.JID) types.JID {
+	b.mu.Lock()
+	client := b.waClient
+	b.mu.Unlock()
+
+	cands := []types.JID{caller}
+	if client != nil {
+		ctx := context.Background()
+		switch caller.Server {
+		case types.HiddenUserServer: // @lid → add phone number
+			if pn, err := client.Store.LIDs.GetPNForLID(ctx, caller); err == nil && !pn.IsEmpty() {
+				cands = append(cands, pn)
+			}
+		case types.DefaultUserServer: // phone → add @lid
+			if lid, err := client.Store.LIDs.GetLIDForPN(ctx, caller); err == nil && !lid.IsEmpty() {
+				cands = append(cands, lid)
+			}
+		}
+	}
+
+	// Prefer a candidate whose room already exists (the conversation).
+	b.mu.Lock()
+	for _, c := range cands {
+		if b.knownRooms[c.User+"@"+string(c.Server)] {
+			b.mu.Unlock()
+			return c
+		}
+	}
+	b.mu.Unlock()
+	// No existing room — prefer the phone-number JID for a stable room id.
+	for _, c := range cands {
+		if c.Server == types.DefaultUserServer {
+			return c
+		}
+	}
+	return caller
+}
+
+// handleCallOffer surfaces an incoming WhatsApp call as a message in the
+// caller's chat so Tjena visibly shows that the contact is calling. (We don't
+// answer/reject here — this is just so the call is seen.)
+func (b *Bridge) handleCallOffer(evt *waevents.CallOffer) {
+	rawFrom := evt.From
+	if rawFrom.IsEmpty() {
+		rawFrom = evt.CallCreator
+	}
+	if rawFrom.IsEmpty() {
+		return
+	}
+	// Calls usually arrive addressed by LID while the existing chat is keyed by
+	// the phone number (or vice versa). Resolve to the JID of the chat that
+	// already exists so the "incoming call" message lands in the same room as
+	// the conversation, not a new one.
+	caller := b.callerChatJID(rawFrom)
+	roomID := caller.User + "@" + string(caller.Server)
+	b.ensureRoom(caller)
+	name := b.senderDisplayName(caller, "")
+	ts := evt.Timestamp
+	if ts.IsZero() {
+		ts = time.Now()
+	}
+	b.appendLog("[Bridge] incoming WhatsApp call from " + roomID)
+	// Visible indicator message in the chat.
+	b.emitter.Emit(map[string]any{
+		"type":    "message",
+		"room_id": roomID,
+		"event": map[string]any{
+			"id":          "$wacall_" + evt.CallID,
+			"sender":      "@wa_" + caller.User + ":tjena.local",
+			"sender_name": name,
+			"chat_phone":  b.chatPhone(caller),
+			"ts":          ts.Unix(),
+			"body":        "📞 Incoming WhatsApp call",
+			"msgtype":     "m.text",
+			"is_own":      false,
+			"is_backfill": false,
+		},
+	})
+	// Action event so the app can auto-reply with a call link and/or decline.
+	// caller_jid is the raw caller (for RejectCall); room_id is the chat.
+	b.emitter.Emit(map[string]any{
+		"type":       "wa_call",
+		"room_id":    roomID,
+		"caller_jid": rawFrom.String(),
+		"call_id":    evt.CallID,
+	})
+}
+
+// RejectCall declines an incoming WhatsApp call so it stops ringing.
+func (b *Bridge) RejectCall(callerJID, callID string) error {
+	b.mu.Lock()
+	client := b.waClient
+	b.mu.Unlock()
+	if client == nil {
+		return fmt.Errorf("not connected")
+	}
+	jid, err := types.ParseJID(callerJID)
+	if err != nil {
+		return err
+	}
+	return client.RejectCall(context.Background(), jid, callID)
 }
 
 // ensureRoom emits a room_created event (keyed by the chat JID, matching the

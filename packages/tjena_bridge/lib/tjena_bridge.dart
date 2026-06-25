@@ -40,6 +40,7 @@ enum BridgeEventType {
   signalTyping,
   signalEdit,
   signalMediaReady,
+  waCall,
   unknown,
 }
 
@@ -89,6 +90,7 @@ class BridgeEvent {
     'signal_typing': BridgeEventType.signalTyping,
     'signal_edit': BridgeEventType.signalEdit,
     'signal_media_ready': BridgeEventType.signalMediaReady,
+    'wa_call': BridgeEventType.waCall,
   };
 }
 
@@ -345,6 +347,15 @@ class TjenaBridge {
         'accountID': accountID,
         'roomID': roomID,
         'days': days,
+      });
+
+  /// Decline an incoming WhatsApp call so it stops ringing (auto-decline).
+  Future<void> rejectCall(String callerJID, String callID,
+          {String accountID = 'default'}) =>
+      _method.invokeMethod<void>('rejectCall', {
+        'accountID': accountID,
+        'callerJID': callerJID,
+        'callID': callID,
       });
 
   /// Wipe an account's cached WhatsApp history (not WhatsApp itself).

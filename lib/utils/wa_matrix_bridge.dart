@@ -14,6 +14,7 @@ import 'package:tjena_bridge/tjena_bridge.dart';
 import 'matrix_sdk_extensions/matrix_file_extension.dart';
 
 import '../config/setting_keys.dart';
+import 'wa_call_link.dart';
 import 'platform_infos.dart';
 
 /// Converts WA bridge events into virtual Matrix rooms injected via handleSync.
@@ -925,8 +926,52 @@ class WaMatrixBridge {
       case BridgeEventType.receipt:
         _pushReceipt(acc, evt.data);
 
+      case BridgeEventType.waCall:
+        // ignore: unawaited_futures
+        _handleWaCall(acc, evt.data);
+
       default:
         break;
+    }
+  }
+
+  /// Incoming WhatsApp call: optionally auto-decline it (stop the ringing) and
+  /// auto-reply with a "call me via this link" message.
+  Future<void> _handleWaCall(
+      String accountId, Map<String, dynamic> data) async {
+    final autoReply = AppSettings.waCallAutoReply.value;
+    final autoDecline = AppSettings.waCallAutoDecline.value;
+    if (!autoReply && !autoDecline) return;
+
+    final waRoomId = data['room_id'] as String? ?? '';
+    final callerJid = data['caller_jid'] as String? ?? '';
+    final callId = data['call_id'] as String? ?? '';
+
+    // Stop the WhatsApp call ringing.
+    if (autoDecline && callerJid.isNotEmpty && callId.isNotEmpty) {
+      try {
+        await TjenaBridge.instance
+            .rejectCall(callerJid, callId, accountID: accountId);
+      } catch (e) {
+        Logs().w('[WaBridge] rejectCall failed: $e');
+      }
+    }
+
+    // Send a "unreachable on WhatsApp — call me here" message with a call link.
+    if (autoReply) {
+      final client = _client;
+      final matrixId = _waToMatrix[_key(accountId, waRoomId)];
+      if (client == null || matrixId == null) return;
+      try {
+        final link = await requestCallLink(client);
+        await sendText(
+          matrixId,
+          "📞 I don't take WhatsApp calls for privacy reasons. To reach me, "
+          'tap this link to call:\n${link.link}',
+        );
+      } catch (e) {
+        Logs().w('[WaBridge] call auto-reply failed: $e');
+      }
     }
   }
 

@@ -117,7 +117,7 @@ class LiveLocationManager extends ChangeNotifier {
         // A foreground service keeps location flowing while backgrounded.
         foregroundNotificationConfig: const ForegroundNotificationConfig(
           notificationTitle: 'Sharing live location',
-          notificationText: 'tjena!chat is sharing your location',
+          notificationText: 'tjena is sharing your location',
           enableWakeLock: true,
         ),
       );

@@ -27,6 +27,8 @@ class _LocalBridgesHubState extends State<LocalBridgesHub> {
   SignalBridgeState _sig = SignalBridgeState.empty;
   bool _busy = false;
   bool _waCallsEnabled = AppSettings.waCallsEnabled.value;
+  bool _autoReply = AppSettings.waCallAutoReply.value;
+  bool _autoDecline = AppSettings.waCallAutoDecline.value;
   bool? _callOnline; // null = checking
 
   @override
@@ -285,6 +287,35 @@ class _LocalBridgesHubState extends State<LocalBridgesHub> {
                         _checkCallFeature();
                       },
                     ),
+                  ),
+                  const Divider(height: 1),
+                  SwitchListTile(
+                    secondary: const Icon(Icons.reply_outlined),
+                    title: const Text('Auto-reply to WhatsApp calls'),
+                    subtitle: const Text(
+                      'When someone calls you on WhatsApp, automatically send '
+                      'them a message that you don’t take WhatsApp calls, with '
+                      'a link to call you instead.',
+                    ),
+                    value: _autoReply,
+                    onChanged: (v) {
+                      setState(() => _autoReply = v);
+                      AppSettings.waCallAutoReply.setItem(v);
+                    },
+                  ),
+                  const Divider(height: 1),
+                  SwitchListTile(
+                    secondary: const Icon(Icons.call_end_outlined),
+                    title: const Text('Auto-decline WhatsApp calls'),
+                    subtitle: const Text(
+                      'Also decline the incoming WhatsApp call so it stops '
+                      'ringing.',
+                    ),
+                    value: _autoDecline,
+                    onChanged: (v) {
+                      setState(() => _autoDecline = v);
+                      AppSettings.waCallAutoDecline.setItem(v);
+                    },
                   ),
                 ],
               ],

@@ -1647,8 +1647,10 @@ class ChatController extends State<ChatPageWithRoom>
     try {
       await WaMatrixBridge.instance.sendText(
         room.id,
-        '📞 Incoming Tjena ${mode == 'audio' ? 'voice' : 'video'} call — '
-        'tap the link to join:\n$link',
+        '📞 Incoming tjena ${mode == 'audio' ? 'voice' : 'video'} call — '
+        'tap the link to join:\n$link\n\n'
+        'ℹ️ This person has disabled WhatsApp calls for privacy reasons and '
+        'uses tjena to make calls instead.',
       );
     } catch (e) {
       if (!mounted) return;

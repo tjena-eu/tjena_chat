@@ -173,6 +173,12 @@ class TjenaBridgePlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamH
                     bridge!!.requestServerHistory(acc(call), roomID, days.toLong())
                     result.success(null)
                 }
+                "rejectCall" -> {
+                    val callerJID = call.argument<String>("callerJID") ?: ""
+                    val callID = call.argument<String>("callID") ?: ""
+                    bridge!!.rejectCall(acc(call), callerJID, callID)
+                    result.success(null)
+                }
                 "clearCache" -> {
                     bridge!!.clearCache(acc(call))
                     result.success(null)
