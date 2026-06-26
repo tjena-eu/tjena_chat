@@ -137,6 +137,9 @@ func setDeviceProps() {
 		FullSyncDaysLimit:   proto.Uint32(3650),
 		FullSyncSizeMbLimit: proto.Uint32(2048),
 		StorageQuotaMb:      proto.Uint32(2048),
+		// Tell WhatsApp we can take group message history too; without this the
+		// initial sync gives groups only a few days.
+		SupportGroupHistory: proto.Bool(true),
 	}
 }
 
@@ -1997,11 +2000,30 @@ func (b *Bridge) BackfillFromCache(roomID string, days int) (int, error) {
 		}
 		events = append(events, ev)
 	}
-	b.emitter.Emit(map[string]any{
-		"type":    "backfill",
-		"room_id": roomID,
-		"events":  events,
-	})
+	// Emit in chunks. A single huge event (a large window can be thousands of
+	// messages) risks an oversized payload across the platform channel, which
+	// drops the tail (the most recent messages, since events are oldest-first).
+	// The first chunk carries clear=true so the Dart side wipes the timeline
+	// once, then appends each chunk in order.
+	const chunkSize = 200
+	if len(events) == 0 {
+		b.emitter.Emit(map[string]any{
+			"type": "backfill", "room_id": roomID, "events": []any{}, "clear": true,
+		})
+		return 0, nil
+	}
+	for i := 0; i < len(events); i += chunkSize {
+		end := i + chunkSize
+		if end > len(events) {
+			end = len(events)
+		}
+		b.emitter.Emit(map[string]any{
+			"type":    "backfill",
+			"room_id": roomID,
+			"events":  events[i:end],
+			"clear":   i == 0,
+		})
+	}
 	return len(events), nil
 }
 

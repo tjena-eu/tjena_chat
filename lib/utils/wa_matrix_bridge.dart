@@ -55,6 +55,9 @@ class WaMatrixBridge {
   // injection through this future guarantees submission-order application, so a
   // placeholder always lands before its media_ready URL update.
   Future<void> _injectChain = Future.value();
+  // Serializes backfill chunks (a large window arrives as several chunked
+  // events) so they inject in order.
+  Future<void> _backfillChain = Future.value();
 
   // Per-account space room ids and connected phone numbers.
   final _spaceIds = <String, String>{}; // accountId -> space room id
@@ -891,8 +894,13 @@ class WaMatrixBridge {
         final waRoomId = evt.data['room_id'] as String? ?? '';
         final events =
             (evt.data['events'] as List?)?.cast<Map<String, dynamic>>() ?? [];
-        // ignore: unawaited_futures
-        _pushBackfill(acc, waRoomId, events);
+        final clear = evt.data['clear'] as bool? ?? true;
+        // Serialize backfill chunks so they're injected strictly in order
+        // (oldest-first across chunks), and the clear happens once before them.
+        _backfillChain = _backfillChain
+            .then((_) => _pushBackfill(acc, waRoomId, events, clear: clear))
+            .catchError((Object e, StackTrace s) =>
+                Logs().w('[WaBridge] backfill chunk failed', e, s));
 
       case BridgeEventType.mediaReady:
         final waRoomId = evt.data['room_id'] as String? ?? '';
@@ -1265,21 +1273,25 @@ class WaMatrixBridge {
   /// Yields to the event loop every few messages so large backfills don't
   /// freeze the UI.
   Future<void> _pushBackfill(
-      String accountId, String waRoomId, List<Map<String, dynamic>> events) async {
+      String accountId, String waRoomId, List<Map<String, dynamic>> events,
+      {bool clear = true}) async {
     final matrixId = _waToMatrix[_key(accountId, waRoomId)];
     final client = _client;
     if (matrixId == null || client == null) return;
 
-    // Clear the room timeline. limited:true makes the SDK drop the room's cached
-    // events from its database AND clears any open Timeline's in-memory list.
-    await _inject(SyncUpdate(
-      nextBatch: client.prevBatch ?? '',
-      rooms: RoomsUpdate(join: {
-        matrixId: JoinedRoomUpdate(
-          timeline: TimelineUpdate(events: const [], limited: true),
-        ),
-      }),
-    ));
+    // Clear the room timeline (only on the first chunk). limited:true makes the
+    // SDK drop the room's cached events from its database AND clears any open
+    // Timeline's in-memory list.
+    if (clear) {
+      await _inject(SyncUpdate(
+        nextBatch: client.prevBatch ?? '',
+        rooms: RoomsUpdate(join: {
+          matrixId: JoinedRoomUpdate(
+            timeline: TimelineUpdate(events: const [], limited: true),
+          ),
+        }),
+      ));
+    }
 
     var n = 0;
     for (final e in events) {
