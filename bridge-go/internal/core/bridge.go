@@ -9,6 +9,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"sort"
 	"strings"
 	"os"
 	"sync"
@@ -311,7 +312,15 @@ func (b *Bridge) GetStateJSON() string {
 	connected := b.connected
 	phone := b.phone
 	pushName := b.pushName
+	client := b.waClient
 	b.mu.Unlock()
+
+	// If we don't have the phone cached yet (linked but not connected this
+	// session), derive it from the linked device's JID so the UI can always show
+	// which account this is.
+	if phone == "" && client != nil && client.Store != nil && client.Store.ID != nil {
+		phone = "+" + client.Store.ID.User
+	}
 
 	m := map[string]any{
 		"linked":    linked,
@@ -1375,7 +1384,7 @@ func (b *Bridge) handleWAMessage(evt *waevents.Message) {
 			MsgType:       msgtype,
 			IsOwn:         isOwn,
 			FormattedBody: formattedBody,
-		}, evt.Info.PushName, evt.Info.Chat.Server == types.GroupServer)
+		}, waChatName(evt.Info.Chat, evt.Info.PushName), evt.Info.Chat.Server == types.GroupServer)
 	}
 
 	// For media messages, download asynchronously and emit media_ready.
@@ -1430,6 +1439,17 @@ func (b *Bridge) formatMentions(msg *waE2E.Message, body string) string {
 		return ""
 	}
 	return formatted
+}
+
+// waChatName returns the chat-summary name to cache for a message. For a DM the
+// sender is the contact, so their push name is fine; for a GROUP the name is the
+// group subject (set from history sync / group info), so we return "" to avoid
+// overwriting it with whoever last messaged.
+func waChatName(chat types.JID, pushName string) string {
+	if chat.Server == types.GroupServer {
+		return ""
+	}
+	return pushName
 }
 
 // messageBodyType maps a WhatsApp message to a Matrix body string and msgtype.
@@ -1671,38 +1691,66 @@ func (b *Bridge) chatPhone(chat types.JID) string {
 // senderDisplayName returns the best display name for a message sender: the
 // message's own push name if present, otherwise the contact store (resolving
 // LID→PN first). Returns "" when nothing is known.
+// senderDisplayName resolves a name for a WhatsApp user, in priority order:
+//  1. the name you saved the contact under (contact FullName),
+//  2. their WhatsApp nickname (push name — from the message, then the store),
+//  3. their phone number (every WA user has one; LIDs are resolved to it).
+// It never returns the raw LID/WA-id.
 func (b *Bridge) senderDisplayName(sender types.JID, pushName string) string {
-	if pushName != "" {
-		return pushName
-	}
 	b.mu.Lock()
 	client := b.waClient
 	b.mu.Unlock()
-	if client == nil || sender.IsEmpty() {
-		return ""
+	if sender.IsEmpty() {
+		return pushName
+	}
+	if client == nil {
+		if pushName != "" {
+			return pushName
+		}
+		if sender.Server == types.DefaultUserServer {
+			return "+" + sender.User
+		}
+		return sender.User
 	}
 	ctx := context.Background()
+
+	// Candidate JIDs (sender + its phone-number counterpart) and the phone JID.
 	tryJIDs := []types.JID{sender}
-	if sender.Server == types.HiddenUserServer {
+	var phoneJID types.JID
+	if sender.Server == types.HiddenUserServer { // @lid → resolve phone number
 		if pn, err := client.Store.LIDs.GetPNForLID(ctx, sender); err == nil && !pn.IsEmpty() {
 			tryJIDs = append(tryJIDs, pn)
+			phoneJID = pn
 		}
+	} else if sender.Server == types.DefaultUserServer {
+		phoneJID = sender
+	}
+
+	// 1) Saved contact name.
+	for _, j := range tryJIDs {
+		if c, err := client.Store.Contacts.GetContact(ctx, j); err == nil && c.FullName != "" {
+			return c.FullName
+		}
+	}
+	// 2) WhatsApp nickname (push name): the live one, then the stored one.
+	if pushName != "" {
+		return pushName
 	}
 	for _, j := range tryJIDs {
-		c, err := client.Store.Contacts.GetContact(ctx, j)
-		if err != nil {
-			continue
-		}
-		switch {
-		case c.FullName != "":
-			return c.FullName
-		case c.PushName != "":
-			return c.PushName
-		case c.BusinessName != "":
-			return c.BusinessName
+		if c, err := client.Store.Contacts.GetContact(ctx, j); err == nil {
+			if c.PushName != "" {
+				return c.PushName
+			}
+			if c.BusinessName != "" {
+				return c.BusinessName
+			}
 		}
 	}
-	return ""
+	// 3) Phone number.
+	if !phoneJID.IsEmpty() {
+		return "+" + phoneJID.User
+	}
+	return sender.User // last resort (unresolvable LID)
 }
 
 // recordOldest remembers the oldest MessageInfo seen for a chat, used as the
@@ -1963,6 +2011,35 @@ func (b *Bridge) ClearCache() error {
 // BackfillFromCache emits cached messages for a chat (last `days` days) as
 // backfill events, so the Dart side can populate the room. Reliable — reads the
 // local DB rather than the flaky on-demand network.
+// altCacheJIDs returns the room's JID plus its phone-number↔LID counterpart, so
+// cache lookups find messages regardless of which addressing they were stored
+// under.
+func (b *Bridge) altCacheJIDs(roomID string) []string {
+	out := []string{roomID}
+	jid, err := types.ParseJID(roomID)
+	if err != nil {
+		return out
+	}
+	b.mu.Lock()
+	client := b.waClient
+	b.mu.Unlock()
+	if client == nil {
+		return out
+	}
+	ctx := context.Background()
+	switch jid.Server {
+	case types.HiddenUserServer:
+		if pn, err := client.Store.LIDs.GetPNForLID(ctx, jid); err == nil && !pn.IsEmpty() {
+			out = append(out, pn.User+"@"+string(pn.Server))
+		}
+	case types.DefaultUserServer:
+		if lid, err := client.Store.LIDs.GetLIDForPN(ctx, jid); err == nil && !lid.IsEmpty() {
+			out = append(out, lid.User+"@"+string(lid.Server))
+		}
+	}
+	return out
+}
+
 // BackfillFromCache emits cached messages for the chat and returns how many it
 // found (so the UI can report "loaded N" / "none found").
 func (b *Bridge) BackfillFromCache(roomID string, days int) (int, error) {
@@ -1973,10 +2050,27 @@ func (b *Bridge) BackfillFromCache(roomID string, days int) (int, error) {
 		days = 1
 	}
 	since := time.Now().AddDate(0, 0, -days).Unix()
-	msgs, err := b.st.GetCachedMessages(context.Background(), roomID, since)
-	if err != nil {
-		return 0, err
+	// Messages may have been cached under either the phone-number JID or the LID
+	// for the same contact. Query both and merge so a room keyed by one address
+	// still finds messages cached under the other (the "no messages cached even
+	// though there are messages" bug).
+	ctx := context.Background()
+	var msgs []localmatrix.CachedMessage
+	seen := map[string]bool{}
+	for _, jid := range b.altCacheJIDs(roomID) {
+		ms, err := b.st.GetCachedMessages(ctx, jid, since)
+		if err != nil {
+			continue
+		}
+		for _, m := range ms {
+			if seen[m.MsgID] {
+				continue
+			}
+			seen[m.MsgID] = true
+			msgs = append(msgs, m)
+		}
 	}
+	sort.Slice(msgs, func(i, j int) bool { return msgs[i].TS < msgs[j].TS })
 	b.appendLog(fmt.Sprintf("[Bridge] BackfillFromCache %s days=%d -> %d msgs", roomID, days, len(msgs)))
 	// GetCachedMessages returns oldest-first; emit in that order. The Dart side
 	// clears the room timeline and re-injects these as normal timeline events

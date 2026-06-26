@@ -101,6 +101,7 @@ class WaMatrixBridge {
   }
 
   static const _roomMappingsKey = 'wa_bridge_room_mappings';
+  static const _phonesKey = 'wa_bridge_account_phones';
 
   // Persist the current WA↔Matrix room mapping to SharedPreferences so it
   // survives process restarts without relying on Matrix SDK state-event loading.
@@ -110,6 +111,16 @@ class WaMatrixBridge {
       await prefs.setString(_roomMappingsKey, jsonEncode(Map.of(_waToMatrix)));
     } catch (e) {
       Logs().w('[WaBridge] save room mappings failed: $e');
+    }
+  }
+
+  // Persist each account's connected phone number (for stable space names).
+  Future<void> _savePhones() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_phonesKey, jsonEncode(Map.of(_connectedPhones)));
+    } catch (e) {
+      Logs().w('[WaBridge] save phones failed: $e');
     }
   }
 
@@ -154,6 +165,20 @@ class WaMatrixBridge {
     // ③ Persist the complete mapping back so next restart is instantaneous.
     // ignore: unawaited_futures
     _saveRoomMappings();
+
+    // ③b Restore each account's phone number so its space is named with the
+    // number immediately (otherwise spaces show a generic "WhatsApp" until the
+    // account reconnects).
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final ps = prefs.getString(_phonesKey);
+      if (ps != null) {
+        (jsonDecode(ps) as Map<String, dynamic>)
+            .forEach((k, v) => _connectedPhones[k] = v as String);
+      }
+    } catch (e) {
+      Logs().w('[WaBridge] load phones failed: $e');
+    }
 
     // ④ Ensure each account's WhatsApp space exists and (re-)parents all of its
     // chats. This repairs chats that were created without a space (e.g. via the
@@ -226,14 +251,14 @@ class WaMatrixBridge {
 
   /// Returns the Matrix room ID for [rawPhone], creating a virtual WA room
   /// if one doesn't exist yet. Returns null only if the bridge is not linked.
-  String? ensureChatForPhone(String rawPhone) {
-    if (!isLinked) return null;
+  String? ensureChatForPhone(String rawPhone,
+      {String accountId = _defaultAccount}) {
     final phone = rawPhone.replaceAll(RegExp(r'[\s+\-()]'), '');
     final jid = '$phone@s.whatsapp.net';
-    if (!_waToMatrix.containsKey(_key(_defaultAccount, jid))) {
-      _ensureRoom(_defaultAccount, jid, '+$phone', isDM: true);
+    if (!_waToMatrix.containsKey(_key(accountId, jid))) {
+      _ensureRoom(accountId, jid, '+$phone', isDM: true);
     }
-    return _waToMatrix[_key(_defaultAccount, jid)];
+    return _waToMatrix[_key(accountId, jid)];
   }
   // True if any account is connected, OR rooms from a previous session exist.
   bool get isLinked => _connectedPhones.isNotEmpty || _waToMatrix.isNotEmpty;
@@ -412,7 +437,10 @@ class WaMatrixBridge {
     }
   }
 
-  /// Full re-sync of a WhatsApp chat (the per-chat "WA sync" action):
+  /// Full repair + re-sync of a WhatsApp chat (the per-chat "WA sync" action) —
+  /// fixes things that otherwise need a re-link:
+  ///  0) repair the account's space (correct phone-number name) and re-parent
+  ///     this chat into it,
   ///  1) refresh the chat name + profile picture (+ group member/contact names),
   ///  2) wipe this chat's local timeline so the re-pull is clean (no duplicate
   ///     or mis-ordered messages),
@@ -424,6 +452,22 @@ class WaMatrixBridge {
     final waId = _matrixToWa[matrixRoomId];
     if (waId == null || _client == null) return 0;
     final accountId = _accOf(matrixRoomId);
+
+    // 0) Repair the account's space: refresh its phone number, (re)name the
+    //    space correctly, and make sure this chat is parented to it.
+    try {
+      final st = await TjenaBridge.instance.getState(accountID: accountId);
+      final phone = st.phone;
+      if (phone.isNotEmpty && _connectedPhones[accountId] != phone) {
+        _connectedPhones[accountId] = phone;
+        // ignore: unawaited_futures
+        _savePhones();
+      }
+    } catch (e) {
+      Logs().w('[WaBridge] repair getState failed: $e');
+    }
+    _initSpace(accountId, _connectedPhones[accountId] ?? ''); // create or rename
+    _addRoomToSpace(accountId, matrixRoomId); // ensure parented
 
     // 1) name + photo (+ group members for in-chat contact names)
     await refreshRoom(matrixRoomId);
@@ -546,15 +590,21 @@ class WaMatrixBridge {
     for (final c in await TjenaBridge.instance.listCachedChats(accountID: accountId)) {
       final jid = c['jid'] as String? ?? '';
       if (jid.isEmpty) continue;
+      final isGroup = c['is_group'] as bool? ?? false;
       var name = (c['name'] as String?) ?? '';
-      if (!_looksLikeName(name)) {
+      if (isGroup) {
+        // A group's name is its subject; the cached name can be a stale sender
+        // name, so prefer the authoritative group name from the group list.
+        final groupName = (contacts[jid]?['name'] as String?) ?? '';
+        if (groupName.isNotEmpty) name = groupName;
+      } else if (!_looksLikeName(name)) {
         final contactName = (contacts[jid]?['name'] as String?) ?? '';
         if (_looksLikeName(contactName)) name = contactName;
       }
       byJid[jid] = {
         'jid': jid,
         'name': name,
-        'is_group': c['is_group'] ?? false,
+        'is_group': isGroup,
         'phone': c['phone'] ?? '',
         'last_activity': ((c['last_ts'] as num?)?.toInt() ?? 0) * 1000,
       };
@@ -842,6 +892,8 @@ class WaMatrixBridge {
         final connected = evt.data['connected'] as bool? ?? false;
         if (connected && phone.isNotEmpty && _connectedPhones[acc] != phone) {
           _connectedPhones[acc] = phone;
+          // ignore: unawaited_futures
+          _savePhones();
           _initSpace(acc, phone);
         }
 

@@ -16,6 +16,7 @@ import 'package:fluffychat/utils/adaptive_bottom_sheet.dart';
 import 'package:fluffychat/utils/fluffy_share.dart';
 import 'package:fluffychat/utils/signal_matrix_bridge.dart';
 import 'package:fluffychat/utils/wa_matrix_bridge.dart';
+import 'package:tjena_bridge/tjena_bridge.dart';
 import 'package:fluffychat/utils/identity_server_lookup.dart';
 import 'package:fluffychat/utils/platform_infos.dart';
 import 'package:fluffychat/utils/url_launcher.dart';
@@ -162,6 +163,43 @@ class NewPrivateChatController extends State<NewPrivateChat> {
   /// WhatsApp "new chat" entry: choose an existing chat from the list, or enter
   /// a phone number.
   Future<void> openWhatsAppNewChat() async {
+    // Pick which WhatsApp account first (multi-account support).
+    final accounts = await TjenaBridge.instance.listAccounts();
+    if (!mounted) return;
+    if (accounts.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No WhatsApp account linked yet.')),
+      );
+      return;
+    }
+    var accountId = accounts.first['id'] as String? ?? 'default';
+    if (accounts.length > 1) {
+      final selected = await showModalBottomSheet<String>(
+        context: context,
+        builder: (ctx) => SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const ListTile(
+                  dense: true, title: Text('Choose WhatsApp account')),
+              const Divider(height: 1),
+              ...accounts.map((a) {
+                final id = a['id'] as String? ?? 'default';
+                final phone = a['phone'] as String? ?? '';
+                return ListTile(
+                  leading: const Icon(Icons.account_circle_outlined),
+                  title: Text(phone.isNotEmpty ? '+$phone' : 'WhatsApp ($id)'),
+                  onTap: () => Navigator.pop(ctx, id),
+                );
+              }),
+            ],
+          ),
+        ),
+      );
+      if (!mounted || selected == null) return;
+      accountId = selected;
+    }
+
     final choice = await showModalBottomSheet<String>(
       context: context,
       builder: (ctx) => SafeArea(
@@ -191,11 +229,12 @@ class NewPrivateChatController extends State<NewPrivateChat> {
     );
     if (!mounted || choice == null) return;
     if (choice == 'phone') {
-      await openLocalBridgeChat(isSig: false);
+      await openLocalBridgeChat(isSig: false, accountId: accountId);
     } else if (choice == 'existing') {
       final roomId = await Navigator.of(context).push<String>(
         MaterialPageRoute(
-          builder: (_) => const WaChatPickerScreen(pickToOpen: true),
+          builder: (_) =>
+              WaChatPickerScreen(pickToOpen: true, accountId: accountId),
         ),
       );
       if (roomId != null && roomId.isNotEmpty && mounted) {
@@ -204,14 +243,16 @@ class NewPrivateChatController extends State<NewPrivateChat> {
     }
   }
 
-  Future<void> openLocalBridgeChat({required bool isSig}) async {
+  Future<void> openLocalBridgeChat(
+      {required bool isSig, String accountId = 'default'}) async {
     final phone = await _showPhoneDialog(
       isSig ? 'Signal chat' : 'WhatsApp chat',
     );
     if (phone == null || phone.isEmpty || !mounted) return;
     final roomId = isSig
         ? SignalMatrixBridge.instance.matrixRoomIdForPhone(phone)
-        : WaMatrixBridge.instance.ensureChatForPhone(phone);
+        : WaMatrixBridge.instance
+            .ensureChatForPhone(phone, accountId: accountId);
     if (roomId != null && mounted) {
       context.go('/rooms/$roomId');
     } else if (mounted) {

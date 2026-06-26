@@ -298,8 +298,8 @@ class ChatSettingsPopupMenuState extends State<ChatSettingsPopupMenu> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(count > 0
-              ? 'Synced name & photo · loaded $count message(s) from the last $days days.'
-              : 'Synced name & photo · no cached history for the last $days days.'),
+              ? 'Repaired chat (space, names, avatar) · loaded $count message(s) from the last $days days.'
+              : 'Repaired chat (space, names, avatar) · no cached history for the last $days days.'),
         ),
       );
     }

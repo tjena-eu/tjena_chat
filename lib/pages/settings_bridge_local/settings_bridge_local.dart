@@ -3,7 +3,6 @@
 
 import 'dart:async';
 
-import 'package:fluffychat/pages/chat_list/chat_list_item.dart';
 import 'package:fluffychat/utils/wa_matrix_bridge.dart';
 import 'package:fluffychat/widgets/matrix.dart';
 import 'package:flutter/material.dart';
@@ -355,12 +354,6 @@ class _SettingsBridgeLocalState extends State<SettingsBridgeLocal> {
               ),
             ),
           ),
-          if (_state.linked) ...[
-            const SizedBox(height: 24),
-            _sectionLabel(context, 'ACTIVE CHATS'),
-            const SizedBox(height: 8),
-            _WaRoomList(theme: theme),
-          ],
         ],
       ),
     );
@@ -493,64 +486,6 @@ class _ConnectionCard extends StatelessWidget {
   }
 }
 
-class _WaRoomList extends StatelessWidget {
-  final ThemeData theme;
-  const _WaRoomList({required this.theme});
-
-  @override
-  Widget build(BuildContext context) {
-    final client = Matrix.of(context).client;
-    final waRooms = client.rooms
-        .where((r) => WaMatrixBridge.instance.isWaRoom(r.id))
-        .toList();
-    if (waRooms.isEmpty) {
-      return Container(
-        width: double.infinity,
-        padding: const EdgeInsets.all(20),
-        decoration: BoxDecoration(
-          color: theme.colorScheme.surfaceContainerHighest,
-          borderRadius: BorderRadius.circular(12),
-        ),
-        child: Text(
-          'No chats yet — they appear here as messages arrive.',
-          style: theme.textTheme.bodyMedium
-              ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
-          textAlign: TextAlign.center,
-        ),
-      );
-    }
-    const maxShown = 8;
-    final shown = waRooms.take(maxShown).toList();
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Card(
-          margin: EdgeInsets.zero,
-          child: Column(
-            children: shown
-                .map(
-                  (r) => ChatListItem(
-                    r,
-                    key: Key('wa_settings_${r.id}'),
-                    onTap: () => context.go('/rooms/${r.id}'),
-                  ),
-                )
-                .toList(),
-          ),
-        ),
-        if (waRooms.length > maxShown)
-          Padding(
-            padding: const EdgeInsets.only(top: 8),
-            child: Text(
-              '+ ${waRooms.length - maxShown} more — see them in the chat list',
-              style: theme.textTheme.bodySmall
-                  ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
-            ),
-          ),
-      ],
-    );
-  }
-}
 
 class _StatusBadge extends StatelessWidget {
   final BridgeState state;
