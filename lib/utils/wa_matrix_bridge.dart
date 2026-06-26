@@ -429,15 +429,8 @@ class WaMatrixBridge {
     //      backfill handler wipes the room timeline first, then re-injects the
     //      window chronologically, so there are no duplicates or mis-ordering.
     if (days <= 0) return 0;
-    final count = await TjenaBridge.instance
+    return TjenaBridge.instance
         .backfillFromCache(waId, days, accountID: accountId);
-    // Also ask WhatsApp for older messages if the cache doesn't cover the
-    // window. The Go side skips the round-trip when the cache already reaches
-    // back far enough; otherwise replies arrive async and re-display the chat.
-    // ignore: unawaited_futures
-    TjenaBridge.instance
-        .requestServerHistory(waId, days, accountID: accountId);
-    return count;
   }
 
   /// Pull WhatsApp message history for a chat going back [days] days from the
@@ -449,13 +442,8 @@ class WaMatrixBridge {
     final waId = _matrixToWa[matrixRoomId];
     if (waId == null) throw Exception('not a WhatsApp chat');
     final accountId = _accOf(matrixRoomId);
-    final count = await TjenaBridge.instance
+    return TjenaBridge.instance
         .backfillFromCache(waId, days, accountID: accountId);
-    // Pull older messages from WhatsApp if the cache is short (no-op when it
-    // already covers the window); replies arrive async and re-display the chat.
-    // ignore: unawaited_futures
-    TjenaBridge.instance.requestServerHistory(waId, days, accountID: accountId);
-    return count;
   }
 
   /// Fetch a WhatsApp group's participants and inject them as room members, so
@@ -964,10 +952,10 @@ class WaMatrixBridge {
       if (client == null || matrixId == null) return;
       try {
         final link = await requestCallLink(client);
+        final text = AppSettings.waCallAutoReplyMessage.value.trim();
         await sendText(
           matrixId,
-          "📞 I don't take WhatsApp calls for privacy reasons. To reach me, "
-          'tap this link to call:\n${link.link}',
+          text.isEmpty ? link.link : '$text\n${link.link}',
         );
       } catch (e) {
         Logs().w('[WaBridge] call auto-reply failed: $e');

@@ -298,8 +298,8 @@ class ChatSettingsPopupMenuState extends State<ChatSettingsPopupMenu> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(count > 0
-              ? 'Synced name & photo · loaded $count message(s) · fetching older from WhatsApp…'
-              : 'Synced name & photo · no local history · fetching from WhatsApp…'),
+              ? 'Synced name & photo · loaded $count message(s) from the last $days days.'
+              : 'Synced name & photo · no cached history for the last $days days.'),
         ),
       );
     }
@@ -317,8 +317,8 @@ class ChatSettingsPopupMenuState extends State<ChatSettingsPopupMenu> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(count > 0
-              ? 'Loaded $count message(s) · fetching older from WhatsApp…'
-              : 'No local history · fetching from WhatsApp…'),
+              ? 'Loaded $count message(s) from the last $days days.'
+              : 'No cached history for the last $days days.'),
         ),
       );
     }

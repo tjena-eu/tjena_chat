@@ -29,6 +29,7 @@ class _LocalBridgesHubState extends State<LocalBridgesHub> {
   bool _waCallsEnabled = AppSettings.waCallsEnabled.value;
   bool _autoReply = AppSettings.waCallAutoReply.value;
   bool _autoDecline = AppSettings.waCallAutoDecline.value;
+  String _autoReplyMsg = AppSettings.waCallAutoReplyMessage.value;
   bool? _callOnline; // null = checking
 
   @override
@@ -42,6 +43,50 @@ class _LocalBridgesHubState extends State<LocalBridgesHub> {
   Future<void> _checkCallFeature() async {
     final online = await callFeatureOnline();
     if (mounted) setState(() => _callOnline = online);
+  }
+
+  Future<void> _editAutoReplyMessage() async {
+    final controller = TextEditingController(text: _autoReplyMsg);
+    final result = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Auto-reply message'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text(
+              'Sent to people who call you on WhatsApp. The call link is added '
+              'automatically on the next line.',
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: controller,
+              autofocus: true,
+              minLines: 2,
+              maxLines: 5,
+              decoration: const InputDecoration(
+                border: OutlineInputBorder(),
+                hintText: 'Your message…',
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(controller.text),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+    if (result == null) return;
+    final msg = result.trim();
+    setState(() => _autoReplyMsg = msg);
+    await AppSettings.waCallAutoReplyMessage.setItem(msg);
   }
 
   @override
@@ -303,6 +348,20 @@ class _LocalBridgesHubState extends State<LocalBridgesHub> {
                       AppSettings.waCallAutoReply.setItem(v);
                     },
                   ),
+                  if (_autoReply)
+                    ListTile(
+                      leading: const Icon(Icons.edit_outlined),
+                      title: const Text('Auto-reply message'),
+                      subtitle: Text(
+                        _autoReplyMsg.isEmpty
+                            ? '(only the call link)'
+                            : _autoReplyMsg,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      trailing: const Icon(Icons.chevron_right),
+                      onTap: _editAutoReplyMessage,
+                    ),
                   const Divider(height: 1),
                   SwitchListTile(
                     secondary: const Icon(Icons.call_end_outlined),

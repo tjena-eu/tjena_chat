@@ -102,7 +102,13 @@ enum AppSettings<T> {
   // link" message; and optionally auto-decline the WhatsApp call so it stops
   // ringing.
   waCallAutoReply<bool>('chat.fluffy.wa_call_auto_reply', false),
-  waCallAutoDecline<bool>('chat.fluffy.wa_call_auto_decline', false);
+  waCallAutoDecline<bool>('chat.fluffy.wa_call_auto_decline', false),
+  // Text sent as the call auto-reply. The call link is appended automatically.
+  waCallAutoReplyMessage<String>(
+    'chat.fluffy.wa_call_auto_reply_message',
+    "📞 I don't take WhatsApp calls for privacy reasons. To reach me, tap this "
+        'link to call:',
+  );
 
   final String key;
   final T defaultValue;

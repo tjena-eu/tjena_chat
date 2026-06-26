@@ -128,6 +128,16 @@ func setDeviceProps() {
 	// Sets DeviceProps.Os and the client UserAgent OsVersion/OsBuildNumber.
 	store.SetOSInfo("Chrome", [3]uint32{120, 0, 6099})
 	store.DeviceProps.PlatformType = waCompanionReg.DeviceProps_CHROME.Enum()
+	// Request a LARGE history sync at link time. WhatsApp sends history to a new
+	// companion based on these limits, so this is the reliable way to get older
+	// messages into the local cache (the on-demand request path isn't supported
+	// by all primary devices). Takes effect on the next (re-)link.
+	store.DeviceProps.RequireFullSync = proto.Bool(true)
+	store.DeviceProps.HistorySyncConfig = &waCompanionReg.DeviceProps_HistorySyncConfig{
+		FullSyncDaysLimit:   proto.Uint32(3650),
+		FullSyncSizeMbLimit: proto.Uint32(2048),
+		StorageQuotaMb:      proto.Uint32(2048),
+	}
 }
 
 // dnsCachingDialer resolves hostnames and caches the results.
