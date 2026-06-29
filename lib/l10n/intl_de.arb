@@ -2751,12 +2751,12 @@
     "createNewChat": "Neuen Chat erstellen",
     "supportFluffyChat": "FluffyChat unterstützen",
     "support": "Unterstützen",
-    "createNewTag": "",
-    "tagName": "",
-    "addTag": "",
+    "createNewTag": "Neuen Tag erstellen",
+    "tagName": "Tag-Name",
+    "addTag": "Tag hinzufügen",
     "playSoundOnNotification": "",
-    "unsetLowPriority": "",
-    "setLowPriority": "",
-    "removeTag": "",
+    "unsetLowPriority": "Niedrige Priorität aufheben",
+    "setLowPriority": "Niedrige Priorität",
+    "removeTag": "Tag entfernen",
     "appDescription": "Schreibe mir anderen mithilfe des dezentralisierten [matrix] Netzwerks auf eine einfache und zugängliche Art für jeden."
 }

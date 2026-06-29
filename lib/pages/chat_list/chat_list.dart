@@ -707,6 +707,25 @@ class ChatListController extends State<ChatList>
                 ],
               ),
             ),
+          PopupMenuItem(
+            value: ChatContextAction.hide,
+            child: Row(
+              mainAxisSize: .min,
+              children: [
+                Icon(
+                  HiddenRooms.instance.isHidden(room.id)
+                      ? Icons.visibility_outlined
+                      : Icons.visibility_off_outlined,
+                ),
+                const SizedBox(width: 12),
+                Text(
+                  HiddenRooms.instance.isHidden(room.id)
+                      ? 'Unhide chat'
+                      : 'Hide chat',
+                ),
+              ],
+            ),
+          ),
         ],
       );
     }
@@ -729,6 +748,13 @@ class ChatListController extends State<ChatList>
           context: context,
           future: () => room.markUnread(!room.markedUnread),
         );
+        return;
+      case ChatContextAction.hide:
+        if (HiddenRooms.instance.isHidden(room.id)) {
+          await HiddenRooms.instance.unhide(room.id);
+        } else {
+          await HiddenRooms.instance.hide(room.id);
+        }
         return;
       case ChatContextAction.mute:
         await showFutureLoadingDialog(
@@ -1078,5 +1104,6 @@ enum ChatContextAction {
   leave,
   addToSpace,
   block,
+  hide,
   showMore,
 }

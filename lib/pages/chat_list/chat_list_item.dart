@@ -173,6 +173,7 @@ class ChatListItem extends StatelessWidget {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       softWrap: false,
+                      style: const TextStyle(fontWeight: FontWeight.bold),
                     ),
                   ),
                   if (isMuted)
@@ -344,6 +345,7 @@ class ChatListItem extends StatelessWidget {
                               maxLines: room.notificationCount >= 1 ? 2 : 1,
                               overflow: TextOverflow.ellipsis,
                               style: TextStyle(
+                                color: theme.colorScheme.onSurfaceVariant,
                                 decoration: room.lastEvent?.redacted == true
                                     ? TextDecoration.lineThrough
                                     : null,

@@ -1605,11 +1605,16 @@ class WaMatrixBridge {
     // (1) Sender member with a join membership. Essential so the SDK resolves
     //     the ghost from local state instead of probing the homeserver.
     if (!isOwn) {
-      final nameKey = '$matrixId/$rawSender';
-      final memberExists =
-          client.getRoomById(matrixId)?.getState(EventTypes.RoomMember, rawSender) != null;
-      final nameChanged = hasName && _senderNames[nameKey] != senderName;
-      if (!memberExists || nameChanged) {
+      final memberState = client
+          .getRoomById(matrixId)
+          ?.getState(EventTypes.RoomMember, rawSender);
+      final currentMemberName =
+          memberState?.content.tryGet<String>('displayname');
+      // Update when the member is missing OR the name differs from the ACTUAL
+      // stored name — so the message preview/sender always shows the latest
+      // username (comparing against real state, not a cache that can drift).
+      if (memberState == null || (hasName && currentMemberName != senderName)) {
+        final nameKey = '$matrixId/$rawSender';
         if (hasName) _senderNames[nameKey] = senderName;
         final memberContent = <String, dynamic>{'membership': 'join'};
         if (hasName) memberContent['displayname'] = senderName;
