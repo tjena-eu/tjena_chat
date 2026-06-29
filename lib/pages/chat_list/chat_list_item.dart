@@ -8,8 +8,6 @@ import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/pages/chat_list/unread_bubble.dart';
 import 'package:fluffychat/utils/matrix_sdk_extensions/matrix_locals.dart';
 import 'package:fluffychat/utils/room_status_extension.dart';
-import 'package:fluffychat/utils/signal_matrix_bridge.dart';
-import 'package:fluffychat/utils/wa_matrix_bridge.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.dart';
 import 'package:fluffychat/widgets/future_loading_dialog.dart';
 import 'package:fluffychat/widgets/hover_builder.dart';
@@ -47,8 +45,6 @@ class ChatListItem extends StatelessWidget {
     final isMuted = room.pushRuleState != PushRuleState.notify;
     final typingText = room.getLocalizedTypingText(context);
     final lastEvent = room.lastEvent;
-    final isWaRoom = WaMatrixBridge.instance.isWaRoom(room.id);
-    final isSigRoom = !isWaRoom && SignalMatrixBridge.instance.isSigRoom(room.id);
     final ownMessage = lastEvent?.senderId == room.client.userID;
     final directChatMatrixId = room.directChatMatrixID;
     final isDirectChat = directChatMatrixId != null;
@@ -92,10 +88,37 @@ class ChatListItem extends StatelessWidget {
                     height: Avatar.defaultSize,
                     child: Stack(
                       children: [
+                        // Main room icon at full size.
+                        Avatar(
+                          shapeBorder: room.isSpace
+                              ? RoundedSuperellipseBorder(
+                                  side: BorderSide(
+                                    width: 1,
+                                    color: theme.dividerColor,
+                                  ),
+                                  borderRadius: BorderRadius.circular(
+                                    AppConfig.spaceBorderRadius,
+                                  ),
+                                )
+                              : null,
+                          borderRadius: room.isSpace
+                              ? BorderRadius.circular(
+                                  AppConfig.spaceBorderRadius,
+                                )
+                              : null,
+                          mxContent: room.avatar,
+                          size: Avatar.defaultSize,
+                          name: displayname,
+                          presenceUserId: directChatMatrixId,
+                          presenceBackgroundColor: backgroundColor,
+                          onTap: () => onLongPress?.call(context),
+                        ),
+                        // Space icon as a small badge in the bottom-right corner
+                        // (also indicates the bridge, e.g. the WhatsApp space).
                         if (space != null)
                           Positioned(
-                            top: 0,
-                            left: 0,
+                            bottom: 0,
+                            right: 0,
                             child: Avatar(
                               shapeBorder: RoundedSuperellipseBorder(
                                 side: BorderSide(
@@ -105,60 +128,18 @@ class ChatListItem extends StatelessWidget {
                                       theme.colorScheme.surface,
                                 ),
                                 borderRadius: BorderRadius.circular(
-                                  AppConfig.spaceBorderRadius * 0.75,
+                                  AppConfig.spaceBorderRadius * 0.5,
                                 ),
                               ),
                               borderRadius: BorderRadius.circular(
-                                AppConfig.spaceBorderRadius * 0.75,
+                                AppConfig.spaceBorderRadius * 0.5,
                               ),
                               mxContent: space.avatar,
-                              size: Avatar.defaultSize * 0.75,
+                              size: Avatar.defaultSize * 0.45,
                               name: space.getLocalizedDisplayname(),
                               onTap: () => onLongPress?.call(context),
                             ),
                           ),
-                        Positioned(
-                          bottom: 0,
-                          right: 0,
-                          child: Avatar(
-                            shapeBorder: space == null
-                                ? room.isSpace
-                                      ? RoundedSuperellipseBorder(
-                                          side: BorderSide(
-                                            width: 1,
-                                            color: theme.dividerColor,
-                                          ),
-                                          borderRadius: BorderRadius.circular(
-                                            AppConfig.spaceBorderRadius,
-                                          ),
-                                        )
-                                      : null
-                                : RoundedRectangleBorder(
-                                    side: BorderSide(
-                                      width: 2,
-                                      color:
-                                          backgroundColor ??
-                                          theme.colorScheme.surface,
-                                    ),
-                                    borderRadius: BorderRadius.circular(
-                                      Avatar.defaultSize,
-                                    ),
-                                  ),
-                            borderRadius: room.isSpace
-                                ? BorderRadius.circular(
-                                    AppConfig.spaceBorderRadius,
-                                  )
-                                : null,
-                            mxContent: room.avatar,
-                            size: space != null
-                                ? Avatar.defaultSize * 0.75
-                                : Avatar.defaultSize,
-                            name: displayname,
-                            presenceUserId: directChatMatrixId,
-                            presenceBackgroundColor: backgroundColor,
-                            onTap: () => onLongPress?.call(context),
-                          ),
-                        ),
                         Positioned(
                           top: 0,
                           right: 0,
@@ -179,35 +160,6 @@ class ChatListItem extends StatelessWidget {
                             ),
                           ),
                         ),
-                        if (isWaRoom || isSigRoom)
-                          Positioned(
-                            bottom: 0,
-                            left: 0,
-                            child: Container(
-                              width: 18,
-                              height: 18,
-                              decoration: BoxDecoration(
-                                color: isWaRoom
-                                    ? const Color(0xFF25D366)
-                                    : const Color(0xFF3A76F0),
-                                shape: BoxShape.circle,
-                                border: Border.all(
-                                  color:
-                                      backgroundColor ??
-                                      theme.colorScheme.surface,
-                                  width: 1.5,
-                                ),
-                              ),
-                              alignment: Alignment.center,
-                              child: Icon(
-                                isWaRoom
-                                    ? Icons.chat_rounded
-                                    : Icons.signal_cellular_alt,
-                                size: 10,
-                                color: Colors.white,
-                              ),
-                            ),
-                          ),
                       ],
                     ),
                   ),
