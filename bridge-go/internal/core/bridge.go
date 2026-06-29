@@ -83,6 +83,15 @@ type Bridge struct {
 	// each ON_DEMAND HistorySync reply) until we reach the target or run out.
 	pendingHist map[string]*histReq
 
+	// Single-worker queue for HistorySync chunks (so the pairing burst is
+	// processed sequentially instead of by many concurrent goroutines).
+	histCh   chan *waHistorySync.HistorySync
+	histOnce sync.Once
+
+	// Cumulative history-sync progress (for the settings UI loading indicator).
+	histTotalMsgs int
+	histChatSet   map[string]bool
+
 	logMu  sync.Mutex
 	logBuf []string // ring buffer, last 100 lines
 }
@@ -976,7 +985,10 @@ func (b *Bridge) handleWAEvent(rawEvt any) {
 		}
 
 	case *waevents.HistorySync:
-		go b.handleHistorySync(evt.Data)
+		// Process history-sync chunks one at a time on a single worker, so the
+		// burst at pairing doesn't run many concurrent writers (which used to
+		// drop messages). Don't block the whatsmeow event loop.
+		b.enqueueHistorySync(evt.Data)
 	}
 }
 
@@ -1139,6 +1151,30 @@ func (b *Bridge) RejectCall(callerJID, callID string) error {
 // Flutter store has a room to attach incoming messages to. DM names come from
 // the local contact store (no network); group names are fetched asynchronously
 // and refined via a follow-up room_updated event.
+// altRoomJID returns the LID↔phone-number counterpart room id for a chat, or ""
+// if there is none. Used so an incoming reply addressed by LID can be matched to
+// an existing phone-number room (and vice versa) instead of making a duplicate.
+func (b *Bridge) altRoomJID(chat types.JID) string {
+	b.mu.Lock()
+	client := b.waClient
+	b.mu.Unlock()
+	if client == nil {
+		return ""
+	}
+	ctx := context.Background()
+	switch chat.Server {
+	case types.HiddenUserServer:
+		if pn, err := client.Store.LIDs.GetPNForLID(ctx, chat); err == nil && !pn.IsEmpty() {
+			return pn.User + "@" + string(pn.Server)
+		}
+	case types.DefaultUserServer:
+		if lid, err := client.Store.LIDs.GetLIDForPN(ctx, chat); err == nil && !lid.IsEmpty() {
+			return lid.User + "@" + string(lid.Server)
+		}
+	}
+	return ""
+}
+
 func (b *Bridge) ensureRoom(chat types.JID) {
 	roomID := chat.User + "@" + string(chat.Server)
 
@@ -1191,6 +1227,7 @@ func (b *Bridge) ensureRoom(chat types.JID) {
 		"type": "room_created",
 		"room": map[string]any{
 			"id": roomID, "name": name, "is_dm": isDM, "other_user": otherUser,
+			"alt_id": b.altRoomJID(chat),
 		},
 	})
 
@@ -1365,9 +1402,10 @@ func (b *Bridge) handleWAMessage(evt *waevents.Message) {
 		msgEvent["formatted_body"] = formattedBody
 	}
 	b.emitter.Emit(map[string]any{
-		"type":    "message",
-		"room_id": roomID,
-		"event":   msgEvent,
+		"type":        "message",
+		"room_id":     roomID,
+		"alt_room_id": b.altRoomJID(evt.Info.Chat),
+		"event":       msgEvent,
 	})
 
 	// Cache the live message too so the history cache stays current for future
@@ -1511,11 +1549,19 @@ func (b *Bridge) downloadMedia(
 			return
 		}
 		mimeType := ""
+		var thumbData []byte
+		var thumbW, thumbH uint32
 		switch {
 		case msg.GetImageMessage() != nil:
-			mimeType = msg.GetImageMessage().GetMimetype()
+			im := msg.GetImageMessage()
+			mimeType = im.GetMimetype()
+			thumbData = im.GetJPEGThumbnail()
+			thumbW, thumbH = im.GetWidth(), im.GetHeight()
 		case msg.GetVideoMessage() != nil:
-			mimeType = msg.GetVideoMessage().GetMimetype()
+			vm := msg.GetVideoMessage()
+			mimeType = vm.GetMimetype()
+			thumbData = vm.GetJPEGThumbnail()
+			thumbW, thumbH = vm.GetWidth(), vm.GetHeight()
 		case msg.GetAudioMessage() != nil:
 			mimeType = msg.GetAudioMessage().GetMimetype()
 		case msg.GetDocumentMessage() != nil:
@@ -1526,11 +1572,30 @@ func (b *Bridge) downloadMedia(
 		if mimeType == "" {
 			mimeType = "application/octet-stream"
 		}
+		// Persist the embedded preview thumbnail (videos/images carry a small
+		// JPEG) so the chat shows a real preview instead of a blurred placeholder.
+		thumbPath := ""
+		if len(thumbData) > 0 {
+			thumbPath = b.dataDir + "/thumb_" + msgID
+			if werr := os.WriteFile(thumbPath, thumbData, 0600); werr != nil {
+				thumbPath = ""
+			}
+		}
+		// Record the attachment on the cached message so a later backfill /
+		// "WA sync" re-injects the media instead of dropping it to text.
+		if b.st != nil {
+			if uerr := b.st.UpdateMessageMedia(context.Background(), roomID, msgID, mimeType, int64(len(data))); uerr != nil {
+				b.appendLog("[Bridge] UpdateMessageMedia failed: " + uerr.Error())
+			}
+		}
 		b.emitter.Emit(map[string]any{
 			"type":        "media_ready",
 			"room_id":     roomID,
 			"event_id":    eventID,
 			"file_path":   tmpPath,
+			"thumb_path":  thumbPath,
+			"thumb_w":     thumbW,
+			"thumb_h":     thumbH,
 			"mimetype":    mimeType,
 			"size":        len(data),
 			"msgtype":     msgtype,
@@ -1917,6 +1982,25 @@ func (b *Bridge) continuePendingHistory() {
 	}
 }
 
+// enqueueHistorySync hands a HistorySync chunk to the single background worker
+// (started lazily) so chunks are cached one at a time. If the queue is full it
+// falls back to processing inline (safe now that the cache DB serializes writes).
+func (b *Bridge) enqueueHistorySync(data *waHistorySync.HistorySync) {
+	b.histOnce.Do(func() {
+		b.histCh = make(chan *waHistorySync.HistorySync, 256)
+		go func() {
+			for d := range b.histCh {
+				b.handleHistorySync(d)
+			}
+		}()
+	})
+	select {
+	case b.histCh <- data:
+	default:
+		go b.handleHistorySync(data)
+	}
+}
+
 // handleHistorySync caches every message from a HistorySync (the bulk dump WA
 // sends at link time, plus any on-demand responses) into the local DB. It does
 // NOT create rooms or emit messages — that happens later via BackfillFromCache
@@ -1928,12 +2012,19 @@ func (b *Bridge) handleHistorySync(data *waHistorySync.HistorySync) {
 	}
 	ctx := context.Background()
 	cached := 0
+	chatIDs := make([]string, 0, len(data.GetConversations()))
 	for _, conv := range data.GetConversations() {
 		jid, err := types.ParseJID(conv.GetID())
 		if err != nil {
 			continue
 		}
+		// Skip status updates / broadcast lists / newsletters — they're not real
+		// chats and would inflate the chat count and clutter the cache.
+		if jid.Server == types.BroadcastServer || jid.Server == types.NewsletterServer {
+			continue
+		}
 		roomID := jid.User + "@" + string(jid.Server)
+		chatIDs = append(chatIDs, roomID)
 		isGroup := jid.Server == types.GroupServer
 		chatName := conv.GetName()
 		for _, hm := range conv.GetMessages() {
@@ -1942,10 +2033,30 @@ func (b *Bridge) handleHistorySync(data *waHistorySync.HistorySync) {
 			}
 		}
 	}
-	b.appendLog(fmt.Sprintf("[Bridge] handleHistorySync type=%s convs=%d cached=%d",
-		data.GetSyncType().String(), len(data.GetConversations()), cached))
-	// Tell Dart fresh history landed so it can (re)run an auto-sync if configured.
-	b.emitter.Emit(map[string]any{"type": "history_cached", "count": cached})
+	// Update cumulative progress (distinct chats + total messages cached).
+	b.mu.Lock()
+	if b.histChatSet == nil {
+		b.histChatSet = make(map[string]bool)
+	}
+	b.histTotalMsgs += cached
+	for _, id := range chatIDs {
+		b.histChatSet[id] = true
+	}
+	totalMsgs := b.histTotalMsgs
+	totalChats := len(b.histChatSet)
+	b.mu.Unlock()
+
+	b.appendLog(fmt.Sprintf("[Bridge] handleHistorySync type=%s progress=%d%% convs=%d cached=%d (total %d msgs / %d chats)",
+		data.GetSyncType().String(), data.GetProgress(), len(data.GetConversations()), cached, totalMsgs, totalChats))
+	// Progress for the settings loading indicator. Progress is WhatsApp's own
+	// 0–100 history-sync percentage (100 = done).
+	b.emitter.Emit(map[string]any{
+		"type":      "history_progress",
+		"chats":     totalChats,
+		"messages":  totalMsgs,
+		"progress":  data.GetProgress(),
+		"sync_type": data.GetSyncType().String(),
+	})
 	// Re-display and keep paginating any chats with an on-demand request in flight.
 	b.continuePendingHistory()
 }
@@ -1984,7 +2095,7 @@ func (b *Bridge) cacheHistoricalMessage(ctx context.Context, roomID string, chat
 			senderJID = pj
 		}
 	}
-	_ = b.st.CacheMessage(ctx, localmatrix.CachedMessage{
+	if err := b.st.CacheMessage(ctx, localmatrix.CachedMessage{
 		ChatJID:       roomID,
 		MsgID:         msgID,
 		Sender:        "@wa_" + senderUser + ":tjena.local",
@@ -1994,7 +2105,10 @@ func (b *Bridge) cacheHistoricalMessage(ctx context.Context, roomID string, chat
 		MsgType:       msgtype,
 		IsOwn:         key.GetFromMe(),
 		FormattedBody: b.formatMentions(msg, body),
-	}, chatName, isGroup)
+	}, chatName, isGroup); err != nil {
+		b.appendLog("[Bridge] cache history message failed: " + err.Error())
+		return false
+	}
 	return true
 }
 
@@ -2091,6 +2205,13 @@ func (b *Bridge) BackfillFromCache(roomID string, days int) (int, error) {
 		}
 		if m.FormattedBody != "" {
 			ev["formatted_body"] = m.FormattedBody
+		}
+		// If the attachment was downloaded once, its bytes are still in the app's
+		// media cache under mxc://wa-media/wa_<msgID>; pass the mimetype/size so
+		// the Dart side re-injects it as media instead of plain text.
+		if m.MediaMime != "" {
+			ev["media_mime"] = m.MediaMime
+			ev["media_size"] = m.MediaSize
 		}
 		events = append(events, ev)
 	}

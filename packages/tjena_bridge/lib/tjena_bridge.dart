@@ -41,6 +41,7 @@ enum BridgeEventType {
   signalEdit,
   signalMediaReady,
   waCall,
+  historyProgress,
   unknown,
 }
 
@@ -91,6 +92,7 @@ class BridgeEvent {
     'signal_edit': BridgeEventType.signalEdit,
     'signal_media_ready': BridgeEventType.signalMediaReady,
     'wa_call': BridgeEventType.waCall,
+    'history_progress': BridgeEventType.historyProgress,
   };
 }
 

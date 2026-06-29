@@ -102,6 +102,10 @@ class WaMatrixBridge {
 
   static const _roomMappingsKey = 'wa_bridge_room_mappings';
   static const _phonesKey = 'wa_bridge_account_phones';
+  static const _customNamesKey = 'wa_bridge_custom_names';
+
+  // User-set custom room names (matrixRoomId -> name). Override automatic names.
+  final _customNames = <String, String>{};
 
   // Persist the current WA↔Matrix room mapping to SharedPreferences so it
   // survives process restarts without relying on Matrix SDK state-event loading.
@@ -179,6 +183,20 @@ class WaMatrixBridge {
     } catch (e) {
       Logs().w('[WaBridge] load phones failed: $e');
     }
+
+    // ③c Restore user-set custom room names and re-apply them so they survive
+    // restarts and win over automatic name refreshes.
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final cn = prefs.getString(_customNamesKey);
+      if (cn != null) {
+        (jsonDecode(cn) as Map<String, dynamic>)
+            .forEach((k, v) => _customNames[k] = v as String);
+      }
+    } catch (e) {
+      Logs().w('[WaBridge] load custom names failed: $e');
+    }
+    _customNames.forEach(_injectName);
 
     // ④ Ensure each account's WhatsApp space exists and (re-)parents all of its
     // chats. This repairs chats that were created without a space (e.g. via the
@@ -835,6 +853,36 @@ class WaMatrixBridge {
 
   /// Clean slate for one account: forget its rooms + clear its history cache.
   /// WhatsApp itself is untouched. Used by the link screen's "start fresh" box.
+  /// Remove ONLY this account's WhatsApp rooms (and its space) from Tjena. Does
+  /// not touch the history cache or the WhatsApp session — new messages recreate
+  /// the rooms. Used by the per-account "delete all WA rooms" action so it only
+  /// affects the account whose settings are open.
+  Future<void> clearAccountRooms(Client client, String accountId) async {
+    final mids = _matrixToAccount.entries
+        .where((e) => e.value == accountId)
+        .map((e) => e.key)
+        .toList();
+    for (final mid in mids) {
+      final jid = _matrixToWa[mid];
+      try {
+        await client.database.forgetRoom(mid);
+      } catch (_) {}
+      client.rooms.removeWhere((r) => r.id == mid);
+      client.archivedRooms.removeWhere((r) => r.room.id == mid);
+      _matrixToWa.remove(mid);
+      _matrixToAccount.remove(mid);
+      if (jid != null) _waToMatrix.remove(_key(accountId, jid));
+    }
+    final sid = _spaceIds.remove(accountId);
+    if (sid != null) {
+      try {
+        await client.database.forgetRoom(sid);
+      } catch (_) {}
+      client.rooms.removeWhere((r) => r.id == sid);
+    }
+    await _saveRoomMappings();
+  }
+
   Future<void> clearAccountData(Client client, String accountId) async {
     // Forget this account's rooms.
     final mids = _matrixToAccount.entries
@@ -899,12 +947,17 @@ class WaMatrixBridge {
 
       case BridgeEventType.roomCreated:
         final data = evt.data['room'] as Map<String, dynamic>;
-        _ensureRoom(
+        final waId = data['id'] as String;
+        final created = _ensureRoom(
           acc,
-          data['id'] as String,
+          waId,
           data['name'] as String? ?? '',
           isDM: data['is_dm'] as bool? ?? true,
+          altWaId: data['alt_id'] as String?,
         );
+        // A genuinely new chat (e.g. someone messaged you for the first time):
+        // load the default history window so it doesn't start empty.
+        if (created) _maybeDefaultBackfill(acc, waId);
 
       case BridgeEventType.roomUpdated:
         // room_updated only refreshes existing rooms — never creates new ones.
@@ -921,9 +974,11 @@ class WaMatrixBridge {
 
       case BridgeEventType.message:
         final waRoomId = evt.data['room_id'] as String? ?? '';
+        final altRoomId = evt.data['alt_room_id'] as String?;
         final eventData = evt.data['event'] as Map<String, dynamic>;
         final isBackfill = eventData['is_backfill'] as bool? ?? false;
         final isNewRoom = !_waToMatrix.containsKey(_key(acc, waRoomId));
+        var createdRoom = false;
         if (isNewRoom) {
           final isGroup = waRoomId.endsWith('@g.us');
           final senderName = eventData['sender_name'] as String?;
@@ -933,13 +988,13 @@ class WaMatrixBridge {
               : (chatPhone?.isNotEmpty == true
                   ? chatPhone!
                   : waRoomId.split('@').first);
-          _ensureRoom(acc, waRoomId, fallbackName, isDM: !isGroup);
+          createdRoom = _ensureRoom(acc, waRoomId, fallbackName,
+              isDM: !isGroup, altWaId: altRoomId);
         }
         _pushMessage(acc, waRoomId, eventData);
-        if (isNewRoom && !isBackfill && _defaultBackfillDays > 0) {
-          // ignore: unawaited_futures
-          TjenaBridge.instance.backfillFromCache(
-              waRoomId, _defaultBackfillDays, accountID: acc);
+        // New chat from an incoming message → load the default history window.
+        if (createdRoom && !isBackfill) {
+          _maybeDefaultBackfill(acc, waRoomId);
         }
 
       case BridgeEventType.backfill:
@@ -978,10 +1033,28 @@ class WaMatrixBridge {
         // ignore: unawaited_futures
         _handleWaCall(acc, evt.data);
 
+      case BridgeEventType.historyProgress:
+        final chats = (evt.data['chats'] as num?)?.toInt() ?? 0;
+        final messages = (evt.data['messages'] as num?)?.toInt() ?? 0;
+        var progress = (evt.data['progress'] as num?)?.toInt() ?? 0;
+        final prev = _histProgress[acc];
+        // Never let the percentage go backwards.
+        if (prev != null && prev.progress > progress) progress = prev.progress;
+        _histProgress[acc] =
+            (chats: chats, messages: messages, progress: progress);
+
       default:
         break;
     }
   }
+
+  // Latest history-sync progress per account, so the settings card survives
+  // navigating away and back.
+  final _histProgress =
+      <String, ({int chats, int messages, int progress})>{};
+
+  ({int chats, int messages, int progress})? historyProgress(String accountId) =>
+      _histProgress[accountId];
 
   /// Incoming WhatsApp call: optionally auto-decline it (stop the ringing) and
   /// auto-reply with a "call me via this link" message.
@@ -1135,14 +1208,42 @@ class WaMatrixBridge {
   static bool _looksLikeName(String s) =>
       s.contains(RegExp(r'[A-Za-zÀ-žЀ-ӿ؀-ۿ]'));
 
-  void _ensureRoom(String accountId, String waId, String name,
-      {required bool isDM}) {
+  /// Load the user's configured default backfill window into a freshly-created
+  /// chat, so a new chat doesn't start with only the one triggering message.
+  void _maybeDefaultBackfill(String accountId, String waRoomId) {
+    if (_defaultBackfillDays <= 0) return;
+    // ignore: unawaited_futures
+    TjenaBridge.instance
+        .backfillFromCache(waRoomId, _defaultBackfillDays, accountID: accountId);
+  }
+
+  /// Returns true only when a brand-new room is created (not when the chat
+  /// already exists or is aliased to an existing room) — callers use this to
+  /// kick off the default backfill for genuinely new chats.
+  bool _ensureRoom(String accountId, String waId, String name,
+      {required bool isDM, String? altWaId}) {
     final mapKey = _key(accountId, waId);
     if (_waToMatrix.containsKey(mapKey)) {
       if (name.isNotEmpty && _looksLikeName(name)) {
         _pushNameUpdate(accountId, waId, name);
       }
-      return;
+      return false;
+    }
+    // If the LID↔phone-number counterpart already has a room (e.g. you started
+    // the chat from the picker by phone number, and the reply arrives addressed
+    // by LID), alias this JID to that existing room instead of creating a
+    // duplicate. We only add the alias mapping; the room keeps its primary JID.
+    if (altWaId != null && altWaId.isNotEmpty) {
+      final altMatrix = _waToMatrix[_key(accountId, altWaId)];
+      if (altMatrix != null) {
+        _waToMatrix[mapKey] = altMatrix;
+        // ignore: unawaited_futures
+        _saveRoomMappings();
+        if (name.isNotEmpty && _looksLikeName(name)) {
+          _pushNameUpdate(accountId, altWaId, name);
+        }
+        return false;
+      }
     }
     final matrixId = _toMatrixId(accountId, waId);
     // Safety: room already exists in the SDK (init missed it) — register mapping
@@ -1154,7 +1255,7 @@ class WaMatrixBridge {
       if (name.isNotEmpty && _looksLikeName(name)) {
         _pushNameUpdate(accountId, waId, name);
       }
-      return;
+      return false;
     }
     _waToMatrix[mapKey] = matrixId;
     _matrixToWa[matrixId] = waId;
@@ -1172,6 +1273,7 @@ class WaMatrixBridge {
       // ignore: unawaited_futures
       syncGroupMembers(matrixId);
     }
+    return true;
   }
 
   void _createRoom(
@@ -1236,8 +1338,15 @@ class WaMatrixBridge {
       {bool isSpace = false}) {
     final matrixId =
         isSpace ? waIdOrSpaceId : _waToMatrix[_key(accountId, waIdOrSpaceId)];
+    if (matrixId == null) return;
+    // Never override a name the user set manually.
+    if (!isSpace && _customNames.containsKey(matrixId)) return;
+    _injectName(matrixId, name);
+  }
+
+  void _injectName(String matrixId, String name) {
     final client = _client;
-    if (matrixId == null || client?.userID == null) return;
+    if (client?.userID == null) return;
     final ts = DateTime.now().millisecondsSinceEpoch;
     // ignore: unawaited_futures
     _inject(SyncUpdate(
@@ -1249,7 +1358,7 @@ class WaMatrixBridge {
               type: EventTypes.RoomName,
               content: {'name': name},
               senderId: client.userID!,
-              eventId: '\$waname_${_safe(waIdOrSpaceId)}_$ts',
+              eventId: '\$waname_${_safe(matrixId)}_$ts',
               originServerTs: DateTime.now(),
               stateKey: '',
             ),
@@ -1257,6 +1366,35 @@ class WaMatrixBridge {
         ),
       }),
     ));
+  }
+
+  /// The user-set custom name for a WhatsApp room, or null if it uses the
+  /// automatic (contact/group) name.
+  String? customRoomName(String matrixRoomId) => _customNames[matrixRoomId];
+
+  /// Manually set (or, with an empty name, clear) a WhatsApp room's name. A
+  /// custom name persists and is never overwritten by automatic name refreshes.
+  Future<void> setRoomName(String matrixRoomId, String name) async {
+    final trimmed = name.trim();
+    if (trimmed.isEmpty) {
+      _customNames.remove(matrixRoomId);
+      await _saveCustomNames();
+      // Revert to the automatic name from the bridge.
+      await refreshRoom(matrixRoomId);
+      return;
+    }
+    _customNames[matrixRoomId] = trimmed;
+    await _saveCustomNames();
+    _injectName(matrixRoomId, trimmed);
+  }
+
+  Future<void> _saveCustomNames() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_customNamesKey, jsonEncode(_customNames));
+    } catch (e) {
+      Logs().w('[WaBridge] save custom names failed: $e');
+    }
   }
 
   Future<void> _pushAvatarUpdate(
@@ -1356,6 +1494,31 @@ class WaMatrixBridge {
     }
   }
 
+  // Placeholder bodies the Go bridge uses when a media message has no caption.
+  static const _mediaPlaceholders = {
+    '🖼 Image',
+    '📹 Video',
+    '🎵 Audio',
+    '🌀 Sticker',
+  };
+
+  /// WhatsApp puts an attachment's caption in the message body. In Matrix an
+  /// attachment's `body` is only treated as a caption when a separate `filename`
+  /// is also present — so when there's a real caption, synthesize a filename so
+  /// clients render the caption instead of hiding it.
+  static void _applyCaption(
+      Map<String, dynamic> content, String msgtype, String body) {
+    if (msgtype != 'm.image' && msgtype != 'm.video' && msgtype != 'm.sticker') {
+      return;
+    }
+    if (body.isEmpty || _mediaPlaceholders.contains(body)) return;
+    content['filename'] = msgtype == 'm.video'
+        ? 'video.mp4'
+        : msgtype == 'm.sticker'
+            ? 'sticker.webp'
+            : 'image.jpg';
+  }
+
   void _pushMessage(
       String accountId, String waRoomId, Map<String, dynamic> eventData) {
     final matrixId = _waToMatrix[_key(accountId, waRoomId)];
@@ -1406,6 +1569,26 @@ class WaMatrixBridge {
         'msgtype': msgtype,
       };
     }
+    // Backfilled media: the attachment was downloaded before, so its bytes are
+    // still cached under this deterministic mxc URI — re-attach the URL so the
+    // image/video/file shows instead of an empty bubble (and isn't lost on a
+    // clean-reset "WA sync").
+    final mediaMime = eventData['media_mime'] as String?;
+    if (needsMedia && mediaMime != null && mediaMime.isNotEmpty) {
+      content['url'] = 'mxc://wa-media/${eventId.replaceAll(r'$', '')}';
+      final info = <String, dynamic>{'mimetype': mediaMime};
+      final ms = (eventData['media_size'] as num?)?.toInt();
+      if (ms != null && ms > 0) info['size'] = ms;
+      // Backfilled videos: point at the preview thumbnail cached when the video
+      // was first downloaded (falls back to a blur if it isn't cached).
+      if (msgtype == 'm.video') {
+        info['thumbnail_url'] =
+            'mxc://wa-media/${eventId.replaceAll(r'$', '')}_thumb';
+        info['thumbnail_info'] = {'mimetype': 'image/jpeg'};
+      }
+      content['info'] = info;
+    }
+    if (needsMedia) _applyCaption(content, msgtype, body);
 
     final senderName = eventData['sender_name'] as String?;
     final hasName = senderName != null && senderName.isNotEmpty;
@@ -1447,8 +1630,12 @@ class WaMatrixBridge {
     //     real saved name from room_updated still wins (_looksLikeName guard).
     final currentName = client.getRoomById(matrixId)?.name ?? '';
     final chatPhone = eventData['chat_phone'] as String?;
+    final hasCustomName = _customNames.containsKey(matrixId);
     String? nameToSet;
-    if (!isOwn && hasName && isDM && !_looksLikeName(currentName)) {
+    if (hasCustomName) {
+      // User set a manual name — never override it.
+      nameToSet = null;
+    } else if (!isOwn && hasName && isDM && !_looksLikeName(currentName)) {
       nameToSet = senderName;
     } else if (!_looksLikeName(currentName)) {
       // No real name yet — prefer the resolved phone number (LID→PN) over the
@@ -1561,6 +1748,45 @@ class WaMatrixBridge {
       // Re-inject the same event ID with content['url'] added. Serialized via
       // _inject so it always lands AFTER the _pushMessage placeholder, never
       // before — so the URL can't be clobbered.
+      // Store the preview thumbnail (videos/images carry a small JPEG) under a
+      // sibling mxc so the chat shows a real preview instead of a blurred box.
+      String? thumbMxc;
+      final thumbPath = payload['thumb_path'] as String?;
+      if (thumbPath != null && thumbPath.isNotEmpty) {
+        try {
+          final tb = await File(thumbPath).readAsBytes();
+          final tUri = Uri.parse(
+              'mxc://wa-media/${eventId.replaceAll(r'$', '')}_thumb');
+          await client.database.storeFile(
+              tUri, tb, DateTime.now().millisecondsSinceEpoch ~/ 1000);
+          thumbMxc = tUri.toString();
+        } catch (e) {
+          Logs().w('[WaBridge] thumb store failed: $e');
+        }
+        try {
+          await File(thumbPath).delete();
+        } catch (_) {}
+      }
+
+      final info = <String, dynamic>{'mimetype': mimetype, 'size': size};
+      final tw = (payload['thumb_w'] as num?)?.toInt();
+      final th = (payload['thumb_h'] as num?)?.toInt();
+      if (tw != null && tw > 0) info['w'] = tw;
+      if (th != null && th > 0) info['h'] = th;
+      // Only videos need a separate preview thumbnail — images render their full
+      // attachment directly (pointing them at the tiny WA thumbnail broke the
+      // preview).
+      if (thumbMxc != null && msgtype == 'm.video') {
+        info['thumbnail_url'] = thumbMxc;
+        info['thumbnail_info'] = {'mimetype': 'image/jpeg'};
+      }
+      final mediaContent = <String, dynamic>{
+        'msgtype': msgtype,
+        'body': body,
+        'url': mxcUri.toString(),
+        'info': info,
+      };
+      _applyCaption(mediaContent, msgtype, body);
       await _inject(SyncUpdate(
         nextBatch: client.prevBatch ?? '',
         rooms: RoomsUpdate(join: {
@@ -1569,12 +1795,7 @@ class WaMatrixBridge {
               events: [
                 MatrixEvent(
                   type: EventTypes.Message,
-                  content: {
-                    'msgtype': msgtype,
-                    'body': body,
-                    'url': mxcUri.toString(),
-                    'info': {'mimetype': mimetype, 'size': size},
-                  },
+                  content: mediaContent,
                   senderId: isOwn ? myUserId : sender,
                   eventId: eventId,
                   originServerTs: DateTime.fromMillisecondsSinceEpoch(ts * 1000),

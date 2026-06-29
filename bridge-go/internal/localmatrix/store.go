@@ -63,10 +63,16 @@ func newLocalStore(db *sql.DB) *LocalStore {
 
 // OpenLocalStore opens (or creates) the SQLite store at path and runs migrations.
 func OpenLocalStore(path string) (*LocalStore, error) {
-	db, err := sql.Open("sqlite3", "file:"+path+"?_foreign_keys=on&_journal_mode=WAL")
+	// _busy_timeout makes writers WAIT for the lock instead of failing
+	// immediately; SetMaxOpenConns(1) serializes all access through one
+	// connection so concurrent history-sync goroutines can't drop writes with
+	// "database is locked".
+	db, err := sql.Open("sqlite3",
+		"file:"+path+"?_foreign_keys=on&_journal_mode=WAL&_busy_timeout=10000")
 	if err != nil {
 		return nil, err
 	}
+	db.SetMaxOpenConns(1)
 	s := newLocalStore(db)
 	if err := s.RunMigrations(context.Background()); err != nil {
 		_ = db.Close()
@@ -147,6 +153,8 @@ func (s *LocalStore) RunMigrations(ctx context.Context) error {
 			msgtype     TEXT NOT NULL DEFAULT 'm.text',
 			is_own      INTEGER NOT NULL DEFAULT 0,
 			formatted_body TEXT NOT NULL DEFAULT '',
+			media_mime  TEXT NOT NULL DEFAULT '',
+			media_size  INTEGER NOT NULL DEFAULT 0,
 			PRIMARY KEY (chat_jid, msg_id)
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_wa_history_chat ON wa_history(chat_jid, ts)`,
@@ -169,6 +177,17 @@ func (s *LocalStore) RunMigrations(ctx context.Context) error {
 		!strings.Contains(err.Error(), "duplicate column") {
 		// Non-fatal: log via returned error only if it's not the expected dup.
 		return fmt.Errorf("migrate add formatted_body: %w", err)
+	}
+	// Tolerant migrations for media columns (so backfill can re-show downloaded
+	// attachments instead of dropping them).
+	for _, col := range []string{
+		`ALTER TABLE wa_history ADD COLUMN media_mime TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE wa_history ADD COLUMN media_size INTEGER NOT NULL DEFAULT 0`,
+	} {
+		if _, err := s.db.ExecContext(ctx, col); err != nil &&
+			!strings.Contains(err.Error(), "duplicate column") {
+			return fmt.Errorf("migrate add media column: %w", err)
+		}
 	}
 	return nil
 }
@@ -492,6 +511,8 @@ type CachedMessage struct {
 	MsgType       string
 	IsOwn         bool
 	FormattedBody string // HTML formatted_body (mentions); '' if none
+	MediaMime     string // attachment mimetype (set once downloaded); '' = none
+	MediaSize     int64  // attachment size in bytes
 }
 
 // CachedChat is a chat summary from the cache (for the picker).
@@ -528,7 +549,7 @@ func (s *LocalStore) CacheMessage(ctx context.Context, m CachedMessage, chatName
 // oldest first (ready to inject as backfill).
 func (s *LocalStore) GetCachedMessages(ctx context.Context, chatJID string, sinceUnix int64) ([]CachedMessage, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT chat_jid, msg_id, sender, sender_name, ts, body, msgtype, is_own, formatted_body
+		SELECT chat_jid, msg_id, sender, sender_name, ts, body, msgtype, is_own, formatted_body, media_mime, media_size
 		FROM wa_history WHERE chat_jid=? AND ts>=? ORDER BY ts ASC`,
 		chatJID, sinceUnix)
 	if err != nil {
@@ -539,13 +560,22 @@ func (s *LocalStore) GetCachedMessages(ctx context.Context, chatJID string, sinc
 	for rows.Next() {
 		var m CachedMessage
 		var isOwn int
-		if err := rows.Scan(&m.ChatJID, &m.MsgID, &m.Sender, &m.SenderName, &m.TS, &m.Body, &m.MsgType, &isOwn, &m.FormattedBody); err != nil {
+		if err := rows.Scan(&m.ChatJID, &m.MsgID, &m.Sender, &m.SenderName, &m.TS, &m.Body, &m.MsgType, &isOwn, &m.FormattedBody, &m.MediaMime, &m.MediaSize); err != nil {
 			return nil, err
 		}
 		m.IsOwn = isOwn != 0
 		out = append(out, m)
 	}
 	return out, rows.Err()
+}
+
+// UpdateMessageMedia records the attachment mimetype/size for an already-cached
+// message (once it has been downloaded), so backfill can re-inject the media.
+func (s *LocalStore) UpdateMessageMedia(ctx context.Context, chatJID, msgID, mime string, size int64) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE wa_history SET media_mime=?, media_size=? WHERE chat_jid=? AND msg_id=?`,
+		mime, size, chatJID, msgID)
+	return err
 }
 
 // GetOldestCachedMessage returns the oldest cached message for a chat (the

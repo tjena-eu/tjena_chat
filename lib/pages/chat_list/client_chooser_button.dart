@@ -6,6 +6,7 @@
 import 'package:async/async.dart';
 import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/widgets/avatar.dart';
+import 'package:fluffychat/widgets/future_loading_dialog.dart';
 import 'package:fluffychat/widgets/matrix.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
@@ -72,6 +73,16 @@ class ClientChooserButton extends StatelessWidget {
         ),
       ),
       PopupMenuItem(
+        value: SettingsAction.hidden,
+        child: const Row(
+          children: [
+            Icon(Icons.visibility_off_outlined),
+            SizedBox(width: 18),
+            Text('Hidden chats'),
+          ],
+        ),
+      ),
+      PopupMenuItem(
         value: SettingsAction.settings,
         child: Row(
           children: [
@@ -82,12 +93,32 @@ class ClientChooserButton extends StatelessWidget {
         ),
       ),
       PopupMenuItem(
-        value: SettingsAction.support,
-        child: Row(
+        value: SettingsAction.supportTjena,
+        child: const Row(
           children: [
             Icon(Icons.favorite, color: Colors.red),
-            const SizedBox(width: 18),
-            Text(L10n.of(context).supportFluffyChat),
+            SizedBox(width: 18),
+            Text('Support tjena!chat'),
+          ],
+        ),
+      ),
+      PopupMenuItem(
+        value: SettingsAction.reportBug,
+        child: const Row(
+          children: [
+            Icon(Icons.bug_report_outlined),
+            SizedBox(width: 18),
+            Text('Report a bug'),
+          ],
+        ),
+      ),
+      PopupMenuItem(
+        value: SettingsAction.support,
+        child: const Row(
+          children: [
+            Icon(Icons.source_outlined),
+            SizedBox(width: 18),
+            Text('Original source (FluffyChat)'),
           ],
         ),
       ),
@@ -214,15 +245,30 @@ class ClientChooserButton extends StatelessWidget {
           FluffyShare.shareInviteLink(context);
           break;
         case SettingsAction.support:
-          launchUrlString(
-            'https://fluffychat.im/faq/#how_can_i_support_fluffychat',
+          launchUrlString('https://fluffychat.im');
+          break;
+        case SettingsAction.supportTjena:
+          launchUrlString('https://tjena.eu/support');
+          break;
+        case SettingsAction.reportBug:
+          final result = await showFutureLoadingDialog(
+            context: context,
+            future: () => Matrix.of(context)
+                .client
+                .startDirectChat('@bugreport:tjena.eu'),
           );
+          if (result.error == null && result.result != null && context.mounted) {
+            context.go('/rooms/${result.result}');
+          }
           break;
         case SettingsAction.settings:
           context.go('/rooms/settings');
           break;
         case SettingsAction.archive:
           context.go('/rooms/archive');
+          break;
+        case SettingsAction.hidden:
+          context.go('/rooms/hidden');
           break;
         case SettingsAction.setStatus:
           controller.setStatus();
@@ -238,6 +284,9 @@ enum SettingsAction {
   setStatus,
   invite,
   support,
+  supportTjena,
+  reportBug,
   settings,
   archive,
+  hidden,
 }

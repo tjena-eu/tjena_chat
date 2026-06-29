@@ -28,16 +28,41 @@ class _SettingsBridgeLocalState extends State<SettingsBridgeLocal> {
   int _defaultDays = 30;
   bool _syncing = false;
 
+  // Live history-sync progress (initial backfill into the cache). _histProgress
+  // is WhatsApp's own 0–100 percentage (100 = done).
+  int _histChats = 0;
+  int _histMsgs = 0;
+  int _histProgress = 0;
+  bool _histSeen = false;
+
   @override
   void initState() {
     super.initState();
     _refreshState();
     _loadPrefs();
+    // Seed from the bridge so the card survives navigating away and back.
+    final p = WaMatrixBridge.instance.historyProgress(widget.accountId);
+    if (p != null) {
+      _histChats = p.chats;
+      _histMsgs = p.messages;
+      _histProgress = p.progress;
+      _histSeen = true;
+    }
     _sub = TjenaBridge.instance.events.listen((evt) {
       if (evt.type == BridgeEventType.state ||
           evt.type == BridgeEventType.linked ||
           evt.type == BridgeEventType.disconnected) {
         _refreshState();
+      } else if (evt.type == BridgeEventType.historyProgress) {
+        final acc = evt.data['account_id'] as String? ?? 'default';
+        if (acc != widget.accountId || !mounted) return;
+        setState(() {
+          _histChats = (evt.data['chats'] as num?)?.toInt() ?? _histChats;
+          _histMsgs = (evt.data['messages'] as num?)?.toInt() ?? _histMsgs;
+          final p = (evt.data['progress'] as num?)?.toInt() ?? _histProgress;
+          if (p >= _histProgress) _histProgress = p; // never go backwards
+          _histSeen = true;
+        });
       }
     });
   }
@@ -198,9 +223,10 @@ class _SettingsBridgeLocalState extends State<SettingsBridgeLocal> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Alle WA-Räume löschen?'),
+        title: const Text('WA-Räume dieses Kontos löschen?'),
         content: const Text(
-          'Entfernt alle lokalen WhatsApp-Chatrooms aus der App. '
+          'Entfernt nur die WhatsApp-Chatrooms dieses Kontos aus der App. '
+          'Andere WhatsApp-Konten bleiben unberührt. '
           'Nichts wird in WhatsApp selbst geändert. '
           'Neue Nachrichten erstellen die Räume erneut.',
         ),
@@ -219,10 +245,10 @@ class _SettingsBridgeLocalState extends State<SettingsBridgeLocal> {
     );
     if (ok != true || !mounted) return;
     final client = Matrix.of(context).client;
-    await WaMatrixBridge.instance.clearAllRooms(client);
+    await WaMatrixBridge.instance.clearAccountRooms(client, widget.accountId);
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Alle WA-Räume entfernt')),
+      const SnackBar(content: Text('WA-Räume dieses Kontos entfernt')),
     );
   }
 
@@ -269,6 +295,31 @@ class _SettingsBridgeLocalState extends State<SettingsBridgeLocal> {
         padding: const EdgeInsets.all(16),
         children: [
           _ConnectionCard(state: _state),
+          if (_histSeen) ...[
+            const SizedBox(height: 12),
+            Builder(builder: (context) {
+              final done = _histProgress >= 100;
+              return Card(
+                margin: EdgeInsets.zero,
+                child: ListTile(
+                  leading: done
+                      ? Icon(Icons.check_circle_outline,
+                          color: Theme.of(context).colorScheme.primary)
+                      : const SizedBox(
+                          width: 22,
+                          height: 22,
+                          child: CircularProgressIndicator(strokeWidth: 2.5),
+                        ),
+                  title: Text(done
+                      ? 'History loaded — safe to close'
+                      : 'Loading WhatsApp history… $_histProgress%'),
+                  subtitle: Text(
+                      '$_histMsgs messages from $_histChats chats'
+                      '${done ? '' : ' so far'}'),
+                ),
+              );
+            }),
+          ],
           const SizedBox(height: 20),
           _sectionLabel(context, 'ACTIONS'),
           const SizedBox(height: 8),
@@ -317,7 +368,7 @@ class _SettingsBridgeLocalState extends State<SettingsBridgeLocal> {
                     foregroundColor: theme.colorScheme.onErrorContainer,
                   ),
                   icon: const Icon(Icons.delete_sweep_outlined, size: 18),
-                  label: const Text('Alle WA-Räume löschen'),
+                  label: const Text('WA-Räume dieses Kontos löschen'),
                 ),
                 FilledButton.tonalIcon(
                   onPressed: _unlink,

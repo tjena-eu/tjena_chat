@@ -11,6 +11,7 @@ import 'package:fluffychat/config/app_config.dart';
 import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/pages/chat_list/chat_list_view.dart';
 import 'package:fluffychat/utils/error_reporter.dart';
+import 'package:fluffychat/utils/hidden_rooms.dart';
 import 'package:fluffychat/utils/localized_exception_extension.dart';
 import 'package:fluffychat/utils/matrix_sdk_extensions/client_stories_extension.dart';
 import 'package:fluffychat/utils/matrix_sdk_extensions/matrix_locals.dart';
@@ -158,6 +159,8 @@ class ChatListController extends State<ChatList>
   List<Room> get filteredRooms => Matrix.of(context)
       .client
       .rooms
+      // Hidden rooms stay out of the list even when new messages arrive.
+      .where((room) => !HiddenRooms.instance.isHidden(room.id))
       // Story rooms are shown as normal chats (hiding them caused rooms to get
       // stuck invisible). They can still be browsed in the Stories space too.
       .where(getRoomFilterByActiveFilter(activeFilter))
@@ -380,6 +383,12 @@ class ChatListController extends State<ChatList>
     _initReceiveSharingIntent();
     _activeSpaceId = widget.activeSpace;
 
+    // Hidden rooms: load the set and rebuild the list whenever it changes.
+    HiddenRooms.instance.ensureLoaded().then((_) {
+      if (mounted) setState(() {});
+    });
+    HiddenRooms.instance.notifier.addListener(_onHiddenRoomsChanged);
+
     scrollController.addListener(_onScroll);
     _waitForFirstSync();
     _applyStoriesReceivePolicy();
@@ -451,8 +460,13 @@ class ChatListController extends State<ChatList>
     _intentDataStreamSubscription?.cancel();
     _intentFileStreamSubscription?.cancel();
     _onRoomTagUpdate?.cancel();
+    HiddenRooms.instance.notifier.removeListener(_onHiddenRoomsChanged);
     scrollController.removeListener(_onScroll);
     super.dispose();
+  }
+
+  void _onHiddenRoomsChanged() {
+    if (mounted) setState(() {});
   }
 
   void _processPushHelperCrashReport() {

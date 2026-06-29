@@ -9,6 +9,7 @@ import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/pages/chat_details/chat_details_view.dart';
 import 'package:fluffychat/pages/settings/settings.dart';
 import 'package:fluffychat/utils/file_selector.dart';
+import 'package:fluffychat/utils/wa_matrix_bridge.dart';
 import 'package:fluffychat/utils/matrix_sdk_extensions/matrix_locals.dart';
 import 'package:fluffychat/utils/platform_infos.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/show_modal_action_popup.dart';
@@ -56,7 +57,12 @@ class ChatDetailsController extends State<ChatDetails> {
     if (!mounted) return;
     final success = await showFutureLoadingDialog(
       context: context,
-      future: () => room.setName(input),
+      // Virtual WhatsApp rooms don't exist on the homeserver — setName would
+      // fail with a permission error. Route them to the bridge, which sets a
+      // persistent custom name locally.
+      future: () => WaMatrixBridge.instance.isWaRoom(room.id)
+          ? WaMatrixBridge.instance.setRoomName(room.id, input)
+          : room.setName(input),
     );
     if (!mounted) return;
     if (success.error == null) {

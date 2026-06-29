@@ -108,6 +108,35 @@ class MessageContent extends StatelessWidget {
     );
   }
 
+  /// Wraps a media widget with its caption underneath, when the event carries
+  /// one. Per the Matrix spec an attachment's `body` is a caption only when a
+  /// separate `filename` is present (and differs) — e.g. WhatsApp images sent
+  /// with text. Without this the caption is silently hidden.
+  Widget _withCaption(Widget media) {
+    final filename = event.content.tryGet<String>('filename');
+    final caption = event.content.tryGet<String>('body') ?? '';
+    if (filename == null || caption.isEmpty || caption == filename) {
+      return media;
+    }
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        media,
+        Padding(
+          padding: const EdgeInsets.fromLTRB(4, 6, 4, 2),
+          child: Text(
+            caption,
+            style: TextStyle(
+              color: textColor,
+              fontSize: AppConfig.messageFontSize,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     const fontSize = AppConfig.messageFontSize;
@@ -144,7 +173,7 @@ class MessageContent extends StatelessWidget {
                 width = max(32, maxSize * (w / h));
               }
             }
-            return ImageBubble(
+            return _withCaption(ImageBubble(
               event,
               width: width,
               height: height,
@@ -167,7 +196,7 @@ class MessageContent extends StatelessWidget {
                   transitionsBuilder: (_, _, _, child) => child,
                 ),
               ),
-            );
+            ));
           case CuteEventContent.eventType:
             return CuteContent(event);
           case MessageTypes.Audio:
@@ -191,12 +220,12 @@ class MessageContent extends StatelessWidget {
               linkColor: linkColor,
             );
           case MessageTypes.Video:
-            return EventVideoPlayer(
+            return _withCaption(EventVideoPlayer(
               event,
               textColor: textColor,
               linkColor: linkColor,
               timeline: timeline,
-            );
+            ));
           case MessageTypes.File:
             return MessageDownloadContent(
               event,

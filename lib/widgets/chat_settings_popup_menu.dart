@@ -6,6 +6,7 @@
 import 'dart:async';
 
 import 'package:fluffychat/l10n/l10n.dart';
+import 'package:fluffychat/utils/hidden_rooms.dart';
 import 'package:fluffychat/utils/platform_infos.dart';
 import 'package:fluffychat/utils/wa_matrix_bridge.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.dart';
@@ -26,6 +27,7 @@ enum ChatPopupMenuActions {
   media,
   syncWaRoom,
   loadWaBackfill,
+  toggleHidden,
 }
 
 class ChatSettingsPopupMenu extends StatefulWidget {
@@ -124,6 +126,9 @@ class ChatSettingsPopupMenuState extends State<ChatSettingsPopupMenu> {
                 break;
               case ChatPopupMenuActions.loadWaBackfill:
                 await _loadWaBackfill();
+                break;
+              case ChatPopupMenuActions.toggleHidden:
+                await _toggleHidden();
                 break;
             }
           },
@@ -226,6 +231,20 @@ class ChatSettingsPopupMenuState extends State<ChatSettingsPopupMenu> {
                 ),
               ),
             PopupMenuItem<ChatPopupMenuActions>(
+              value: ChatPopupMenuActions.toggleHidden,
+              child: Row(
+                children: [
+                  Icon(HiddenRooms.instance.isHidden(widget.room.id)
+                      ? Icons.visibility_outlined
+                      : Icons.visibility_off_outlined),
+                  const SizedBox(width: 12),
+                  Text(HiddenRooms.instance.isHidden(widget.room.id)
+                      ? 'Unhide chat'
+                      : 'Hide chat'),
+                ],
+              ),
+            ),
+            PopupMenuItem<ChatPopupMenuActions>(
               value: ChatPopupMenuActions.leave,
               child: Row(
                 children: [
@@ -281,6 +300,26 @@ class ChatSettingsPopupMenuState extends State<ChatSettingsPopupMenu> {
         ],
       ),
     );
+  }
+
+  /// Hide or unhide this chat. Hidden chats stay out of the list even when new
+  /// messages arrive; manage them via the menu → "Hidden chats".
+  Future<void> _toggleHidden() async {
+    final wasHidden = HiddenRooms.instance.isHidden(widget.room.id);
+    if (wasHidden) {
+      await HiddenRooms.instance.unhide(widget.room.id);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Chat unhidden.')),
+      );
+    } else {
+      await HiddenRooms.instance.hide(widget.room.id);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Chat hidden — find it under Hidden chats.')),
+      );
+      context.go('/rooms');
+    }
   }
 
   /// The per-chat "WA sync": refresh name + photo (+ contact names), wipe the
