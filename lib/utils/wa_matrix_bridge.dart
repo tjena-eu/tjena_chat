@@ -107,6 +107,10 @@ class WaMatrixBridge {
   // User-set custom room names (matrixRoomId -> name). Override automatic names.
   final _customNames = <String, String>{};
 
+  // Our own reaction events ('matrixRoomId|targetEventId' -> reaction eventId),
+  // so we can change/remove them (WhatsApp doesn't echo our own reactions back).
+  final _ownReactionIds = <String, String>{};
+
   // Persist the current WA↔Matrix room mapping to SharedPreferences so it
   // survives process restarts without relying on Matrix SDK state-event loading.
   Future<void> _saveRoomMappings() async {
@@ -266,6 +270,12 @@ class WaMatrixBridge {
   }
   String? waRoomId(String matrixRoomId) => _matrixToWa[matrixRoomId];
   String? matrixRoomId(String waRoomId) => _waToMatrix[waRoomId];
+
+  /// The existing Matrix room id for a WhatsApp chat JID, or null if no room has
+  /// been created for it yet. Lets the picker show the cached room avatar without
+  /// any network fetch.
+  String? existingMatrixRoom(String jid, {String accountId = _defaultAccount}) =>
+      _waToMatrix[_key(accountId, jid)];
 
   /// Returns the Matrix room ID for [rawPhone], creating a virtual WA room
   /// if one doesn't exist yet. Returns null only if the bridge is not linked.
@@ -763,6 +773,57 @@ class WaMatrixBridge {
     final targetWaId = targetMatrixEventId.startsWith(r'$wa_')
         ? targetMatrixEventId.substring(4)
         : targetMatrixEventId;
+
+    // Optimistically reflect our OWN reaction — WhatsApp doesn't echo own
+    // reactions back to the companion, so otherwise it never appears here.
+    final client = _client;
+    if (client?.userID != null) {
+      final key = '$matrixRoomId|$targetMatrixEventId';
+      final ts = DateTime.now();
+      final events = <MatrixEvent>[];
+      // Remove any previous own reaction on this message (change/clear).
+      final prev = _ownReactionIds.remove(key);
+      if (prev != null) {
+        events.add(MatrixEvent(
+          type: EventTypes.Redaction,
+          content: {'redacts': prev},
+          senderId: client!.userID!,
+          eventId: '\$wa_react_redact_${ts.millisecondsSinceEpoch}',
+          originServerTs: ts,
+          roomId: matrixRoomId,
+        ));
+      }
+      if (emoji.isNotEmpty) {
+        final rid = '\$wa_react_own_${ts.millisecondsSinceEpoch}';
+        _ownReactionIds[key] = rid;
+        events.add(MatrixEvent(
+          type: 'm.reaction',
+          content: {
+            'm.relates_to': {
+              'rel_type': 'm.annotation',
+              'event_id': targetMatrixEventId,
+              'key': emoji,
+            },
+          },
+          senderId: client!.userID!,
+          eventId: rid,
+          originServerTs: ts,
+          roomId: matrixRoomId,
+        ));
+      }
+      if (events.isNotEmpty) {
+        // ignore: unawaited_futures
+        client!.handleSync(SyncUpdate(
+          nextBatch: client.prevBatch ?? '',
+          rooms: RoomsUpdate(join: {
+            matrixRoomId: JoinedRoomUpdate(
+              timeline: TimelineUpdate(events: events, limited: false),
+            ),
+          }),
+        ));
+      }
+    }
+
     try {
       await TjenaBridge.instance.sendReaction(waId, targetWaId, emoji, accountID: _accOf(matrixRoomId));
     } catch (_) {}
@@ -1718,16 +1779,34 @@ class WaMatrixBridge {
       return;
     }
     try {
-      Logs().d('[WaBridge] _pushMediaReady reading $filePath');
-      final bytes = await File(filePath).readAsBytes();
-      Logs().d('[WaBridge] _pushMediaReady read ${bytes.length} bytes');
-      final mxcUri = Uri.parse('mxc://wa-media/${eventId.replaceAll(r'$', '')}');
-      await client!.database.storeFile(
-        mxcUri,
-        bytes,
-        DateTime.now().millisecondsSinceEpoch ~/ 1000,
-      );
-      Logs().d('[WaBridge] _pushMediaReady storeFile done for $mxcUri');
+      final base = eventId.replaceAll(r'$', '');
+      final mxcUri = Uri.parse('mxc://wa-media/$base');
+      final thumbMxc = 'mxc://wa-media/${base}_thumb';
+
+      // Store the preview thumbnail if this update carries one (sent early, so
+      // videos show a preview before/independently of the full download).
+      final thumbPath = payload['thumb_path'] as String?;
+      if (thumbPath != null && thumbPath.isNotEmpty) {
+        try {
+          final tb = await File(thumbPath).readAsBytes();
+          await client!.database.storeFile(
+              Uri.parse(thumbMxc), tb, DateTime.now().millisecondsSinceEpoch ~/ 1000);
+        } catch (e) {
+          Logs().w('[WaBridge] thumb store failed: $e');
+        }
+        try {
+          await File(thumbPath).delete();
+        } catch (_) {}
+      }
+
+      // file_path is empty for a thumbnail-only update (no full attachment yet).
+      final thumbOnly = filePath.isEmpty;
+      Uint8List? bytes;
+      if (!thumbOnly) {
+        bytes = await File(filePath).readAsBytes();
+        await client!.database.storeFile(
+            mxcUri, bytes, DateTime.now().millisecondsSinceEpoch ~/ 1000);
+      }
 
       // Prefer data embedded in the media_ready payload; fall back to pending.
       final sender = payload['sender'] as String?
@@ -1745,50 +1824,30 @@ class WaMatrixBridge {
       final isOwn = payload['is_own'] as bool?
           ?? pending?['is_own'] as bool?
           ?? false;
-      final myUserId = client.userID!;
+      final myUserId = client!.userID!;
 
-      _autoSaveMedia(bytes, body, msgtype, mimetype);
+      if (bytes != null) _autoSaveMedia(bytes, body, msgtype, mimetype);
 
-      Logs().d('[WaBridge] _pushMediaReady injecting $eventId into $matrixId url=$mxcUri size=$size');
-      // Re-inject the same event ID with content['url'] added. Serialized via
-      // _inject so it always lands AFTER the _pushMessage placeholder, never
-      // before — so the URL can't be clobbered.
-      // Store the preview thumbnail (videos/images carry a small JPEG) under a
-      // sibling mxc so the chat shows a real preview instead of a blurred box.
-      String? thumbMxc;
-      final thumbPath = payload['thumb_path'] as String?;
-      if (thumbPath != null && thumbPath.isNotEmpty) {
-        try {
-          final tb = await File(thumbPath).readAsBytes();
-          final tUri = Uri.parse(
-              'mxc://wa-media/${eventId.replaceAll(r'$', '')}_thumb');
-          await client.database.storeFile(
-              tUri, tb, DateTime.now().millisecondsSinceEpoch ~/ 1000);
-          thumbMxc = tUri.toString();
-        } catch (e) {
-          Logs().w('[WaBridge] thumb store failed: $e');
-        }
-        try {
-          await File(thumbPath).delete();
-        } catch (_) {}
+      final info = <String, dynamic>{};
+      if (!thumbOnly) {
+        info['mimetype'] = mimetype;
+        info['size'] = size;
       }
-
-      final info = <String, dynamic>{'mimetype': mimetype, 'size': size};
       final tw = (payload['thumb_w'] as num?)?.toInt();
       final th = (payload['thumb_h'] as num?)?.toInt();
       if (tw != null && tw > 0) info['w'] = tw;
       if (th != null && th > 0) info['h'] = th;
-      // Only videos need a separate preview thumbnail — images render their full
-      // attachment directly (pointing them at the tiny WA thumbnail broke the
-      // preview).
-      if (thumbMxc != null && msgtype == 'm.video') {
+      // Videos show a separate preview thumbnail (deterministic mxc, stored here
+      // or by the earlier thumbnail-only update). Images render their full
+      // attachment directly.
+      if (msgtype == 'm.video') {
         info['thumbnail_url'] = thumbMxc;
         info['thumbnail_info'] = {'mimetype': 'image/jpeg'};
       }
       final mediaContent = <String, dynamic>{
         'msgtype': msgtype,
         'body': body,
-        'url': mxcUri.toString(),
+        if (!thumbOnly) 'url': mxcUri.toString(),
         'info': info,
       };
       _applyCaption(mediaContent, msgtype, body);
@@ -1809,15 +1868,17 @@ class WaMatrixBridge {
               ],
               limited: false,
             ),
-            unreadNotifications: isOwn
+            // Don't bump unread on the thumbnail-only preview update.
+            unreadNotifications: (isOwn || thumbOnly)
                 ? null
                 : UnreadNotificationCounts(notificationCount: 1),
           ),
         }),
       ));
-      Logs().d('[WaBridge] _pushMediaReady injected $eventId ok');
-      // Clean up the temp file written by the Go bridge.
-      try { await File(filePath).delete(); } catch (_) {}
+      // Clean up the full-media temp file (thumbnail-only carries none).
+      if (!thumbOnly) {
+        try { await File(filePath).delete(); } catch (_) {}
+      }
     } catch (e, s) {
       Logs().w('[WaBridge] media_ready inject failed for $eventId', e, s);
     }

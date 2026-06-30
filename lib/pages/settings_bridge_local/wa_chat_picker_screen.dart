@@ -4,6 +4,8 @@
 import 'package:flutter/material.dart';
 
 import 'package:fluffychat/utils/wa_matrix_bridge.dart';
+import 'package:fluffychat/widgets/avatar.dart';
+import 'package:fluffychat/widgets/matrix.dart';
 
 enum _SortKey { recent, name }
 
@@ -41,17 +43,6 @@ class _WaChatPickerScreenState extends State<WaChatPickerScreen> {
   _SortKey _sortKey = _SortKey.recent;
   bool _sortDescending = true; // recent: newest first; name: Z→A
   String? _opening; // jid currently being opened (pickToOpen mode)
-
-  // jid → resolved avatar URL ('' = none, missing = not yet fetched).
-  final _avatarUrls = <String, String>{};
-
-  Future<String> _avatarUrl(String jid) async {
-    final cached = _avatarUrls[jid];
-    if (cached != null) return cached;
-    final url = await WaMatrixBridge.instance.chatAvatarUrl(jid, accountId: widget.accountId);
-    _avatarUrls[jid] = url;
-    return url;
-  }
 
   @override
   void initState() {
@@ -368,7 +359,8 @@ class _WaChatPickerScreenState extends State<WaChatPickerScreen> {
                           final avatar = _ChatAvatar(
                             jid: jid,
                             isGroup: isGroup,
-                            urlFuture: _avatarUrl(jid),
+                            name: title,
+                            accountId: widget.accountId,
                           );
                           if (widget.pickToOpen) {
                             return ListTile(
@@ -416,31 +408,28 @@ class _WaChatPickerScreenState extends State<WaChatPickerScreen> {
 class _ChatAvatar extends StatelessWidget {
   final String jid;
   final bool isGroup;
-  final Future<String> urlFuture;
+  final String name;
+  final String accountId;
 
   const _ChatAvatar({
     required this.jid,
     required this.isGroup,
-    required this.urlFuture,
+    required this.name,
+    required this.accountId,
   });
 
   @override
   Widget build(BuildContext context) {
-    final fallback = CircleAvatar(
-      child: Icon(isGroup ? Icons.group : Icons.person),
-    );
-    return FutureBuilder<String>(
-      future: urlFuture,
-      builder: (context, snapshot) {
-        final url = snapshot.data ?? '';
-        if (url.isEmpty) return fallback;
-        return CircleAvatar(
-          backgroundColor: Colors.transparent,
-          backgroundImage: NetworkImage(url),
-          onBackgroundImageError: (_, __) {},
-          child: null,
-        );
-      },
+    // Use ONLY the cached avatar of an existing room — never fetch profile
+    // pictures from WhatsApp here (that made the picker slow/crash). Chats with
+    // no room yet just show initials.
+    final roomId =
+        WaMatrixBridge.instance.existingMatrixRoom(jid, accountId: accountId);
+    final room =
+        roomId != null ? Matrix.of(context).client.getRoomById(roomId) : null;
+    return Avatar(
+      mxContent: room?.avatar,
+      name: name.isNotEmpty ? name : (isGroup ? 'Group' : '?'),
     );
   }
 }

@@ -1537,6 +1537,56 @@ func (b *Bridge) downloadMedia(
 	if client == nil {
 		return
 	}
+	// Resolve mimetype and the embedded preview thumbnail up front — both live in
+	// the message itself (no download needed). Emitting the thumbnail immediately
+	// lets the chat show a real video/image preview right away, even before the
+	// (possibly large/slow) full attachment finishes downloading, or if it fails.
+	mimeType := ""
+	var thumbData []byte
+	var thumbW, thumbH uint32
+	switch {
+	case msg.GetImageMessage() != nil:
+		im := msg.GetImageMessage()
+		mimeType = im.GetMimetype()
+		thumbData = im.GetJPEGThumbnail()
+		thumbW, thumbH = im.GetWidth(), im.GetHeight()
+	case msg.GetVideoMessage() != nil:
+		vm := msg.GetVideoMessage()
+		mimeType = vm.GetMimetype()
+		thumbData = vm.GetJPEGThumbnail()
+		thumbW, thumbH = vm.GetWidth(), vm.GetHeight()
+	case msg.GetAudioMessage() != nil:
+		mimeType = msg.GetAudioMessage().GetMimetype()
+	case msg.GetDocumentMessage() != nil:
+		mimeType = msg.GetDocumentMessage().GetMimetype()
+	case msg.GetStickerMessage() != nil:
+		mimeType = msg.GetStickerMessage().GetMimetype()
+	}
+	if mimeType == "" {
+		mimeType = "application/octet-stream"
+	}
+	if len(thumbData) > 0 {
+		thumbPath := b.dataDir + "/thumb_" + msgID
+		if werr := os.WriteFile(thumbPath, thumbData, 0600); werr == nil {
+			b.emitter.Emit(map[string]any{
+				"type":        "media_ready",
+				"room_id":     roomID,
+				"event_id":    eventID,
+				"file_path":   "", // thumbnail-only update (no full attachment yet)
+				"thumb_path":  thumbPath,
+				"thumb_w":     thumbW,
+				"thumb_h":     thumbH,
+				"mimetype":    mimeType,
+				"size":        0,
+				"msgtype":     msgtype,
+				"body":        body,
+				"sender":      sender,
+				"sender_name": senderName,
+				"ts":          ts,
+				"is_own":      isOwn,
+			})
+		}
+	}
 	go func() {
 		data, err := client.DownloadAny(context.Background(), msg)
 		if err != nil {
@@ -1547,39 +1597,6 @@ func (b *Bridge) downloadMedia(
 		if werr := os.WriteFile(tmpPath, data, 0600); werr != nil {
 			b.appendLog(fmt.Sprintf("[Bridge] media write failed: %v", werr))
 			return
-		}
-		mimeType := ""
-		var thumbData []byte
-		var thumbW, thumbH uint32
-		switch {
-		case msg.GetImageMessage() != nil:
-			im := msg.GetImageMessage()
-			mimeType = im.GetMimetype()
-			thumbData = im.GetJPEGThumbnail()
-			thumbW, thumbH = im.GetWidth(), im.GetHeight()
-		case msg.GetVideoMessage() != nil:
-			vm := msg.GetVideoMessage()
-			mimeType = vm.GetMimetype()
-			thumbData = vm.GetJPEGThumbnail()
-			thumbW, thumbH = vm.GetWidth(), vm.GetHeight()
-		case msg.GetAudioMessage() != nil:
-			mimeType = msg.GetAudioMessage().GetMimetype()
-		case msg.GetDocumentMessage() != nil:
-			mimeType = msg.GetDocumentMessage().GetMimetype()
-		case msg.GetStickerMessage() != nil:
-			mimeType = msg.GetStickerMessage().GetMimetype()
-		}
-		if mimeType == "" {
-			mimeType = "application/octet-stream"
-		}
-		// Persist the embedded preview thumbnail (videos/images carry a small
-		// JPEG) so the chat shows a real preview instead of a blurred placeholder.
-		thumbPath := ""
-		if len(thumbData) > 0 {
-			thumbPath = b.dataDir + "/thumb_" + msgID
-			if werr := os.WriteFile(thumbPath, thumbData, 0600); werr != nil {
-				thumbPath = ""
-			}
 		}
 		// Record the attachment on the cached message so a later backfill /
 		// "WA sync" re-injects the media instead of dropping it to text.
@@ -1593,7 +1610,7 @@ func (b *Bridge) downloadMedia(
 			"room_id":     roomID,
 			"event_id":    eventID,
 			"file_path":   tmpPath,
-			"thumb_path":  thumbPath,
+			"thumb_path":  "", // already sent above
 			"thumb_w":     thumbW,
 			"thumb_h":     thumbH,
 			"mimetype":    mimeType,

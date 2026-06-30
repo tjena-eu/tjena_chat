@@ -120,13 +120,16 @@ class ImageViewerView extends StatelessWidget {
                                   fit: BoxFit.contain,
                                   isThumbnail: false,
                                   animated: true,
-                                  // Show the (already-cached) thumbnail while the
-                                  // full-res image loads, so the Hero open/close
-                                  // doesn't flash black between the two frames.
+                                  cacheKey: '${event.eventId}_full',
+                                  // Show the bubble's already-decoded thumbnail
+                                  // (same cacheKey) instantly while the full-res
+                                  // image loads, so the Hero open/close doesn't
+                                  // flash black between the two frames.
                                   placeholder: (context) => MxcImage(
                                     event: event,
                                     fit: BoxFit.contain,
                                     isThumbnail: true,
+                                    cacheKey: '${event.eventId}_thumb',
                                   ),
                                 ),
                               ),

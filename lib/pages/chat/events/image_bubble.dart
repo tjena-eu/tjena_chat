@@ -96,6 +96,10 @@ class ImageBubble extends StatelessWidget {
                           fit: fit,
                           animated: animated,
                           isThumbnail: thumbnailOnly,
+                          // Share decoded bytes with the full-screen viewer's
+                          // thumbnail placeholder so opening/closing doesn't
+                          // flash black while the image re-decodes.
+                          cacheKey: '${event.eventId}_thumb',
                           placeholder: event.messageType == MessageTypes.Sticker
                               ? null
                               : (_) => _ImageBubblePlaceholder(
