@@ -6,6 +6,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
+import 'package:fluffychat/utils/bridge_keepalive.dart';
 import 'package:fluffychat/utils/platform_infos.dart';
 import 'package:fluffychat/utils/wa_matrix_bridge.dart';
 import 'package:fluffychat/widgets/matrix.dart';
@@ -88,34 +89,18 @@ class _BridgeLinkScreenState extends State<BridgeLinkScreen> {
     if (!PlatformInfos.isAndroid) return;
     await _ensureBatteryExemption();
     if (_serviceRunning) return;
-    try {
-      FlutterForegroundTask.init(
-        androidNotificationOptions: AndroidNotificationOptions(
-          channelId: 'tjena_bridge_link',
-          channelName: 'WhatsApp Linking',
-          channelDescription: 'Keeps the connection alive while linking WhatsApp',
-        ),
-        iosNotificationOptions: const IOSNotificationOptions(),
-        foregroundTaskOptions: ForegroundTaskOptions(
-          eventAction: ForegroundTaskEventAction.nothing(),
-        ),
-      );
-      await FlutterForegroundTask.startService(
-        notificationTitle: 'Linking WhatsApp…',
-        notificationText: 'Keep this running while you enter the pairing code.',
-      );
-      _serviceRunning = true;
-    } catch (_) {
-      // Non-fatal — pairing may still work if the user stays in-app.
-    }
+    // Shared keep-alive service — force-start it for pairing; once an account is
+    // linked it stays running (managed by BridgeKeepAlive) so messages keep
+    // arriving in the background.
+    await BridgeKeepAlive.start();
+    _serviceRunning = true;
   }
 
   Future<void> _stopKeepAliveService() async {
     if (!_serviceRunning) return;
     _serviceRunning = false;
-    try {
-      await FlutterForegroundTask.stopService();
-    } catch (_) {}
+    // Keep the service running if an account ended up linked; only stops if not.
+    await BridgeKeepAlive.refresh();
   }
 
   void _onEvent(BridgeEvent evt) {

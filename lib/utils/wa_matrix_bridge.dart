@@ -6,6 +6,8 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:http/http.dart' as http;
 import 'package:matrix/matrix.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -14,6 +16,7 @@ import 'package:tjena_bridge/tjena_bridge.dart';
 import 'matrix_sdk_extensions/matrix_file_extension.dart';
 
 import '../config/setting_keys.dart';
+import 'bridge_keepalive.dart';
 import 'wa_call_link.dart';
 import 'platform_infos.dart';
 
@@ -1005,6 +1008,9 @@ class WaMatrixBridge {
           _savePhones();
           _initSpace(acc, phone);
         }
+        // Keep (or stop) the background keep-alive service based on linked state.
+        // ignore: unawaited_futures
+        BridgeKeepAlive.refresh();
 
       case BridgeEventType.roomCreated:
         final data = evt.data['room'] as Map<String, dynamic>;
@@ -1056,6 +1062,13 @@ class WaMatrixBridge {
         // New chat from an incoming message → load the default history window.
         if (createdRoom && !isBackfill) {
           _maybeDefaultBackfill(acc, waRoomId);
+        }
+        // Notify for incoming messages received while the app isn't in front
+        // (WhatsApp messages don't come via the homeserver push).
+        final isOwnMsg = eventData['is_own'] as bool? ?? false;
+        if (!isBackfill && !isOwnMsg) {
+          // ignore: unawaited_futures
+          _notifyIncoming(acc, waRoomId, eventData);
         }
 
       case BridgeEventType.backfill:
@@ -1578,6 +1591,65 @@ class WaMatrixBridge {
         : msgtype == 'm.sticker'
             ? 'sticker.webp'
             : 'image.jpg';
+  }
+
+  FlutterLocalNotificationsPlugin? _localNotif;
+
+  Future<FlutterLocalNotificationsPlugin> _notifPlugin() async {
+    final existing = _localNotif;
+    if (existing != null) return existing;
+    final p = FlutterLocalNotificationsPlugin();
+    await p.initialize(
+      settings: const InitializationSettings(
+        android: AndroidInitializationSettings('notifications_icon'),
+        iOS: DarwinInitializationSettings(),
+      ),
+    );
+    _localNotif = p;
+    return p;
+  }
+
+  /// Post a system notification for an incoming WhatsApp message when the app is
+  /// not in the foreground (these messages aren't delivered via homeserver push).
+  Future<void> _notifyIncoming(
+      String accountId, String waRoomId, Map<String, dynamic> eventData) async {
+    if (WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed) {
+      return;
+    }
+    final matrixId = _waToMatrix[_key(accountId, waRoomId)];
+    final client = _client;
+    if (matrixId == null || client == null) return;
+    // Respect a muted chat.
+    final room = client.getRoomById(matrixId);
+    if (room != null && room.pushRuleState != PushRuleState.notify) return;
+
+    final chatName = room?.getLocalizedDisplayname() ?? 'WhatsApp';
+    final senderName = eventData['sender_name'] as String? ?? '';
+    var body = eventData['body'] as String? ?? '';
+    if (body.isEmpty) body = 'New message';
+    final isGroup = waRoomId.endsWith('@g.us');
+    final text =
+        (isGroup && senderName.isNotEmpty) ? '$senderName: $body' : body;
+    try {
+      final p = await _notifPlugin();
+      await p.show(
+        id: matrixId.hashCode & 0x7fffffff,
+        title: chatName,
+        body: text,
+        notificationDetails: const NotificationDetails(
+          android: AndroidNotificationDetails(
+            'tjena_wa_messages',
+            'WhatsApp messages',
+            channelDescription: 'Incoming WhatsApp & Signal messages',
+            importance: Importance.high,
+            priority: Priority.high,
+          ),
+          iOS: DarwinNotificationDetails(),
+        ),
+      );
+    } catch (e) {
+      Logs().w('[WaBridge] notify failed: $e');
+    }
   }
 
   void _pushMessage(

@@ -8,6 +8,7 @@ import 'dart:ui';
 
 import 'package:collection/collection.dart';
 import 'package:fluffychat/config/app_config.dart';
+import 'package:fluffychat/utils/bridge_keepalive.dart';
 import 'package:fluffychat/utils/client_manager.dart';
 import 'package:fluffychat/utils/notification_background_handler.dart';
 import 'package:fluffychat/utils/platform_infos.dart';
@@ -167,6 +168,7 @@ void _startBridge(SharedPreferences store) {
     tjena_bridge.BridgeRoomStore.instance.startListening();
     tjena_bridge.TjenaBridge.instance
         .start()
+        .then((_) => BridgeKeepAlive.refresh())
         .catchError((Object e) { Logs().w('[Bridge] start failed: $e'); });
   } catch (e) {
     Logs().w('[Bridge] init failed: $e');
