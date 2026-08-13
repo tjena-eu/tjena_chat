@@ -25,10 +25,17 @@ class ImageBubble extends StatelessWidget {
   final bool thumbnailOnly;
   final bool animated;
   final double width;
-  final double height;
+
+  /// `null` lets the image size itself from its own aspect ratio once decoded,
+  /// for events whose `info` carries no dimensions.
+  final double? height;
   final void Function()? onTap;
   final BorderRadius? borderRadius;
   final Timeline? timeline;
+
+  /// Tallest an image may get relative to its width. Only bites when [height]
+  /// is `null`, i.e. when the event carries no dimensions of its own.
+  static const double maxAspectRatio = 1.4;
 
   const ImageBubble(
     this.event, {
@@ -88,33 +95,43 @@ class ImageBubble extends StatelessWidget {
               children: [
                 Hero(
                   tag: event.eventId,
-                  child: AppSettings.showThumbnailsInTimeline.value
-                      ? MxcImage(
-                          event: event,
-                          width: width,
-                          height: height,
-                          fit: fit,
-                          animated: animated,
-                          isThumbnail: thumbnailOnly,
-                          // Share decoded bytes with the full-screen viewer's
-                          // thumbnail placeholder so opening/closing doesn't
-                          // flash black while the image re-decodes.
-                          cacheKey: '${event.eventId}_thumb',
-                          placeholder: event.messageType == MessageTypes.Sticker
-                              ? null
-                              : (_) => _ImageBubblePlaceholder(
-                                  event: event,
-                                  width: width,
-                                  height: height,
-                                  fit: fit,
-                                ),
-                        )
-                      : _ImageBubblePlaceholder(
-                          event: event,
-                          width: width,
-                          height: height,
-                          fit: fit,
-                        ),
+                  child: ConstrainedBox(
+                    // Without known dimensions the image lays itself out at
+                    // its own aspect ratio; cap it so a portrait photo is
+                    // cropped instead of turning the message into a wall.
+                    constraints: BoxConstraints(
+                      maxWidth: width,
+                      maxHeight: height ?? width * maxAspectRatio,
+                    ),
+                    child: AppSettings.showThumbnailsInTimeline.value
+                        ? MxcImage(
+                            event: event,
+                            width: width,
+                            height: height,
+                            fit: fit,
+                            animated: animated,
+                            isThumbnail: thumbnailOnly,
+                            // Share decoded bytes with the full-screen viewer's
+                            // thumbnail placeholder so opening/closing doesn't
+                            // flash black while the image re-decodes.
+                            cacheKey: '${event.eventId}_thumb',
+                            placeholder:
+                                event.messageType == MessageTypes.Sticker
+                                ? null
+                                : (_) => _ImageBubblePlaceholder(
+                                    event: event,
+                                    width: width,
+                                    height: height,
+                                    fit: fit,
+                                  ),
+                          )
+                        : _ImageBubblePlaceholder(
+                            event: event,
+                            width: width,
+                            height: height,
+                            fit: fit,
+                          ),
+                  ),
                 ),
                 if (fileSendingStatus != null)
                   FileSendStatusIndicator(fileSendingStatus: fileSendingStatus),
@@ -152,8 +169,13 @@ class ImageBubble extends StatelessWidget {
 
 class _ImageBubblePlaceholder extends StatelessWidget {
   final Event event;
-  final double width, height;
+  final double width;
+  final double? height;
   final BoxFit fit;
+
+  /// Assumed aspect ratio while the real dimensions are unknown, so the bubble
+  /// does not start out as a square and then jump.
+  static const double _fallbackAspectRatio = 4 / 3;
 
   const _ImageBubblePlaceholder({
     required this.event,
@@ -167,6 +189,7 @@ class _ImageBubblePlaceholder extends StatelessWidget {
     final blurHashString =
         event.infoMap.tryGet<String>('xyz.amorgan.blurhash') ??
         'LEHV6nWB2yk8pyo0adR*.7kCMdnj';
+    final height = this.height ?? width / _fallbackAspectRatio;
     return SizedBox(
       width: width,
       height: height,

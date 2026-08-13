@@ -266,14 +266,28 @@ func (b *Bridge) SendText(accountID, portalID, msgID, text string) error {
 	return b.withAccount(accountID, func(c *core.Bridge) error { return c.SendText(portalID, msgID, text) })
 }
 
-func (b *Bridge) SendMedia(accountID, portalID, msgID, mimeType string, data []byte) error {
+func (b *Bridge) SendMedia(accountID, portalID, msgID, mimeType string, data []byte, caption string, thumbnail []byte, width, height int) error {
 	return b.withAccount(accountID, func(c *core.Bridge) error {
-		return c.SendMedia(portalID, msgID, mimeType, data)
+		return c.SendMedia(portalID, msgID, mimeType, data, caption, thumbnail, width, height)
 	})
 }
 
 func (b *Bridge) SendLocation(accountID, portalID string, lat, lon float64) error {
 	return b.withAccount(accountID, func(c *core.Bridge) error { return c.SendLocation(portalID, lat, lon) })
+}
+
+func (b *Bridge) SetProxy(accountID, proxyURL string) error {
+	return b.withAccount(accountID, func(c *core.Bridge) error {
+		return c.SetProxy(proxyURL)
+	})
+}
+
+func (b *Bridge) GetProxy(accountID string) string {
+	c := b.coreOf(accountID)
+	if c == nil {
+		return ""
+	}
+	return c.GetProxy()
 }
 
 func (b *Bridge) SendReaction(accountID, portalID, targetEventID, emoji string) error {

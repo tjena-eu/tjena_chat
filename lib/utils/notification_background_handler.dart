@@ -11,6 +11,8 @@ import 'package:collection/collection.dart';
 import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/utils/client_manager.dart';
 import 'package:fluffychat/utils/push_helper.dart';
+import 'package:fluffychat/utils/signal_matrix_bridge.dart';
+import 'package:fluffychat/utils/wa_matrix_bridge.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_vodozemac/flutter_vodozemac.dart' as vod;
 import 'package:go_router/go_router.dart';
@@ -171,11 +173,17 @@ Future<void> notificationTap(
       }
       switch (actionType) {
         case FluffyChatNotificationActions.markAsRead:
-          await room.setReadMarker(
-            payload.eventId ?? room.lastEvent!.eventId,
-            mRead: payload.eventId ?? room.lastEvent!.eventId,
-            public: AppSettings.sendPublicReadReceipts.value,
-          );
+          // Virtual bridge rooms don't exist on the homeserver — route their
+          // read state through the WhatsApp bridge (Signal has no send path).
+          if (WaMatrixBridge.instance.isWaRoom(room.id)) {
+            await WaMatrixBridge.instance.markRoomRead(client, room.id);
+          } else if (!SignalMatrixBridge.instance.isSigRoom(room.id)) {
+            await room.setReadMarker(
+              payload.eventId ?? room.lastEvent!.eventId,
+              mRead: payload.eventId ?? room.lastEvent!.eventId,
+              public: AppSettings.sendPublicReadReceipts.value,
+            );
+          }
         case FluffyChatNotificationActions.reply:
           final input = notificationResponse.input;
           if (input == null || input.isEmpty) {
@@ -183,12 +191,17 @@ Future<void> notificationTap(
               'Selected notification with reply action but without input',
             );
           }
-
-          await room.sendTextEvent(
-            input,
-            parseCommands: false,
-            displayPendingEvent: false,
-          );
+          if (WaMatrixBridge.instance.isWaRoom(room.id)) {
+            // Virtual WhatsApp room — send through the bridge, and mark read.
+            await WaMatrixBridge.instance.sendText(room.id, input);
+            await WaMatrixBridge.instance.markRoomRead(client, room.id);
+          } else {
+            await room.sendTextEvent(
+              input,
+              parseCommands: false,
+              displayPendingEvent: false,
+            );
+          }
         case FluffyChatNotificationActions.mute:
           await room.setPushRuleState(PushRuleState.mentionsOnly);
         case FluffyChatNotificationActions.open:

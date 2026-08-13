@@ -484,10 +484,7 @@ class ChatController extends State<ChatPageWithRoom>
 
       // Mark room as read on first visit if requirements are fulfilled
       setReadMarker();
-      if (WaMatrixBridge.instance.isWaRoom(room.id)) {
-        // ignore: unawaited_futures
-        WaMatrixBridge.instance.markRoomRead(sendingClient, room.id);
-      }
+      _markWaRoomRead();
 
       if (!mounted) return;
     } catch (e, s) {
@@ -566,6 +563,14 @@ class ChatController extends State<ChatPageWithRoom>
 
   Future<void>? _setReadMarkerFuture;
 
+  /// Clears the unread state of a WhatsApp room and sends the WA read receipt.
+  /// A no-op when there is nothing new since the last time.
+  void _markWaRoomRead() {
+    if (!WaMatrixBridge.instance.isWaRoom(room.id)) return;
+    // ignore: unawaited_futures
+    WaMatrixBridge.instance.markRoomRead(sendingClient, room.id);
+  }
+
   void setReadMarker({String? eventId}) {
     if (eventId?.isValidMatrixId == false) return;
     // Virtual bridge rooms (WhatsApp/Signal) have no homeserver; calling the
@@ -573,6 +578,14 @@ class ChatController extends State<ChatPageWithRoom>
     // state through the bridge instead and skip the Matrix API entirely.
     if (WaMatrixBridge.instance.isWaRoom(room.id) ||
         SignalMatrixBridge.instance.isSigRoom(room.id)) {
+      // Being in the chat = the messages are seen: clear its notification.
+      WaMatrixBridge.instance.clearNotification(room.id);
+      // ...and keep clearing the unread state as messages arrive, not only
+      // when the room was opened — otherwise a message that lands while the
+      // user is typing leaves the chat unread when they leave it.
+      if (WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed) {
+        _markWaRoomRead();
+      }
       return;
     }
     if (_setReadMarkerFuture != null) return;
@@ -607,6 +620,9 @@ class ChatController extends State<ChatPageWithRoom>
 
   @override
   void dispose() {
+    // Leaving the chat: mark whatever arrived last as read too, so a message
+    // that landed while the user was typing does not leave the chat unread.
+    _markWaRoomRead();
     timeline?.cancelSubscriptions();
     timeline = null;
     inputFocus.removeListener(_inputFocusListener);
@@ -683,7 +699,9 @@ class ChatController extends State<ChatPageWithRoom>
       if (editEvent != null) {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Editing not supported for WhatsApp messages')),
+          const SnackBar(
+            content: Text('Editing not supported for WhatsApp messages'),
+          ),
         );
         return;
       }
@@ -1074,8 +1092,10 @@ class ChatController extends State<ChatPageWithRoom>
           onProgress(i / count);
           if (event.status.isSent) {
             if (WaMatrixBridge.instance.isWaRoom(room.id)) {
-              await WaMatrixBridge.instance
-                  .redactMessage(room.id, event.eventId);
+              await WaMatrixBridge.instance.redactMessage(
+                room.id,
+                event.eventId,
+              );
             } else if (event.canRedact) {
               await event.redactEvent(reason: reason);
             } else {

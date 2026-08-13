@@ -32,147 +32,265 @@ class ImageViewerView extends StatelessWidget {
             ? Colors.black.withAlpha(128)
             : Colors.transparent,
         child: Scaffold(
-        backgroundColor: Colors.transparent,
-        extendBodyBehindAppBar: true,
-        appBar: AppBar(
-          elevation: 0,
-          leading: IconButton(
-            style: iconButtonStyle,
-            icon: const Icon(Icons.close),
-            onPressed: Navigator.of(context).pop,
-            color: Colors.white,
-            tooltip: L10n.of(context).close,
-          ),
           backgroundColor: Colors.transparent,
-          actions: [
-            IconButton(
+          extendBodyBehindAppBar: true,
+          appBar: AppBar(
+            elevation: 0,
+            leading: IconButton(
               style: iconButtonStyle,
-              icon: const Icon(Icons.reply_outlined),
-              onPressed: controller.forwardAction,
+              icon: const Icon(Icons.close),
+              onPressed: Navigator.of(context).pop,
               color: Colors.white,
-              tooltip: L10n.of(context).share,
+              tooltip: L10n.of(context).close,
             ),
-            const SizedBox(width: 8),
-            IconButton(
-              style: iconButtonStyle,
-              icon: const Icon(Icons.download_outlined),
-              onPressed: () => controller.saveFileAction(context),
-              color: Colors.white,
-              tooltip: L10n.of(context).downloadFile,
-            ),
-            const SizedBox(width: 8),
-            if (PlatformInfos.isMobile)
-              // Use builder context to correctly position the share dialog on iPad
-              Padding(
-                padding: const EdgeInsets.only(right: 8.0),
-                child: Builder(
-                  builder: (context) => IconButton(
-                    style: iconButtonStyle,
-                    onPressed: () => controller.shareFileAction(context),
-                    tooltip: L10n.of(context).share,
-                    color: Colors.white,
-                    icon: Icon(Icons.adaptive.share_outlined),
-                  ),
-                ),
+            backgroundColor: Colors.transparent,
+            actions: [
+              IconButton(
+                style: iconButtonStyle,
+                icon: const Icon(Icons.reply_outlined),
+                onPressed: controller.forwardAction,
+                color: Colors.white,
+                tooltip: L10n.of(context).share,
               ),
-          ],
-        ),
-        body: HoverBuilder(
-          builder: (context, hovered) => Stack(
-            children: [
-              KeyboardListener(
-                focusNode: controller.focusNode,
-                onKeyEvent: controller.onKeyEvent,
-                child: PageView.builder(
-                  scrollDirection: Axis.vertical,
-                  controller: controller.pageController,
-                  itemCount: controller.allEvents.length,
-                  itemBuilder: (context, i) {
-                    final event = controller.allEvents[i];
-                    switch (event.messageType) {
-                      case MessageTypes.Video:
-                        return Padding(
-                          padding: const EdgeInsets.only(top: 52.0),
-                          child: Center(
-                            child: GestureDetector(
-                              // Ignore taps to not go back here:
-                              onTap: () {},
-                              child: EventVideoPlayer(event),
-                            ),
-                          ),
-                        );
-                      case MessageTypes.Image:
-                      case MessageTypes.Sticker:
-                      default:
-                        return InteractiveViewer(
-                          minScale: 1.0,
-                          maxScale: 10.0,
-                          onInteractionEnd: controller.onInteractionEnds,
-                          child: Center(
-                            child: Hero(
-                              tag: event.eventId,
-                              child: GestureDetector(
-                                // Ignore taps to not go back here:
-                                onTap: () {},
-                                child: MxcImage(
-                                  key: ValueKey(event.eventId),
-                                  event: event,
-                                  fit: BoxFit.contain,
-                                  isThumbnail: false,
-                                  animated: true,
-                                  cacheKey: '${event.eventId}_full',
-                                  // Show the bubble's already-decoded thumbnail
-                                  // (same cacheKey) instantly while the full-res
-                                  // image loads, so the Hero open/close doesn't
-                                  // flash black between the two frames.
-                                  placeholder: (context) => MxcImage(
-                                    event: event,
-                                    fit: BoxFit.contain,
-                                    isThumbnail: true,
-                                    cacheKey: '${event.eventId}_thumb',
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ),
-                        );
-                    }
-                  },
-                ),
+              const SizedBox(width: 8),
+              IconButton(
+                style: iconButtonStyle,
+                icon: const Icon(Icons.download_outlined),
+                onPressed: () => controller.saveFileAction(context),
+                color: Colors.white,
+                tooltip: L10n.of(context).downloadFile,
               ),
-              if (hovered)
-                Align(
-                  alignment: Alignment.centerRight,
-                  child: Column(
-                    mainAxisSize: .min,
-                    children: [
-                      if (controller.canGoBack)
-                        Padding(
-                          padding: const EdgeInsets.all(12.0),
-                          child: IconButton(
-                            style: iconButtonStyle,
-                            tooltip: L10n.of(context).previous,
-                            icon: const Icon(Icons.arrow_upward_outlined),
-                            onPressed: controller.prevImage,
-                          ),
-                        ),
-                      if (controller.canGoNext)
-                        Padding(
-                          padding: const EdgeInsets.all(12.0),
-                          child: IconButton(
-                            style: iconButtonStyle,
-                            tooltip: L10n.of(context).next,
-                            icon: const Icon(Icons.arrow_downward_outlined),
-                            onPressed: controller.nextImage,
-                          ),
-                        ),
-                    ],
+              const SizedBox(width: 8),
+              if (PlatformInfos.isMobile)
+                // Use builder context to correctly position the share dialog on iPad
+                Padding(
+                  padding: const EdgeInsets.only(right: 8.0),
+                  child: Builder(
+                    builder: (context) => IconButton(
+                      style: iconButtonStyle,
+                      onPressed: () => controller.shareFileAction(context),
+                      tooltip: L10n.of(context).share,
+                      color: Colors.white,
+                      icon: Icon(Icons.adaptive.share_outlined),
+                    ),
                   ),
                 ),
             ],
           ),
+          body: HoverBuilder(
+            builder: (context, hovered) => Stack(
+              children: [
+                KeyboardListener(
+                  focusNode: controller.focusNode,
+                  onKeyEvent: controller.onKeyEvent,
+                  child: ValueListenableBuilder<bool>(
+                    valueListenable: controller.isZoomed,
+                    builder: (context, isZoomed, _) => PageView.builder(
+                      scrollDirection: Axis.vertical,
+                      controller: controller.pageController,
+                      onPageChanged: controller.onPageChanged,
+                      // While zoomed in, a drag pans the image instead of
+                      // flicking to the next one.
+                      physics: isZoomed
+                          ? const NeverScrollableScrollPhysics()
+                          : null,
+                      itemCount: controller.allEvents.length,
+                      itemBuilder: (context, i) {
+                        final event = controller.allEvents[i];
+                        switch (event.messageType) {
+                          case MessageTypes.Video:
+                            return Padding(
+                              padding: const EdgeInsets.only(top: 52.0),
+                              child: Center(
+                                child: GestureDetector(
+                                  // Ignore taps to not go back here:
+                                  onTap: () {},
+                                  child: EventVideoPlayer(event),
+                                ),
+                              ),
+                            );
+                          case MessageTypes.Image:
+                          case MessageTypes.Sticker:
+                          default:
+                            return ZoomableImage(
+                              controller: controller,
+                              child: Center(
+                                child: Hero(
+                                  tag: event.eventId,
+                                  child: MxcImage(
+                                    key: ValueKey(event.eventId),
+                                    event: event,
+                                    fit: BoxFit.contain,
+                                    isThumbnail: false,
+                                    animated: true,
+                                    cacheKey: '${event.eventId}_full',
+                                    // Show the bubble's already-decoded thumbnail
+                                    // (same cacheKey) instantly while the full-res
+                                    // image loads, so the Hero open/close doesn't
+                                    // flash black between the two frames.
+                                    placeholder: (context) => MxcImage(
+                                      event: event,
+                                      fit: BoxFit.contain,
+                                      isThumbnail: true,
+                                      cacheKey: '${event.eventId}_thumb',
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            );
+                        }
+                      },
+                    ),
+                  ),
+                ),
+                if (hovered)
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: Column(
+                      mainAxisSize: .min,
+                      children: [
+                        if (controller.canGoBack)
+                          Padding(
+                            padding: const EdgeInsets.all(12.0),
+                            child: IconButton(
+                              style: iconButtonStyle,
+                              tooltip: L10n.of(context).previous,
+                              icon: const Icon(Icons.arrow_upward_outlined),
+                              onPressed: controller.prevImage,
+                            ),
+                          ),
+                        if (controller.canGoNext)
+                          Padding(
+                            padding: const EdgeInsets.all(12.0),
+                            child: IconButton(
+                              style: iconButtonStyle,
+                              tooltip: L10n.of(context).next,
+                              icon: const Icon(Icons.arrow_downward_outlined),
+                              onPressed: controller.nextImage,
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
+          ),
         ),
       ),
+    );
+  }
+}
+
+/// Pinch- and double-tap-zoomable wrapper around a full screen image.
+///
+/// [InteractiveViewer] alone only gives pinch zoom; this adds double tap to
+/// zoom towards the tapped point (animated), and reports the zoom state back to
+/// the [ImageViewerController] so the surrounding [PageView] stops scrolling
+/// while the user pans a zoomed image.
+class ZoomableImage extends StatefulWidget {
+  final ImageViewerController controller;
+  final Widget child;
+
+  const ZoomableImage({
+    required this.controller,
+    required this.child,
+    super.key,
+  });
+
+  @override
+  State<ZoomableImage> createState() => _ZoomableImageState();
+}
+
+class _ZoomableImageState extends State<ZoomableImage>
+    with SingleTickerProviderStateMixin {
+  static const double _minScale = 1.0;
+  static const double _maxScale = 10.0;
+  static const double _doubleTapScale = 2.5;
+
+  final TransformationController _transformation = TransformationController();
+  late final AnimationController _animationController;
+  Animation<Matrix4>? _zoomAnimation;
+  Offset? _doubleTapPosition;
+
+  bool get _isZoomed => _transformation.value.getMaxScaleOnAxis() > 1.01;
+
+  @override
+  void initState() {
+    super.initState();
+    _animationController =
+        AnimationController(
+          vsync: this,
+          duration: const Duration(milliseconds: 200),
+        )..addListener(() {
+          final matrix = _zoomAnimation?.value;
+          if (matrix != null) _transformation.value = matrix;
+        });
+    _transformation.addListener(_onTransformationChanged);
+    widget.controller.registerZoomReset(_resetZoom);
+  }
+
+  @override
+  void dispose() {
+    widget.controller
+      ..unregisterZoomReset(_resetZoom)
+      ..forgetZoomed(this);
+    _transformation.dispose();
+    _animationController.dispose();
+    super.dispose();
+  }
+
+  void _onTransformationChanged() =>
+      widget.controller.setZoomed(this, _isZoomed);
+
+  void _animateTo(Matrix4 target) {
+    _zoomAnimation = Matrix4Tween(begin: _transformation.value, end: target)
+        .animate(
+          CurvedAnimation(
+            parent: _animationController,
+            curve: Curves.easeOutCubic,
+          ),
+        );
+    _animationController.forward(from: 0);
+  }
+
+  void _resetZoom() {
+    _animationController.stop();
+    _zoomAnimation = null;
+    _transformation.value = Matrix4.identity();
+  }
+
+  void _onDoubleTap() {
+    if (_isZoomed) {
+      _animateTo(Matrix4.identity());
+      return;
+    }
+    final position = _doubleTapPosition ?? Offset.zero;
+    _animateTo(
+      Matrix4.identity()
+        ..translateByDouble(
+          -position.dx * (_doubleTapScale - 1),
+          -position.dy * (_doubleTapScale - 1),
+          0,
+          1,
+        )
+        ..scaleByDouble(_doubleTapScale, _doubleTapScale, _doubleTapScale, 1),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return InteractiveViewer(
+      transformationController: _transformation,
+      minScale: _minScale,
+      maxScale: _maxScale,
+      onInteractionEnd: widget.controller.onInteractionEnds,
+      child: GestureDetector(
+        // Ignore single taps to not go back here:
+        onTap: () {},
+        onDoubleTapDown: (details) =>
+            _doubleTapPosition = details.localPosition,
+        onDoubleTap: _onDoubleTap,
+        child: widget.child,
       ),
     );
   }

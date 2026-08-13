@@ -47,6 +47,10 @@ type Bridge struct {
 	mu      sync.Mutex
 	dataDir string
 
+	// Optional proxy for all WhatsApp traffic (http://user:pass@host:port or
+	// socks5://…). Empty = direct. Persisted in dataDir/proxy.
+	proxyURL string
+
 	emitter *emitter.Emitter
 	st      *localmatrix.LocalStore
 	conn    *localmatrix.LocalConnector
@@ -97,7 +101,10 @@ type Bridge struct {
 }
 
 func (b *Bridge) appendLog(line string) {
-	log.Println(line)
+	// Note: intentionally NOT printed to stdout/logcat — on Android gomobile
+	// routes stdout to logcat, and whatsmeow logs frequently, which spammed adb
+	// (especially now the bridge keeps running in the background). Logs are kept
+	// in the ring buffer below and surfaced via GetLogs()/the in-app viewer.
 	b.logMu.Lock()
 	b.logBuf = append(b.logBuf, line)
 	if len(b.logBuf) > 100 {
@@ -224,7 +231,65 @@ func New(dataDir string, em *emitter.Emitter) (*Bridge, error) {
 		dataDir: dataDir,
 		emitter: em,
 	}
+	// Restore a persisted proxy so it applies to the client on Start.
+	if data, err := os.ReadFile(dataDir + "/proxy"); err == nil {
+		b.proxyURL = strings.TrimSpace(string(data))
+	}
 	return b, nil
+}
+
+// newWAClient creates a whatsmeow client with the configured proxy applied
+// (must be done before Connect).
+func (b *Bridge) newWAClient(deviceStore *store.Device, log walog.Logger) *whatsmeow.Client {
+	c := whatsmeow.NewClient(deviceStore, log)
+	if b.proxyURL != "" {
+		if err := c.SetProxyAddress(b.proxyURL); err != nil {
+			b.appendLog("[Bridge] invalid proxy address: " + err.Error())
+		}
+	}
+	return c
+}
+
+// GetProxy returns the configured WhatsApp proxy URL ("" = direct).
+func (b *Bridge) GetProxy() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.proxyURL
+}
+
+// SetProxy persists the proxy URL and applies it, reconnecting so it takes
+// effect. Pass "" to disable the proxy.
+func (b *Bridge) SetProxy(proxyURL string) error {
+	proxyURL = strings.TrimSpace(proxyURL)
+	b.mu.Lock()
+	b.proxyURL = proxyURL
+	client := b.waClient
+	linked := b.linked
+	b.mu.Unlock()
+
+	if err := os.WriteFile(b.dataDir+"/proxy", []byte(proxyURL), 0o600); err != nil {
+		return fmt.Errorf("persist proxy: %w", err)
+	}
+	if client == nil {
+		return nil
+	}
+	// Apply and reconnect so the new proxy takes effect.
+	if proxyURL != "" {
+		if err := client.SetProxyAddress(proxyURL); err != nil {
+			return fmt.Errorf("invalid proxy address: %w", err)
+		}
+	} else {
+		client.SetProxyAddress("")
+	}
+	if linked {
+		client.Disconnect()
+		go func() {
+			if err := client.Connect(); err != nil {
+				b.appendLog("[Bridge] reconnect after proxy change failed: " + err.Error())
+			}
+		}()
+	}
+	return nil
 }
 
 // Start opens stores, connects whatsmeow, and starts the bridge.
@@ -280,7 +345,7 @@ func (b *Bridge) Start(ctx context.Context) error {
 	// pre-login HTTP client) so the on-device socket path is byte-for-byte
 	// identical to the server-side mautrix-whatsapp setup that works.
 	clientLog := &bridgeLogger{prefix: "WA-Client", br: b}
-	b.waClient = whatsmeow.NewClient(deviceStore, clientLog)
+	b.waClient = b.newWAClient(deviceStore, clientLog)
 	b.waClient.AddEventHandler(b.handleWAEvent)
 
 	// Connect if already linked.
@@ -463,6 +528,43 @@ func (b *Bridge) RequestPhoneLink(phone string) error {
 func (b *Bridge) ConfirmPhoneLink(_ string) error { return nil }
 
 // SendText sends a text message through WhatsApp.
+// sendMessage sends a message with a generous timeout so a truly stalled
+// connection surfaces as an error (visible as a failed send) instead of hanging
+// silently. It does NOT force a reconnect — whatsmeow's own keepalive handles a
+// dead socket, and reconnecting right after a send can disrupt the multi-device
+// echo/sync of the just-sent message.
+func (b *Bridge) sendMessage(client *whatsmeow.Client, jid types.JID, msg *waE2E.Message) (string, error) {
+	if !client.IsConnected() {
+		return "", fmt.Errorf("not connected to WhatsApp")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	resp, err := client.SendMessage(ctx, jid, msg)
+	if err != nil {
+		b.appendLog("[Bridge] send failed: " + err.Error())
+		return "", err
+	}
+	return resp.ID, nil
+}
+
+// cacheOwnOutgoing stores a message we sent ourselves so it survives a
+// backfill/clean-reset (a tjena-sent message otherwise only exists as an
+// uncached local echo). Keyed by the real WhatsApp message ID, so a later
+// history sync of the same message de-duplicates.
+func (b *Bridge) cacheOwnOutgoing(client *whatsmeow.Client, portalID, msgID, body, msgtype string) {
+	if b.st == nil || msgID == "" {
+		return
+	}
+	sender := "@wa_me:tjena.local"
+	if client.Store.ID != nil {
+		sender = "@wa_" + client.Store.ID.User + ":tjena.local"
+	}
+	_ = b.st.CacheMessage(context.Background(), localmatrix.CachedMessage{
+		ChatJID: portalID, MsgID: msgID, Sender: sender,
+		TS: time.Now().Unix(), Body: body, MsgType: msgtype, IsOwn: true,
+	}, "", strings.HasSuffix(portalID, "@g.us"))
+}
+
 func (b *Bridge) SendText(portalID, _ string, text string) error {
 	b.mu.Lock()
 	client := b.waClient
@@ -474,13 +576,16 @@ func (b *Bridge) SendText(portalID, _ string, text string) error {
 	if err != nil {
 		return err
 	}
-	_, err = client.SendMessage(context.Background(), jid,
-		&waE2E.Message{Conversation: proto.String(text)})
-	return err
+	msgID, err := b.sendMessage(client, jid, &waE2E.Message{Conversation: proto.String(text)})
+	if err != nil {
+		return err
+	}
+	b.cacheOwnOutgoing(client, portalID, msgID, text, "m.text")
+	return nil
 }
 
 // SendMedia uploads a file/image/video/audio and sends it through WhatsApp.
-func (b *Bridge) SendMedia(portalID, _ string, mimeType string, data []byte) error {
+func (b *Bridge) SendMedia(portalID, _ string, mimeType string, data []byte, caption string, thumbnail []byte, width, height int) error {
 	b.mu.Lock()
 	client := b.waClient
 	b.mu.Unlock()
@@ -511,20 +616,33 @@ func (b *Bridge) SendMedia(portalID, _ string, mimeType string, data []byte) err
 
 	var msg *waE2E.Message
 	size := uint64(len(data))
+	var cap *string
+	if caption != "" {
+		cap = proto.String(caption)
+	}
+	var w, h *uint32
+	if width > 0 {
+		w = proto.Uint32(uint32(width))
+	}
+	if height > 0 {
+		h = proto.Uint32(uint32(height))
+	}
 	switch mediaType {
 	case whatsmeow.MediaImage:
 		msg = &waE2E.Message{ImageMessage: &waE2E.ImageMessage{
 			Mimetype: proto.String(mimeType), URL: proto.String(up.URL),
 			DirectPath: proto.String(up.DirectPath), MediaKey: up.MediaKey,
 			FileEncSHA256: up.FileEncSHA256, FileSHA256: up.FileSHA256,
-			FileLength: proto.Uint64(size),
+			FileLength: proto.Uint64(size), Caption: cap,
+			JPEGThumbnail: thumbnail, Width: w, Height: h,
 		}}
 	case whatsmeow.MediaVideo:
 		msg = &waE2E.Message{VideoMessage: &waE2E.VideoMessage{
 			Mimetype: proto.String(mimeType), URL: proto.String(up.URL),
 			DirectPath: proto.String(up.DirectPath), MediaKey: up.MediaKey,
 			FileEncSHA256: up.FileEncSHA256, FileSHA256: up.FileSHA256,
-			FileLength: proto.Uint64(size),
+			FileLength: proto.Uint64(size), Caption: cap,
+			JPEGThumbnail: thumbnail, Width: w, Height: h,
 		}}
 	case whatsmeow.MediaAudio:
 		msg = &waE2E.Message{AudioMessage: &waE2E.AudioMessage{
@@ -538,11 +656,11 @@ func (b *Bridge) SendMedia(portalID, _ string, mimeType string, data []byte) err
 			Mimetype: proto.String(mimeType), URL: proto.String(up.URL),
 			DirectPath: proto.String(up.DirectPath), MediaKey: up.MediaKey,
 			FileEncSHA256: up.FileEncSHA256, FileSHA256: up.FileSHA256,
-			FileLength: proto.Uint64(size),
+			FileLength: proto.Uint64(size), Caption: cap,
 		}}
 	}
 
-	_, err = client.SendMessage(context.Background(), jid, msg)
+	_, err = b.sendMessage(client, jid, msg)
 	return err
 }
 
@@ -688,7 +806,7 @@ func (b *Bridge) ForceReset() error {
 		return fmt.Errorf("reset whatsmeow store: %w", err)
 	}
 	clientLog := &bridgeLogger{prefix: "WA-Client", br: b}
-	b.waClient = whatsmeow.NewClient(deviceStore, clientLog)
+	b.waClient = b.newWAClient(deviceStore, clientLog)
 	b.waClient.AddEventHandler(b.handleWAEvent)
 
 	b.linked = false
@@ -903,7 +1021,7 @@ func (b *Bridge) handleWAEvent(rawEvt any) {
 		// clean up ("failed to delete store after 401 failure: ... malformed").
 		if deviceStore, err := b.freshDevice(context.Background()); err == nil {
 			clientLog := &bridgeLogger{prefix: "WA-Client", br: b}
-			b.waClient = whatsmeow.NewClient(deviceStore, clientLog)
+			b.waClient = b.newWAClient(deviceStore, clientLog)
 			b.waClient.AddEventHandler(b.handleWAEvent)
 		} else {
 			b.appendLog("[Bridge] store reset after logout failed: " + err.Error())
@@ -1520,6 +1638,22 @@ func messageBodyType(msg *waE2E.Message) (body, msgtype string) {
 	case msg.GetStickerMessage() != nil:
 		body = "🌀 Sticker"
 		msgtype = "m.sticker"
+	case msg.GetLocationMessage() != nil:
+		loc := msg.GetLocationMessage()
+		name := loc.GetName()
+		if name == "" {
+			name = loc.GetAddress()
+		}
+		label := "📍 Location"
+		if name != "" {
+			label = "📍 " + name
+		}
+		body = fmt.Sprintf("%s\nhttps://www.google.com/maps/search/?api=1&query=%.6f,%.6f",
+			label, loc.GetDegreesLatitude(), loc.GetDegreesLongitude())
+	case msg.GetLiveLocationMessage() != nil:
+		loc := msg.GetLiveLocationMessage()
+		body = fmt.Sprintf("📍 Live location\nhttps://www.google.com/maps/search/?api=1&query=%.6f,%.6f",
+			loc.GetDegreesLatitude(), loc.GetDegreesLongitude())
 	}
 	return body, msgtype
 }

@@ -50,6 +50,12 @@ class BridgeKeepAlive {
           iosNotificationOptions: const IOSNotificationOptions(),
           foregroundTaskOptions: ForegroundTaskOptions(
             eventAction: ForegroundTaskEventAction.nothing(),
+            // Do NOT pin the CPU awake. The service only needs to keep the
+            // process alive to hold the socket; incoming packets / keepalive
+            // pings wake the CPU on their own. allowWakeLock defaults to true,
+            // which kept the CPU on 24/7 and was the main battery drain.
+            allowWakeLock: false,
+            allowWifiLock: false,
           ),
         );
         _initialized = true;

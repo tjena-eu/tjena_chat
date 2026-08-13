@@ -7,6 +7,7 @@ import 'package:fluffychat/utils/wa_matrix_bridge.dart';
 import 'package:fluffychat/widgets/matrix.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:tjena_bridge/tjena_bridge.dart';
 
 import '../bridge/bridge_link_screen.dart';
@@ -405,6 +406,16 @@ class _SettingsBridgeLocalState extends State<SettingsBridgeLocal> {
               ),
             ),
           ),
+          const SizedBox(height: 24),
+          _sectionLabel(context, 'PROXY'),
+          const SizedBox(height: 8),
+          Card(
+            margin: EdgeInsets.zero,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              child: _ProxySection(accountId: widget.accountId),
+            ),
+          ),
         ],
       ),
     );
@@ -580,6 +591,175 @@ class _StatusBadge extends StatelessWidget {
         text,
         style: Theme.of(context).textTheme.labelSmall?.copyWith(color: fg),
       ),
+    );
+  }
+}
+
+/// Proxy configuration for a WhatsApp account: enable + type/host/port/login.
+/// Builds a proxy URL and applies it via the bridge (reconnects to take effect).
+class _ProxySection extends StatefulWidget {
+  final String accountId;
+  const _ProxySection({required this.accountId});
+
+  @override
+  State<_ProxySection> createState() => _ProxySectionState();
+}
+
+class _ProxySectionState extends State<_ProxySection> {
+  bool _enabled = false;
+  String _type = 'socks5';
+  final _host = TextEditingController();
+  final _port = TextEditingController();
+  final _user = TextEditingController();
+  final _pass = TextEditingController();
+  bool _loaded = false;
+  bool _saving = false;
+
+  String get _k => 'wa_proxy_${widget.accountId}';
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void dispose() {
+    _host.dispose();
+    _port.dispose();
+    _user.dispose();
+    _pass.dispose();
+    super.dispose();
+  }
+
+  Future<void> _load() async {
+    final p = await SharedPreferences.getInstance();
+    _enabled = p.getBool('${_k}_enabled') ?? false;
+    _type = p.getString('${_k}_type') ?? 'socks5';
+    _host.text = p.getString('${_k}_host') ?? '';
+    _port.text = p.getString('${_k}_port') ?? '';
+    _user.text = p.getString('${_k}_user') ?? '';
+    _pass.text = p.getString('${_k}_pass') ?? '';
+    if (mounted) setState(() => _loaded = true);
+  }
+
+  String _buildUrl() {
+    final host = _host.text.trim();
+    if (!_enabled || host.isEmpty) return '';
+    final auth = _user.text.isNotEmpty
+        ? '${Uri.encodeComponent(_user.text)}:'
+            '${Uri.encodeComponent(_pass.text)}@'
+        : '';
+    final port = _port.text.trim().isNotEmpty ? ':${_port.text.trim()}' : '';
+    return '$_type://$auth$host$port';
+  }
+
+  Future<void> _save() async {
+    setState(() => _saving = true);
+    final p = await SharedPreferences.getInstance();
+    await p.setBool('${_k}_enabled', _enabled);
+    await p.setString('${_k}_type', _type);
+    await p.setString('${_k}_host', _host.text.trim());
+    await p.setString('${_k}_port', _port.text.trim());
+    await p.setString('${_k}_user', _user.text);
+    await p.setString('${_k}_pass', _pass.text);
+    String? error;
+    try {
+      await TjenaBridge.instance
+          .setProxy(_buildUrl(), accountID: widget.accountId);
+    } catch (e) {
+      error = '$e';
+    }
+    if (!mounted) return;
+    setState(() => _saving = false);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(error != null
+            ? 'Proxy error: $error'
+            : _enabled
+                ? 'Proxy saved — reconnecting…'
+                : 'Proxy disabled.'),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_loaded) return const SizedBox(height: 8);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          title: const Text('Use a proxy for WhatsApp'),
+          subtitle: const Text('Route all WhatsApp traffic through a proxy'),
+          value: _enabled,
+          onChanged: (v) => setState(() => _enabled = v),
+        ),
+        if (_enabled) ...[
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              DropdownButton<String>(
+                value: _type,
+                items: const [
+                  DropdownMenuItem(
+                      value: 'https', child: Text('HTTPS (TLS)')),
+                  DropdownMenuItem(value: 'socks5', child: Text('SOCKS5')),
+                  DropdownMenuItem(value: 'http', child: Text('HTTP')),
+                ],
+                onChanged: (v) => setState(() => _type = v ?? 'socks5'),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: TextField(
+                  controller: _host,
+                  decoration: const InputDecoration(
+                    labelText: 'Host',
+                    hintText: 'proxy.example.com',
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              SizedBox(
+                width: 72,
+                child: TextField(
+                  controller: _port,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(labelText: 'Port'),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          TextField(
+            controller: _user,
+            decoration:
+                const InputDecoration(labelText: 'Username (optional)'),
+          ),
+          const SizedBox(height: 8),
+          TextField(
+            controller: _pass,
+            obscureText: true,
+            decoration:
+                const InputDecoration(labelText: 'Password (optional)'),
+          ),
+        ],
+        const SizedBox(height: 8),
+        Align(
+          alignment: Alignment.centerRight,
+          child: FilledButton(
+            onPressed: _saving ? null : _save,
+            child: _saving
+                ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Text('Save proxy'),
+          ),
+        ),
+      ],
     );
   }
 }

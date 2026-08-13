@@ -8,6 +8,7 @@ import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/pages/chat_list/unread_bubble.dart';
 import 'package:fluffychat/utils/matrix_sdk_extensions/matrix_locals.dart';
 import 'package:fluffychat/utils/room_status_extension.dart';
+import 'package:fluffychat/utils/wa_matrix_bridge.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.dart';
 import 'package:fluffychat/widgets/future_loading_dialog.dart';
 import 'package:fluffychat/widgets/hover_builder.dart';
@@ -48,6 +49,11 @@ class ChatListItem extends StatelessWidget {
     final ownMessage = lastEvent?.senderId == room.client.userID;
     final directChatMatrixId = room.directChatMatrixID;
     final isDirectChat = directChatMatrixId != null;
+    // A WhatsApp 1:1 chat is effectively a direct chat even though the SDK
+    // doesn't flag virtual rooms as such — so we don't prefix the preview with
+    // the sender name (which for these rooms can be a raw id/number).
+    final isBridgeDm = WaMatrixBridge.instance.isWaRoom(room.id) &&
+        !WaMatrixBridge.instance.isWaGroup(room.id);
     final hasNotifications = room.notificationCount > 0;
     final backgroundColor = activeChat
         ? theme.colorScheme.secondaryContainer
@@ -300,8 +306,18 @@ class ChatListItem extends StatelessWidget {
                             softWrap: false,
                           )
                         : FutureBuilder(
+                            // Re-key on the sender's currently known displayname too, not
+                            // just the event identity. WA/bridge (and slow-to-profile
+                            // federated) senders often get their displayname resolved
+                            // *after* their message already synced in — without this, the
+                            // FutureBuilder's `initialData` (computed fresh every build) is
+                            // silently ignored on rebuild because Flutter only re-applies
+                            // `initialData` when the widget is freshly created, and here the
+                            // key would otherwise stay identical, leaving the preview stuck
+                            // showing the raw sender id/number forever.
                             key: ValueKey(
-                              '${lastEvent?.eventId}_${lastEvent?.type}_${lastEvent?.redacted}',
+                              '${lastEvent?.eventId}_${lastEvent?.type}_${lastEvent?.redacted}_'
+                              '${lastEvent != null ? room.getState(EventTypes.RoomMember, lastEvent.senderId)?.content.tryGet<String>('displayname') : null}',
                             ),
                             future: needLastEventSender
                                 ? lastEvent.calcLocalizedBody(
@@ -310,7 +326,7 @@ class ChatListItem extends StatelessWidget {
                                     hideEdit: true,
                                     plaintextBody: true,
                                     removeMarkdown: true,
-                                    withSenderNamePrefix:
+                                    withSenderNamePrefix: !isBridgeDm &&
                                         (!isDirectChat ||
                                         directChatMatrixId !=
                                             room.lastEvent?.senderId),
@@ -322,7 +338,7 @@ class ChatListItem extends StatelessWidget {
                               hideEdit: true,
                               plaintextBody: true,
                               removeMarkdown: true,
-                              withSenderNamePrefix:
+                              withSenderNamePrefix: !isBridgeDm &&
                                   (!isDirectChat ||
                                   directChatMatrixId !=
                                       room.lastEvent?.senderId),

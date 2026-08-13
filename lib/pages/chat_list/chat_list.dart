@@ -12,6 +12,7 @@ import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/pages/chat_list/chat_list_view.dart';
 import 'package:fluffychat/utils/error_reporter.dart';
 import 'package:fluffychat/utils/hidden_rooms.dart';
+import 'package:fluffychat/utils/space_child_visibility.dart';
 import 'package:fluffychat/utils/localized_exception_extension.dart';
 import 'package:fluffychat/utils/matrix_sdk_extensions/client_stories_extension.dart';
 import 'package:fluffychat/utils/matrix_sdk_extensions/matrix_locals.dart';
@@ -388,6 +389,11 @@ class ChatListController extends State<ChatList>
       if (mounted) setState(() {});
     });
     HiddenRooms.instance.notifier.addListener(_onHiddenRoomsChanged);
+    // Per-space "show chats in main list" toggle.
+    SpaceChildVisibility.instance.ensureLoaded().then((_) {
+      if (mounted) setState(() {});
+    });
+    SpaceChildVisibility.instance.notifier.addListener(_onHiddenRoomsChanged);
 
     scrollController.addListener(_onScroll);
     _waitForFirstSync();
@@ -461,6 +467,8 @@ class ChatListController extends State<ChatList>
     _intentFileStreamSubscription?.cancel();
     _onRoomTagUpdate?.cancel();
     HiddenRooms.instance.notifier.removeListener(_onHiddenRoomsChanged);
+    SpaceChildVisibility.instance.notifier
+        .removeListener(_onHiddenRoomsChanged);
     scrollController.removeListener(_onScroll);
     super.dispose();
   }

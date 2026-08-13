@@ -140,7 +140,11 @@ class TjenaBridgePlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamH
                     val msgID = call.argument<String>("msgID") ?: ""
                     val mimeType = call.argument<String>("mimeType") ?: ""
                     val data = call.argument<ByteArray>("data") ?: ByteArray(0)
-                    bridge!!.sendMedia(acc(call), portalID, msgID, mimeType, data)
+                    val caption = call.argument<String>("caption") ?: ""
+                    val thumbnail = call.argument<ByteArray>("thumbnail") ?: ByteArray(0)
+                    val width = (call.argument<Int>("width") ?: 0).toLong()
+                    val height = (call.argument<Int>("height") ?: 0).toLong()
+                    bridge!!.sendMedia(acc(call), portalID, msgID, mimeType, data, caption, thumbnail, width, height)
                     result.success(null)
                 }
                 "sendLocation" -> {
@@ -192,6 +196,12 @@ class TjenaBridgePlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamH
                     result.success(bridge?.getGroupMembersJSON(acc(call), roomID) ?: "[]")
                 }
                 "getLogs" -> result.success(bridge?.getLogs(acc(call)) ?: "(no bridge)")
+                "setProxy" -> {
+                    val url = call.argument<String>("url") ?: ""
+                    bridge?.setProxy(acc(call), url)
+                    result.success(null)
+                }
+                "getProxy" -> result.success(bridge?.getProxy(acc(call)) ?: "")
                 "onForeground" -> { bridge?.onForeground(); result.success(null) }
                 "onBackground" -> { bridge?.onBackground(); result.success(null) }
                 // ---- stubs: not in current AAR, return safe no-ops ----

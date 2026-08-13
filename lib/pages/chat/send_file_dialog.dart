@@ -3,6 +3,8 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import 'dart:typed_data';
+
 import 'package:async/async.dart' show Result;
 import 'package:cross_file/cross_file.dart';
 import 'package:fluffychat/config/app_config.dart';
@@ -64,10 +66,23 @@ class SendFileDialogState extends State<SendFileDialog> {
 
         // Route through WA bridge for local-bridged rooms.
         if (WaMatrixBridge.instance.isWaRoom(widget.room.id)) {
+          final label = _labelTextController.text.trim();
           for (final xfile in widget.files) {
             final bytes = await xfile.readAsBytes();
             final mimeType = xfile.mimeType ?? lookupMimeType(xfile.path) ?? 'application/octet-stream';
-            await WaMatrixBridge.instance.sendFile(widget.room.id, bytes, mimeType, xfile.name);
+            Uint8List? thumb;
+            if (PlatformInfos.isMobile && mimeType.startsWith('video')) {
+              thumb = (await xfile.getVideoThumbnail())?.bytes;
+            }
+            await WaMatrixBridge.instance.sendFile(
+              widget.room.id,
+              bytes,
+              mimeType,
+              xfile.name,
+              caption: label,
+              compress: compress,
+              thumbnail: thumb,
+            );
           }
           return;
         }

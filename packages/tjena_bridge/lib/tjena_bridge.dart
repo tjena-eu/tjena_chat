@@ -282,12 +282,20 @@ class TjenaBridge {
     String mimeType,
     Uint8List data, {
     String accountID = 'default',
+    String caption = '',
+    Uint8List? thumbnail,
+    int width = 0,
+    int height = 0,
   }) => _method.invokeMethod<void>('sendMedia', {
         'accountID': accountID,
         'portalID': portalID,
         'msgID': msgID,
         'mimeType': mimeType,
         'data': data,
+        'caption': caption,
+        'thumbnail': thumbnail ?? Uint8List(0),
+        'width': width,
+        'height': height,
       });
 
   /// Send a location through WhatsApp.
@@ -421,4 +429,17 @@ class TjenaBridge {
       await _method.invokeMethod<String>('getLogs') ?? '';
   Future<void> onForeground() => _method.invokeMethod<void>('onForeground');
   Future<void> onBackground() => _method.invokeMethod<void>('onBackground');
+
+  /// Set the proxy URL for all WhatsApp traffic (http://user:pass@host:port or
+  /// socks5://…). Empty string disables the proxy. Reconnects to apply it.
+  Future<void> setProxy(String url, {String accountID = 'default'}) =>
+      _method.invokeMethod<void>('setProxy', {
+        'accountID': accountID,
+        'url': url,
+      });
+
+  /// The currently configured proxy URL ('' = direct).
+  Future<String> getProxy({String accountID = 'default'}) async =>
+      await _method.invokeMethod<String>('getProxy', {'accountID': accountID}) ??
+      '';
 }
