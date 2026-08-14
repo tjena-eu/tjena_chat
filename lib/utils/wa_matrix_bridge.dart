@@ -325,12 +325,81 @@ class WaMatrixBridge {
 
   // ── Public actions ────────────────────────────────────────────────────────────
 
+  /// Rewrites the FluffyChat composer's markdown mention placeholders
+  /// (`@[Full Name]`, or bare `@name` for single-word names — see
+  /// `User.mention`/`Room.getMention` in the SDK) into WhatsApp's own
+  /// `@<number>` wire token, and builds a matching HTML `formatted_body` pill
+  /// (mirroring the Go bridge's `formatMentions` for *incoming* messages) so
+  /// our own sent bubble shows the resolved name instead of the literal
+  /// placeholder too. Untouched (unresolved) text passes through as-is.
+  /// Returns `formattedBody: null` when nothing was actually a mention, so
+  /// the caller can skip sending `formatted_body` entirely.
+  ({String plainText, String? formattedBody}) _rewriteWaMentions(
+    Room room,
+    String text,
+  ) {
+    final segments = text.split('@');
+    if (segments.length <= 1) return (plainText: text, formattedBody: null);
+
+    const esc = HtmlEscape();
+    var plain = segments[0];
+    var html = esc.convert(segments[0]);
+    var changed = false;
+
+    for (var i = 1; i < segments.length; i++) {
+      final seg = segments[i];
+      String candidate;
+      String rest;
+      if (seg.startsWith('[')) {
+        final end = seg.indexOf(']');
+        candidate = end == -1 ? '' : '@${seg.substring(0, end + 1)}';
+        rest = end == -1 ? seg : seg.substring(end + 1);
+      } else {
+        final end = seg.indexOf(RegExp(r'\s'));
+        candidate = '@${end == -1 ? seg : seg.substring(0, end)}';
+        rest = end == -1 ? '' : seg.substring(end);
+      }
+      final mxid = candidate.isEmpty ? null : room.getMention(candidate);
+      if (mxid == null) {
+        plain += '@$seg';
+        html += '@${esc.convert(seg)}';
+        continue;
+      }
+      changed = true;
+      // Ghost mxids are "@wa_<number>:tjena.local" — WhatsApp encodes
+      // mentions in the message body as the bare "@<number>" token; the Go
+      // bridge resolves that token against the chat's actual participants
+      // and attaches the proper ContextInfo.MentionedJID.
+      final localpart = mxid.localpart ?? mxid;
+      final waNumber = localpart.startsWith('wa_')
+          ? localpart.substring(3)
+          : localpart;
+      final name = room.unsafeGetUserFromMemoryOrFallback(mxid).calcDisplayname();
+      plain += '@$waNumber$rest';
+      html +=
+          '<a href="https://matrix.to/#/$mxid">${esc.convert(name)}</a>${esc.convert(rest)}';
+    }
+
+    return (plainText: plain, formattedBody: changed ? html : null);
+  }
+
   Future<void> sendText(String matrixRoomId, String text) async {
     final waId = _matrixToWa[matrixRoomId];
     if (waId == null) return;
+    final room = _client?.getRoomById(matrixRoomId);
+    final rewritten = room == null
+        ? (plainText: text, formattedBody: null)
+        : _rewriteWaMentions(room, text);
     final eventId = '\$wa_out_${DateTime.now().millisecondsSinceEpoch}';
     final ts = DateTime.now();
-    final content = {'msgtype': 'm.text', 'body': text};
+    final content = {
+      'msgtype': 'm.text',
+      'body': text,
+      if (rewritten.formattedBody != null) ...{
+        'format': 'org.matrix.custom.html',
+        'formatted_body': rewritten.formattedBody,
+      },
+    };
     // Show it immediately as "sending" (clock), then update to sent/error so a
     // silent failure (e.g. a stalled connection over a VPN) is visible.
     _injectOutgoing(matrixRoomId, eventId, content, ts, EventStatus.sending);
@@ -338,7 +407,7 @@ class WaMatrixBridge {
       await TjenaBridge.instance.sendText(
         waId,
         eventId,
-        text,
+        rewritten.plainText,
         accountID: _accOf(matrixRoomId),
       );
       _injectOutgoing(matrixRoomId, eventId, content, ts, EventStatus.sent);
@@ -1803,16 +1872,22 @@ class WaMatrixBridge {
       final response = await http.get(Uri.parse(avatarHttpUrl));
       if (response.statusCode != 200) return;
       final bytes = Uint8List.fromList(response.bodyBytes);
+      final ts = DateTime.now();
       // Store bytes in the Matrix database file cache under a fake mxc URI.
       // downloadMxcCached checks the cache first, so it never contacts a
-      // homeserver for this URI.
-      final mxcUri = Uri.parse('mxc://wa-local/${matrixId.hashCode.abs()}');
+      // homeserver for this URI. The URI includes the fetch timestamp (not
+      // just the room) so a refreshed avatar gets a *new* URI: MxcImage caches
+      // decoded bytes in a static map keyed by mxc content, so re-injecting
+      // the same URI after a refresh would keep showing the old (possibly
+      // blank/black) image forever even though the underlying bytes changed.
+      final mxcUri = Uri.parse(
+        'mxc://wa-local/${matrixId.hashCode.abs()}_${ts.millisecondsSinceEpoch}',
+      );
       await client!.database.storeFile(
         mxcUri,
         bytes,
         DateTime.now().millisecondsSinceEpoch ~/ 1000,
       );
-      final ts = DateTime.now();
       // ignore: unawaited_futures
       _inject(
         SyncUpdate(

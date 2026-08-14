@@ -119,12 +119,19 @@ class EventVideoPlayer extends StatelessWidget {
           borderRadius: BorderRadius.circular(AppConfig.borderRadius),
           child: InkWell(
             onTap: () => supportsVideoPlayer
-                ? showDialog(
-                    context: context,
-                    builder: (_) => ImageViewer(
-                      event,
-                      timeline: timeline,
-                      outerContext: context,
+                ? Navigator.of(context).push(
+                    PageRouteBuilder(
+                      opaque: false,
+                      barrierColor: Colors.transparent,
+                      pageBuilder: (_, _, _) => ImageViewer(
+                        event,
+                        timeline: timeline,
+                        outerContext: context,
+                      ),
+                      // No FadeTransition: Hero already provides a smooth
+                      // animation from bubble to fullscreen. A fade on top
+                      // of Hero causes the "double-open flash".
+                      transitionsBuilder: (_, _, _, child) => child,
                     ),
                   )
                 : event.saveFile(context),

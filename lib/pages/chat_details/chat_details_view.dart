@@ -8,6 +8,7 @@ import 'package:fluffychat/pages/chat_details/chat_details.dart';
 import 'package:fluffychat/pages/chat_details/participant_list_item.dart';
 import 'package:fluffychat/utils/fluffy_share.dart';
 import 'package:fluffychat/utils/matrix_sdk_extensions/matrix_locals.dart';
+import 'package:fluffychat/utils/wa_matrix_bridge.dart';
 import 'package:fluffychat/widgets/avatar.dart';
 import 'package:fluffychat/widgets/chat_settings_popup_menu.dart';
 import 'package:fluffychat/widgets/layouts/max_width_body.dart';
@@ -42,6 +43,7 @@ class ChatDetailsView extends StatelessWidget {
 
     final directChatMatrixID = room.directChatMatrixID;
     final roomAvatar = room.avatar;
+    final isWaRoom = WaMatrixBridge.instance.isWaRoom(room.id);
 
     return StreamBuilder(
       stream: room.client.onRoomState.stream.where(
@@ -111,12 +113,28 @@ class ChatDetailsView extends StatelessWidget {
                                       mxContent: room.avatar,
                                       name: displayname,
                                       size: Avatar.defaultSize * 2.5,
-                                      onTap: roomAvatar != null
-                                          ? () => showDialog(
-                                              context: context,
-                                              builder: (_) =>
-                                                  MxcImageViewer(roomAvatar),
-                                            )
+                                      onTap: isWaRoom || roomAvatar != null
+                                          ? () {
+                                              // Re-fetch just this chat's
+                                              // photo from WhatsApp — fixes a
+                                              // blank/black icon without the
+                                              // heavy "WA sync" (name+photo+
+                                              // history) flow.
+                                              if (isWaRoom) {
+                                                // ignore: unawaited_futures
+                                                WaMatrixBridge.instance
+                                                    .refreshRoom(room.id);
+                                              }
+                                              if (roomAvatar != null) {
+                                                showDialog(
+                                                  context: context,
+                                                  builder: (_) =>
+                                                      MxcImageViewer(
+                                                        roomAvatar,
+                                                      ),
+                                                );
+                                              }
+                                            }
                                           : null,
                                     ),
                                   ),
@@ -261,6 +279,18 @@ class ChatDetailsView extends StatelessWidget {
                           ),
                           const SizedBox(height: 16),
                         ],
+                        Divider(color: theme.dividerColor),
+                        ListTile(
+                          leading: CircleAvatar(
+                            backgroundColor: theme.colorScheme.surfaceContainer,
+                            foregroundColor: iconColor,
+                            child: const Icon(Icons.photo_library_outlined),
+                          ),
+                          title: const Text('Media'),
+                          trailing: const Icon(Icons.chevron_right_outlined),
+                          onTap: () =>
+                              context.go('/rooms/${room.id}/search?tab=1'),
+                        ),
                         if (!room.isDirectChat) ...[
                           Divider(color: theme.dividerColor),
                           ListTile(

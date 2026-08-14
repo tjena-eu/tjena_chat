@@ -26,6 +26,7 @@ import 'package:matrix/matrix.dart';
 import 'package:swipe_to_action/swipe_to_action.dart';
 
 import '../../../config/app_config.dart';
+import 'media_grid_bubble.dart';
 import 'message_content.dart';
 import 'message_reactions.dart';
 import 'reply_content.dart';
@@ -35,6 +36,11 @@ class Message extends StatelessWidget {
   final Event event;
   final Event? nextEvent;
   final Event? previousEvent;
+
+  /// When this event anchors a run of consecutive same-sender images (see
+  /// `MediaGroup`), the full run (oldest first, this event included) — shown
+  /// as a small grid instead of [MessageContent]'s single image bubble.
+  final List<Event>? mediaGroup;
   final bool displayReadMarker;
   final void Function(Event) onSelect;
   final void Function(Event) onInfoTab;
@@ -60,6 +66,7 @@ class Message extends StatelessWidget {
     this.event, {
     this.nextEvent,
     this.previousEvent,
+    this.mediaGroup,
     this.displayReadMarker = false,
     this.longPressSelect = false,
     required this.bigEmojis,
@@ -551,16 +558,24 @@ class Message extends StatelessWidget {
                                                     );
                                                   },
                                                 ),
-                                              MessageContent(
-                                                displayEvent,
-                                                textColor: textColor,
-                                                linkColor: linkColor,
-                                                onInfoTab: onInfoTab,
-                                                borderRadius: borderRadius,
-                                                timeline: timeline,
-                                                selected: selected,
-                                                bigEmojis: bigEmojis,
-                                              ),
+                                              (mediaGroup?.length ?? 0) > 1
+                                                  ? MediaGridBubble(
+                                                      mediaGroup!,
+                                                      timeline: timeline,
+                                                      borderRadius:
+                                                          borderRadius,
+                                                    )
+                                                  : MessageContent(
+                                                      displayEvent,
+                                                      textColor: textColor,
+                                                      linkColor: linkColor,
+                                                      onInfoTab: onInfoTab,
+                                                      borderRadius:
+                                                          borderRadius,
+                                                      timeline: timeline,
+                                                      selected: selected,
+                                                      bigEmojis: bigEmojis,
+                                                    ),
                                               if (event.hasAggregatedEvents(
                                                 timeline,
                                                 RelationshipTypes.edit,

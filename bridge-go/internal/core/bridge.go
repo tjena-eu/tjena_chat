@@ -9,6 +9,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"regexp"
 	"sort"
 	"strings"
 	"os"
@@ -565,6 +566,50 @@ func (b *Bridge) cacheOwnOutgoing(client *whatsmeow.Client, portalID, msgID, bod
 	}, "", strings.HasSuffix(portalID, "@g.us"))
 }
 
+// outgoingMentionToken matches the "@<number>" tokens the Dart side rewrites
+// composer mentions into (see WaMatrixBridge._rewriteWaMentions) — the same
+// wire format WhatsApp itself uses and that formatMentions parses back out of
+// *incoming* messages.
+var outgoingMentionToken = regexp.MustCompile(`@(\d{5,20})`)
+
+// resolveOutgoingMentions finds which "@<number>" tokens in text actually
+// name a participant of chat (group members, or the DM peer itself) and
+// returns their full JIDs. WhatsApp only renders a mention as more than
+// plain text when the message carries ContextInfo.MentionedJID for it.
+func (b *Bridge) resolveOutgoingMentions(client *whatsmeow.Client, chat types.JID, text string) []string {
+	matches := outgoingMentionToken.FindAllStringSubmatch(text, -1)
+	if len(matches) == 0 {
+		return nil
+	}
+	candidates := map[string]types.JID{}
+	if chat.Server == types.GroupServer {
+		gi, err := client.GetGroupInfo(context.Background(), chat)
+		if err != nil {
+			return nil
+		}
+		for _, p := range gi.Participants {
+			if !p.JID.IsEmpty() {
+				candidates[p.JID.User] = p.JID
+			}
+		}
+	} else {
+		candidates[chat.User] = chat
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, m := range matches {
+		user := m[1]
+		if seen[user] {
+			continue
+		}
+		if jid, ok := candidates[user]; ok {
+			seen[user] = true
+			out = append(out, jid.String())
+		}
+	}
+	return out
+}
+
 func (b *Bridge) SendText(portalID, _ string, text string) error {
 	b.mu.Lock()
 	client := b.waClient
@@ -576,7 +621,18 @@ func (b *Bridge) SendText(portalID, _ string, text string) error {
 	if err != nil {
 		return err
 	}
-	msgID, err := b.sendMessage(client, jid, &waE2E.Message{Conversation: proto.String(text)})
+	var msg *waE2E.Message
+	if mentioned := b.resolveOutgoingMentions(client, jid, text); len(mentioned) > 0 {
+		msg = &waE2E.Message{ExtendedTextMessage: &waE2E.ExtendedTextMessage{
+			Text: proto.String(text),
+			ContextInfo: &waE2E.ContextInfo{
+				MentionedJID: mentioned,
+			},
+		}}
+	} else {
+		msg = &waE2E.Message{Conversation: proto.String(text)}
+	}
+	msgID, err := b.sendMessage(client, jid, msg)
 	if err != nil {
 		return err
 	}
