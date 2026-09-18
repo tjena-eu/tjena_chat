@@ -3,6 +3,8 @@
 
 import 'dart:async';
 
+import 'package:fluffychat/utils/bridge_keepalive.dart';
+import 'package:fluffychat/utils/platform_infos.dart';
 import 'package:fluffychat/utils/wa_matrix_bridge.dart';
 import 'package:fluffychat/widgets/matrix.dart';
 import 'package:flutter/material.dart';
@@ -28,6 +30,7 @@ class _SettingsBridgeLocalState extends State<SettingsBridgeLocal> {
 
   int _defaultDays = 30;
   bool _syncing = false;
+  bool _cleaningEmpty = false;
 
   // Live history-sync progress (initial backfill into the cache). _histProgress
   // is WhatsApp's own 0–100 percentage (100 = done).
@@ -194,6 +197,34 @@ class _SettingsBridgeLocalState extends State<SettingsBridgeLocal> {
     if (linked == true) _refreshState();
   }
 
+  /// Delete WhatsApp 1:1 chats that have no messages — the empty "phantom"
+  /// chats that used to be created by protocol traffic from group participants.
+  Future<void> _removeEmptyChats() async {
+    setState(() => _cleaningEmpty = true);
+    var removed = 0;
+    try {
+      removed = await WaMatrixBridge.instance.removeEmptyDirectChats();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _cleaningEmpty = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not remove empty chats: $e')),
+      );
+      return;
+    }
+    if (!mounted) return;
+    setState(() => _cleaningEmpty = false);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          removed == 0
+              ? 'No empty chats found.'
+              : 'Removed $removed empty chat${removed == 1 ? '' : 's'}.',
+        ),
+      ),
+    );
+  }
+
   Future<void> _manualSync() async {
     if (_syncing) return;
     setState(() => _syncing = true);
@@ -296,6 +327,8 @@ class _SettingsBridgeLocalState extends State<SettingsBridgeLocal> {
         padding: const EdgeInsets.all(16),
         children: [
           _ConnectionCard(state: _state),
+          const SizedBox(height: 12),
+          const _BackgroundServiceCard(),
           if (_histSeen) ...[
             const SizedBox(height: 12),
             Builder(builder: (context) {
@@ -361,6 +394,17 @@ class _SettingsBridgeLocalState extends State<SettingsBridgeLocal> {
                       : null,
                   icon: const Icon(Icons.checklist_outlined, size: 18),
                   label: const Text('Choose chats'),
+                ),
+                FilledButton.tonalIcon(
+                  onPressed: _cleaningEmpty ? null : _removeEmptyChats,
+                  icon: _cleaningEmpty
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.cleaning_services_outlined, size: 18),
+                  label: const Text('Remove empty chats'),
                 ),
                 FilledButton.tonalIcon(
                   onPressed: _clearAllRooms,
@@ -475,6 +519,99 @@ class _DaysFieldState extends State<_DaysField> {
         final v = int.tryParse(s) ?? 0;
         widget.onChanged(v < 0 ? 0 : v);
       },
+    );
+  }
+}
+
+/// Shows whether the Android foreground service (and therefore the persistent
+/// notification) is actually running. Without it the OS kills the bridge as
+/// soon as the app is backgrounded, and the failure is otherwise completely
+/// invisible — the notification simply never appears.
+class _BackgroundServiceCard extends StatefulWidget {
+  const _BackgroundServiceCard();
+
+  @override
+  State<_BackgroundServiceCard> createState() => _BackgroundServiceCardState();
+}
+
+class _BackgroundServiceCardState extends State<_BackgroundServiceCard> {
+  bool? _running;
+  bool _busy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _check();
+  }
+
+  Future<void> _check() async {
+    final running = await BridgeKeepAlive.isRunning;
+    if (mounted) setState(() => _running = running);
+  }
+
+  Future<void> _enable() async {
+    setState(() => _busy = true);
+    final granted = await BridgeKeepAlive.ensureNotificationPermission();
+    if (granted) await BridgeKeepAlive.start();
+    if (!mounted) return;
+    setState(() => _busy = false);
+    await _check();
+    if (!mounted) return;
+    final running = _running == true;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          running
+              ? 'Background service running.'
+              : BridgeKeepAlive.lastError ??
+                    'Could not start the background service. Allow '
+                        'notifications for Tjena in Android settings.',
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!PlatformInfos.isAndroid) return const SizedBox.shrink();
+    final theme = Theme.of(context);
+    final running = _running;
+    return Card(
+      margin: EdgeInsets.zero,
+      child: ListTile(
+        leading: Icon(
+          running == true
+              ? Icons.notifications_active_outlined
+              : Icons.notifications_off_outlined,
+          color: running == true
+              ? theme.colorScheme.primary
+              : theme.colorScheme.error,
+        ),
+        title: Text(
+          running == null
+              ? 'Checking background service…'
+              : running
+              ? 'Background service running'
+              : 'Background service not running',
+        ),
+        subtitle: Text(
+          running == true
+              ? 'Tjena keeps WhatsApp connected while closed. The persistent '
+                    'notification is required by Android and cannot be hidden.'
+              : 'WhatsApp messages will only arrive while the app is open. '
+                    'Allow notifications to fix this.',
+        ),
+        isThreeLine: true,
+        trailing: running == true
+            ? null
+            : _busy
+            ? const SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(strokeWidth: 2.5),
+              )
+            : FilledButton(onPressed: _enable, child: const Text('Enable')),
+      ),
     );
   }
 }

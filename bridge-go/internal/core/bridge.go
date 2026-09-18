@@ -70,6 +70,26 @@ type Bridge struct {
 
 	knownRooms  map[string]bool   // JID room IDs we've already emitted room_created for
 	goodNames   map[string]bool   // rooms whose name is a real name (not a bare number)
+	goodAvatars map[string]bool   // rooms we've already emitted a profile picture for
+
+	// Group subjects cached from GetJoinedGroups, so a group room gets its real
+	// name the moment it is created instead of showing the numeric group id
+	// until the first GetGroupInfo round-trip returns.
+	groupNames map[string]string
+
+	// Bounded worker queue for room name/avatar fetches. Creating every chat at
+	// link time used to spawn one unthrottled goroutine per chat, and WhatsApp
+	// rate-limited the burst so most rooms never got a name or an avatar.
+	metaCh     chan roomMetaReq
+	metaOnce   sync.Once
+	metaQueued map[string]bool
+
+	// When true, an incoming attachment is recorded as pending instead of being
+	// downloaded straight away; it is fetched when the chat is opened (or when
+	// the user taps the preview). Set from Dart, which owns the policy —
+	// per-chat setting, Android Data Saver, etc. Default false so behaviour is
+	// unchanged until Dart says otherwise.
+	deferMedia bool
 
 	// On-demand backfill state. oldestMsg tracks the oldest message info we have
 	// per chat (the anchor for the next history request); backfillCutoff is the
@@ -1043,6 +1063,10 @@ func (b *Bridge) handleWAEvent(rawEvt any) {
 			"type": "state", "linked": b.linked, "connected": true,
 			"phone": b.phone, "push_name": b.pushName,
 		})
+		// Cache group subjects up front so group rooms created from the chat
+		// list (link mode "all") are named immediately, instead of showing the
+		// numeric group id until GetGroupInfo answers per chat.
+		go b.cacheGroupNames()
 
 	case *waevents.Disconnected:
 		b.mu.Lock()
@@ -1212,6 +1236,75 @@ func (b *Bridge) postConnectNameScan() {
 			})
 		}
 	}
+
+	b.cacheGroupNames()
+	b.queueMissingAvatars()
+}
+
+// cacheGroupNames pulls every joined group's subject in one round-trip and
+// caches it, so group rooms are named the moment they're created (and existing
+// group rooms showing a numeric id get corrected right away).
+func (b *Bridge) cacheGroupNames() {
+	b.mu.Lock()
+	client := b.waClient
+	b.mu.Unlock()
+	if client == nil {
+		return
+	}
+	groups, err := client.GetJoinedGroups(context.Background())
+	if err != nil {
+		b.appendLog("[Bridge] cacheGroupNames: GetJoinedGroups failed: " + err.Error())
+		return
+	}
+	for _, g := range groups {
+		if g.Name == "" {
+			continue
+		}
+		roomID := g.JID.User + "@" + string(g.JID.Server)
+		b.mu.Lock()
+		if b.groupNames == nil {
+			b.groupNames = make(map[string]string)
+		}
+		b.groupNames[roomID] = g.Name
+		if b.goodNames == nil {
+			b.goodNames = make(map[string]bool)
+		}
+		known := b.knownRooms[roomID]
+		alreadyGood := b.goodNames[roomID]
+		b.goodNames[roomID] = true
+		b.mu.Unlock()
+
+		if known && !alreadyGood {
+			b.emitter.Emit(map[string]any{
+				"type": "room_updated", "room_id": roomID, "name": g.Name,
+			})
+		}
+	}
+}
+
+// queueMissingAvatars schedules an avatar fetch for every room we know about
+// that hasn't produced a profile picture yet. Runs after the contact/group scan
+// so freshly linked accounts end up with avatars everywhere, not just on the
+// chats that happened to receive a message.
+func (b *Bridge) queueMissingAvatars() {
+	b.mu.Lock()
+	rooms := make([]string, 0, len(b.knownRooms))
+	for roomID := range b.knownRooms {
+		if b.goodAvatars[roomID] {
+			continue
+		}
+		rooms = append(rooms, roomID)
+	}
+	b.mu.Unlock()
+
+	for _, roomID := range rooms {
+		jid, err := types.ParseJID(roomID)
+		if err != nil {
+			continue
+		}
+		isDM := jid.Server == types.DefaultUserServer
+		b.queueRoomMeta(jid, roomID, isDM, false)
+	}
 }
 
 // callerChatJID maps a call's caller JID to the JID of the contact's existing
@@ -1365,12 +1458,20 @@ func (b *Bridge) ensureRoom(chat types.JID) {
 	}
 	b.knownRooms[roomID] = true
 	client := b.waClient
+	groupName := b.groupNames[roomID]
 	b.mu.Unlock()
 
 	isDM := chat.Server == types.DefaultUserServer
 	name := chat.User
 	otherUser := ""
 	hasGoodName := false
+
+	// Groups: use the subject cached from GetJoinedGroups so the room is named
+	// on creation rather than after the async GetGroupInfo round-trip.
+	if !isDM && groupName != "" {
+		name = groupName
+		hasGoodName = true
+	}
 
 	if isDM {
 		otherUser = "@wa_" + chat.User + ":tjena.local"
@@ -1405,20 +1506,100 @@ func (b *Bridge) ensureRoom(chat types.JID) {
 		},
 	})
 
-	// Fetch profile picture and group name asynchronously.
+	// Fetch profile picture (and group name, if still unknown) in the background,
+	// through the throttled queue.
 	if client != nil {
-		go b.fetchRoomMeta(chat, roomID, isDM, !isDM && chat.Server == types.GroupServer)
+		b.queueRoomMeta(chat, roomID, isDM, !isDM && chat.Server == types.GroupServer && groupName == "")
+	}
+}
+
+// roomMetaReq is one queued name/avatar fetch for a chat.
+type roomMetaReq struct {
+	chat           types.JID
+	roomID         string
+	isDM           bool
+	fetchGroupName bool
+	attempt        int
+}
+
+// metaWorkers is how many room name/avatar fetches may be in flight at once.
+// WhatsApp rate-limits profile-picture queries, so this stays deliberately low;
+// the queue drains in the background over the first minutes after linking.
+const metaWorkers = 3
+
+// queueRoomMeta schedules a name/avatar fetch for a chat, de-duplicated by room
+// id so the same chat is never queued twice concurrently. Non-blocking: if the
+// queue is full the request is dropped (a later refresh will pick it up).
+func (b *Bridge) queueRoomMeta(chat types.JID, roomID string, isDM, fetchGroupName bool) {
+	b.metaOnce.Do(func() {
+		b.mu.Lock()
+		b.metaCh = make(chan roomMetaReq, 2048)
+		b.metaQueued = make(map[string]bool)
+		ch := b.metaCh
+		b.mu.Unlock()
+		for i := 0; i < metaWorkers; i++ {
+			go b.metaWorker(ch)
+		}
+	})
+
+	b.mu.Lock()
+	ch := b.metaCh
+	if b.metaQueued == nil {
+		b.metaQueued = make(map[string]bool)
+	}
+	if b.metaQueued[roomID] {
+		b.mu.Unlock()
+		return
+	}
+	b.metaQueued[roomID] = true
+	b.mu.Unlock()
+
+	select {
+	case ch <- roomMetaReq{chat: chat, roomID: roomID, isDM: isDM, fetchGroupName: fetchGroupName}:
+	default:
+		b.mu.Lock()
+		delete(b.metaQueued, roomID)
+		b.mu.Unlock()
+		b.appendLog("[Bridge] room meta queue full, dropped " + roomID)
+	}
+}
+
+// metaWorker drains the room-meta queue. A request that came back with neither
+// a name nor an avatar is retried a couple of times with a growing delay —
+// right after linking, the contact store and the profile-picture endpoint both
+// need a moment before they answer.
+func (b *Bridge) metaWorker(ch chan roomMetaReq) {
+	for req := range ch {
+		ok := b.fetchRoomMeta(req.chat, req.roomID, req.isDM, req.fetchGroupName)
+
+		b.mu.Lock()
+		delete(b.metaQueued, req.roomID)
+		b.mu.Unlock()
+
+		if !ok && req.attempt < 2 {
+			req.attempt++
+			delay := time.Duration(req.attempt*15) * time.Second
+			go func(r roomMetaReq) {
+				time.Sleep(delay)
+				b.queueRoomMeta(r.chat, r.roomID, r.isDM, r.fetchGroupName)
+			}(req)
+		}
+		// Space the fetches out a little so a large backlog doesn't look like a
+		// burst of requests to WhatsApp.
+		time.Sleep(250 * time.Millisecond)
 	}
 }
 
 // fetchRoomMeta fetches the profile picture (and group name if needed) and
 // emits room_updated so the UI can display real avatars and corrected names.
-func (b *Bridge) fetchRoomMeta(chat types.JID, roomID string, isDM, fetchGroupName bool) {
+// Returns true when it resolved everything it was asked for (a name where one
+// was missing, and an avatar), so the caller can decide whether to retry.
+func (b *Bridge) fetchRoomMeta(chat types.JID, roomID string, isDM, fetchGroupName bool) bool {
 	b.mu.Lock()
 	client := b.waClient
 	b.mu.Unlock()
 	if client == nil {
-		return
+		return false
 	}
 
 	update := map[string]any{"type": "room_updated", "room_id": roomID}
@@ -1427,6 +1608,12 @@ func (b *Bridge) fetchRoomMeta(chat types.JID, roomID string, isDM, fetchGroupNa
 		gi, err := client.GetGroupInfo(context.Background(), chat)
 		if err == nil && gi.Name != "" {
 			update["name"] = gi.Name
+			b.mu.Lock()
+			if b.groupNames == nil {
+				b.groupNames = make(map[string]string)
+			}
+			b.groupNames[roomID] = gi.Name
+			b.mu.Unlock()
 		}
 	} else if isDM {
 		// Re-check the local contacts store — it may have been populated since
@@ -1464,12 +1651,35 @@ func (b *Bridge) fetchRoomMeta(chat types.JID, roomID string, isDM, fetchGroupNa
 		update["avatar_url"] = pic.URL
 	}
 
+	name, hasName := update["name"]
+	_, hasAvatar := update["avatar_url"]
+
 	// Only emit if there's something to update.
-	if _, hasName := update["name"]; hasName {
-		b.emitter.Emit(update)
-	} else if _, hasAvatar := update["avatar_url"]; hasAvatar {
+	if hasName || hasAvatar {
 		b.emitter.Emit(update)
 	}
+
+	b.mu.Lock()
+	if b.goodNames == nil {
+		b.goodNames = make(map[string]bool)
+	}
+	if b.goodAvatars == nil {
+		b.goodAvatars = make(map[string]bool)
+	}
+	if hasName && name != "" {
+		b.goodNames[roomID] = true
+	}
+	if hasAvatar {
+		b.goodAvatars[roomID] = true
+	}
+	nameOK := b.goodNames[roomID]
+	avatarOK := b.goodAvatars[roomID]
+	b.mu.Unlock()
+
+	// "Resolved" = we know a real name and have an avatar. A chat genuinely
+	// without a profile picture keeps retrying twice and then settles, which is
+	// cheap compared to leaving every such chat blank.
+	return nameOK && avatarOK
 }
 
 // RefreshRoom re-fetches the name and avatar for a room and emits room_updated.
@@ -1485,7 +1695,7 @@ func (b *Bridge) RefreshRoom(roomID string) error {
 		return fmt.Errorf("invalid JID: %w", err)
 	}
 	isDM := jid.Server == types.DefaultUserServer
-	go b.fetchRoomMeta(jid, roomID, isDM, !isDM && jid.Server == types.GroupServer)
+	b.queueRoomMeta(jid, roomID, isDM, !isDM && jid.Server == types.GroupServer)
 	return nil
 }
 
@@ -1495,9 +1705,20 @@ func (b *Bridge) handleWAMessage(evt *waevents.Message) {
 		return
 	}
 
-	b.ensureRoom(evt.Info.Chat)
+	// NOTE: deliberately no ensureRoom() here. Creating the room before we know
+	// the message is renderable spawned empty "phantom" chats: when someone you
+	// have never messaged shows up in a group, WhatsApp sends protocol traffic
+	// (sender-key distribution, device sync, …) addressed to a DM chat with that
+	// person. The message itself was correctly dropped by the renderable check
+	// below, but the room had already been created — leaving a private chat with
+	// no messages, stuck on "loading messages", sorted to the top of the list.
+	// The room is created further down, once the message is known to be real.
 
 	if react := msg.GetReactionMessage(); react != nil {
+		// No ensureRoom: a reaction targets a message we must already have
+		// injected, so the room exists. If it doesn't, the reaction has nothing
+		// to attach to and Dart drops it — creating a room here would only
+		// resurrect the phantom-chat bug via a reaction in a group.
 		b.emitter.Emit(map[string]any{
 			"type":      "reaction",
 			"room_id":   evt.Info.Chat.User + "@" + string(evt.Info.Chat.Server),
@@ -1516,6 +1737,10 @@ func (b *Bridge) handleWAMessage(evt *waevents.Message) {
 	if body == "" && msgtype == "m.text" {
 		return
 	}
+
+	// The message is real and will be injected, so it's safe to materialise the
+	// chat now (see the note at the top of this function).
+	b.ensureRoom(evt.Info.Chat)
 
 	isOwn := evt.Info.IsFromMe
 	roomID := evt.Info.Chat.User + "@" + string(evt.Info.Chat.Server)
@@ -1777,6 +2002,33 @@ func (b *Bridge) downloadMedia(
 			})
 		}
 	}
+	// Deferred mode: record enough to fetch this attachment later and stop here.
+	// The embedded thumbnail was already emitted above, so the chat shows a real
+	// preview — the user just taps it (or opens the chat) to pull the full file.
+	b.mu.Lock()
+	defer_ := b.deferMedia
+	b.mu.Unlock()
+	if defer_ && b.st != nil {
+		raw, merr := proto.Marshal(msg)
+		if merr != nil {
+			b.appendLog("[Bridge] pending media marshal failed: " + merr.Error())
+		} else {
+			if aerr := b.st.AddPendingMedia(context.Background(), localmatrix.PendingMedia{
+				ChatJID: roomID, MsgID: msgID, EventID: eventID, MsgType: msgtype,
+				Body: body, Sender: sender, SenderName: senderName, TS: ts,
+				IsOwn: isOwn, Mimetype: mimeType, Proto: raw,
+			}); aerr != nil {
+				b.appendLog("[Bridge] AddPendingMedia failed: " + aerr.Error())
+			} else {
+				b.emitter.Emit(map[string]any{
+					"type": "media_pending", "room_id": roomID, "event_id": eventID,
+					"msg_id": msgID, "mimetype": mimeType, "msgtype": msgtype,
+				})
+				return
+			}
+		}
+	}
+
 	go func() {
 		data, err := client.DownloadAny(context.Background(), msg)
 		if err != nil {
@@ -1813,6 +2065,127 @@ func (b *Bridge) downloadMedia(
 			"is_own":      isOwn,
 		})
 	}()
+}
+
+// SetDeferMedia controls whether incoming attachments are downloaded on arrival
+// (false, the original behaviour) or recorded as pending and fetched when the
+// chat is opened / the preview is tapped (true). Dart owns the policy, since it
+// knows the per-chat setting and the Android Data Saver state.
+func (b *Bridge) SetDeferMedia(defer_ bool) {
+	b.mu.Lock()
+	b.deferMedia = defer_
+	b.mu.Unlock()
+}
+
+// fetchPending downloads one pending attachment, emits media_ready, and clears
+// the pending row. Returns false if it could not be fetched (left pending so a
+// later attempt can retry).
+func (b *Bridge) fetchPending(p localmatrix.PendingMedia) bool {
+	b.mu.Lock()
+	client := b.waClient
+	b.mu.Unlock()
+	if client == nil || b.st == nil {
+		return false
+	}
+	var msg waE2E.Message
+	if err := proto.Unmarshal(p.Proto, &msg); err != nil {
+		b.appendLog("[Bridge] pending media unmarshal failed: " + err.Error())
+		// Undecodable — drop it, retrying can never help.
+		_ = b.st.DeletePendingMedia(context.Background(), p.ChatJID, p.MsgID)
+		return false
+	}
+	data, err := client.DownloadAny(context.Background(), &msg)
+	if err != nil {
+		b.appendLog(fmt.Sprintf("[Bridge] pending media download failed for %s: %v", p.EventID, err))
+		return false
+	}
+	tmpPath := b.dataDir + "/media_" + p.MsgID
+	if werr := os.WriteFile(tmpPath, data, 0600); werr != nil {
+		b.appendLog("[Bridge] pending media write failed: " + werr.Error())
+		return false
+	}
+	if uerr := b.st.UpdateMessageMedia(context.Background(), p.ChatJID, p.MsgID, p.Mimetype, int64(len(data))); uerr != nil {
+		b.appendLog("[Bridge] UpdateMessageMedia failed: " + uerr.Error())
+	}
+	_ = b.st.DeletePendingMedia(context.Background(), p.ChatJID, p.MsgID)
+	b.emitter.Emit(map[string]any{
+		"type":        "media_ready",
+		"room_id":     p.ChatJID,
+		"event_id":    p.EventID,
+		"file_path":   tmpPath,
+		"thumb_path":  "",
+		"mimetype":    p.Mimetype,
+		"size":        len(data),
+		"msgtype":     p.MsgType,
+		"body":        p.Body,
+		"sender":      p.Sender,
+		"sender_name": p.SenderName,
+		"ts":          p.TS,
+		"is_own":      p.IsOwn,
+	})
+	return true
+}
+
+// DownloadPendingForChat fetches attachments that were deferred in a chat,
+// newest-first up to limit (0 = all). Called when a chat is opened. Runs in the
+// background; progress arrives as media_ready events.
+func (b *Bridge) DownloadPendingForChat(roomID string, limit int) error {
+	if b.st == nil {
+		return fmt.Errorf("store not ready")
+	}
+	pending, err := b.st.ListPendingMedia(context.Background(), roomID, 0)
+	if err != nil {
+		return err
+	}
+	if len(pending) == 0 {
+		return nil
+	}
+	// Newest first — those are the messages the user is looking at.
+	for i, j := 0, len(pending)-1; i < j; i, j = i+1, j-1 {
+		pending[i], pending[j] = pending[j], pending[i]
+	}
+	if limit > 0 && len(pending) > limit {
+		pending = pending[:limit]
+	}
+	go func() {
+		for _, p := range pending {
+			b.fetchPending(p)
+		}
+	}()
+	return nil
+}
+
+// DownloadPendingMedia fetches one specific deferred attachment — the
+// tap-the-preview path. Synchronous so the UI can show a spinner and report
+// failure; the resulting media_ready still arrives as an event.
+func (b *Bridge) DownloadPendingMedia(roomID, msgID string) error {
+	if b.st == nil {
+		return fmt.Errorf("store not ready")
+	}
+	p, err := b.st.GetPendingMedia(context.Background(), roomID, msgID)
+	if err != nil {
+		return err
+	}
+	if p == nil {
+		// Already downloaded (or never deferred) — nothing to do, not an error.
+		return nil
+	}
+	if !b.fetchPending(*p) {
+		return fmt.Errorf("download failed")
+	}
+	return nil
+}
+
+// CountPendingMedia returns how many attachments are still deferred in a chat.
+func (b *Bridge) CountPendingMedia(roomID string) int {
+	if b.st == nil {
+		return 0
+	}
+	n, err := b.st.CountPendingMedia(context.Background(), roomID)
+	if err != nil {
+		return 0
+	}
+	return n
 }
 
 // ListChatsJSON returns a JSON array of all known WhatsApp chats (saved

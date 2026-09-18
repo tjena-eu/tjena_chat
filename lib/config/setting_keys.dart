@@ -54,6 +54,9 @@ enum AppSettings<T> {
   storiesReceiveScope<String>('chat.fluffy.stories_receive_scope', 'all'),
   // How long a story stays visible before it's considered expired (hours).
   storiesRetentionHours<int>('chat.fluffy.stories_retention_hours', 24),
+  // Whether a story's photo/video downloads as soon as the story is opened.
+  // Off means the viewer shows a tap-to-load placeholder instead.
+  storiesAutoDownloadMedia<bool>('chat.fluffy.stories_auto_download', true),
   experimentalVoip<bool>('chat.fluffy.experimental_voip', true),
   shareKeysWith<String>('chat.fluffy.share_keys_with_2', 'all'),
   noEncryptionWarningShown<bool>(

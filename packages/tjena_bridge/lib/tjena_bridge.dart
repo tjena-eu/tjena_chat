@@ -29,6 +29,7 @@ enum BridgeEventType {
   unread,
   pairError,
   mediaReady,
+  mediaPending,
   signalQr,
   signalLinked,
   signalState,
@@ -80,6 +81,7 @@ class BridgeEvent {
     'unread': BridgeEventType.unread,
     'pair_error': BridgeEventType.pairError,
     'media_ready': BridgeEventType.mediaReady,
+    'media_pending': BridgeEventType.mediaPending,
     'signal_qr': BridgeEventType.signalQr,
     'signal_linked': BridgeEventType.signalLinked,
     'signal_state': BridgeEventType.signalState,
@@ -371,6 +373,53 @@ class TjenaBridge {
   /// Wipe an account's cached WhatsApp history (not WhatsApp itself).
   Future<void> clearCache({String accountID = 'default'}) =>
       _method.invokeMethod<void>('clearCache', {'accountID': accountID});
+
+  /// Switch attachment downloading between on-arrival ([defer] false) and
+  /// on-demand ([defer] true — fetched when the chat is opened or the preview is
+  /// tapped). App-wide: applies to every account.
+  Future<void> setDeferMedia(bool defer) =>
+      _method.invokeMethod<void>('setDeferMedia', {'defer': defer});
+
+  /// Fetch attachments that were deferred in [roomID], newest first, at most
+  /// [limit] of them (0 = all). Each arrives as a media_ready event.
+  Future<void> downloadPendingForChat(
+    String roomID, {
+    int limit = 0,
+    String accountID = 'default',
+  }) => _method.invokeMethod<void>('downloadPendingForChat', {
+    'accountID': accountID,
+    'roomID': roomID,
+    'limit': limit,
+  });
+
+  /// Fetch one deferred attachment (the tap-the-preview path). Completes when
+  /// the download finishes — the media_ready event still follows.
+  Future<void> downloadPendingMedia(
+    String roomID,
+    String msgID, {
+    String accountID = 'default',
+  }) => _method.invokeMethod<void>('downloadPendingMedia', {
+    'accountID': accountID,
+    'roomID': roomID,
+    'msgID': msgID,
+  });
+
+  /// How many attachments are still deferred in [roomID].
+  Future<int> countPendingMedia(
+    String roomID, {
+    String accountID = 'default',
+  }) async =>
+      await _method.invokeMethod<int>('countPendingMedia', {
+        'accountID': accountID,
+        'roomID': roomID,
+      }) ??
+      0;
+
+  /// Whether Android's Data Saver is currently restricting this app's background
+  /// data. False on unmetered Wi-Fi even when Data Saver is switched on, and
+  /// false when the user has allowlisted Tjena.
+  Future<bool> isDataSaverEnabled() async =>
+      await _method.invokeMethod<bool>('isDataSaverEnabled') ?? false;
 
   /// Returns the https URL of a chat's WhatsApp profile picture, or '' if none.
   Future<String> getChatAvatarUrl(String roomID,

@@ -19,10 +19,23 @@ import 'matrix_sdk_extensions/matrix_file_extension.dart';
 import '../config/setting_keys.dart';
 import '../widgets/fluffy_chat_app.dart';
 import 'bridge_keepalive.dart';
+import 'media_auto_download.dart';
 import 'notification_background_handler.dart';
 import 'push_helper.dart';
 import 'wa_call_link.dart';
 import 'platform_infos.dart';
+
+/// Health of the link to WhatsApp for one bridge account.
+enum WaConnState {
+  /// Socket is up — a message sent now will go out.
+  connected,
+
+  /// Linked but currently offline; whatsmeow is retrying. Messages queue.
+  connecting,
+
+  /// Not linked, or logged out. Messages will not go through.
+  disconnected,
+}
 
 /// Converts WA bridge events into virtual Matrix rooms injected via handleSync.
 /// Once injected, FluffyChat treats WA rooms identically to real Matrix rooms.
@@ -50,6 +63,13 @@ class WaMatrixBridge {
   // eventId → original event data, kept until media_ready allows re-injection
   final _pendingMediaEvents = <String, Map<String, dynamic>>{};
 
+  // "$matrixRoomId/$eventId" → WhatsApp message id, for attachments that were
+  // deferred rather than downloaded. Lets a tap on the preview fetch that one
+  // attachment. Only a routing hint — the durable pending record (with the
+  // media keys) lives in the Go store, so a restart loses nothing but this
+  // shortcut, and opening the chat still pulls everything.
+  final _pendingMediaMsgIds = <String, String>{};
+
   // "$matrixRoomId/$senderId" → last display name we injected, avoids re-injecting unchanged names
   final _senderNames = <String, String>{};
 
@@ -69,6 +89,47 @@ class WaMatrixBridge {
   // Per-account space room ids and connected phone numbers.
   final _spaceIds = <String, String>{}; // accountId -> space room id
   final _connectedPhones = <String, String>{}; // accountId -> phone
+
+  // Live WhatsApp link health per account, so a chat can show whether a message
+  // sent right now would actually go through.
+  final _connStates = <String, WaConnState>{};
+
+  /// Notifies whenever any account's [WaConnState] changes, so connection
+  /// indicators can rebuild. The value is a change counter, not a state.
+  final connectionRevision = ValueNotifier<int>(0);
+
+  /// Current WhatsApp link health for the account a bridged room belongs to.
+  /// Returns [WaConnState.disconnected] for rooms that aren't bridged.
+  WaConnState connStateForRoom(String matrixRoomId) =>
+      _connStates[_accOf(matrixRoomId)] ?? WaConnState.disconnected;
+
+  void _setConnState(String accountId, WaConnState state) {
+    if (_connStates[accountId] == state) return;
+    _connStates[accountId] = state;
+    connectionRevision.value++;
+  }
+
+  /// Re-read every account's link state from the bridge. Called at init and
+  /// whenever a chat with a stale-looking indicator is opened; the bridge only
+  /// emits state events on change, so a long-running app can otherwise miss one.
+  Future<void> refreshConnStates() async {
+    try {
+      for (final a in await TjenaBridge.instance.listAccounts()) {
+        final id = a['id'] as String? ?? _defaultAccount;
+        final st = await TjenaBridge.instance.getState(accountID: id);
+        _setConnState(
+          id,
+          st.connected
+              ? WaConnState.connected
+              : (st.linked
+                    ? WaConnState.connecting
+                    : WaConnState.disconnected),
+        );
+      }
+    } catch (e) {
+      Logs().d('[WaBridge] refreshConnStates failed: $e');
+    }
+  }
 
   // Cached in memory for the hot path (new-room lazy backfill); loaded in init.
   int _defaultBackfillDays = 30;
@@ -196,6 +257,11 @@ class WaMatrixBridge {
     } catch (e) {
       Logs().w('[WaBridge] load phones failed: $e');
     }
+
+    // ③b² Seed each account's connection state, so a chat's indicator shows the
+    // truth right after a restart instead of waiting for the first state event.
+    // ignore: unawaited_futures
+    refreshConnStates();
 
     // ③c Restore user-set custom room names and re-apply them so they survive
     // restarts and win over automatic name refreshes.
@@ -897,9 +963,16 @@ class WaMatrixBridge {
     bool isGroup,
     int days, {
     String accountId = _defaultAccount,
+    int lastActivityMs = 0,
   }) async {
     final displayName = name.isNotEmpty ? name : jid.split('@').first;
-    _ensureRoom(accountId, jid, displayName, isDM: !isGroup);
+    _ensureRoom(
+      accountId,
+      jid,
+      displayName,
+      isDM: !isGroup,
+      lastActivityMs: lastActivityMs,
+    );
     if (days > 0) {
       // ignore: unawaited_futures
       TjenaBridge.instance.backfillFromCache(jid, days, accountID: accountId);
@@ -918,6 +991,7 @@ class WaMatrixBridge {
     String name,
     bool isGroup, {
     String accountId = _defaultAccount,
+    int lastActivityMs = 0,
   }) async {
     await syncChat(
       jid,
@@ -925,31 +999,117 @@ class WaMatrixBridge {
       isGroup,
       _defaultBackfillDays,
       accountId: accountId,
+      lastActivityMs: lastActivityMs,
     );
     return _waToMatrix[_key(accountId, jid)];
   }
 
   /// Create rooms + backfill [days] for every cached chat (link-mode "all").
+  ///
+  /// Uses [listChatsWithStatus] rather than the raw cached-chat list so every
+  /// room is created with a real contact/group name and its true last-activity
+  /// time: the cached name is often a bare phone number or group id (it is
+  /// whatever was known when the message was stored), which is why chats used
+  /// to stay unnamed until a remote message arrived and refreshed them.
   Future<int> syncAllCachedChats(
     int days, {
     String accountId = _defaultAccount,
   }) async {
-    final chats = await TjenaBridge.instance.listCachedChats(
-      accountID: accountId,
-    );
-    for (final c in chats) {
+    final chats = await listChatsWithStatus(accountId: accountId);
+    // Only chats with actual history become rooms — the merged list also
+    // contains every saved contact, and those would be thousands of empty
+    // rooms. Oldest first, so each syncChat's create timestamp is applied in
+    // ascending order.
+    final withHistory =
+        chats
+            .where((c) => ((c['last_activity'] as num?)?.toInt() ?? 0) > 0)
+            .toList()
+          ..sort(
+            (a, b) => ((a['last_activity'] as num?)?.toInt() ?? 0).compareTo(
+              (b['last_activity'] as num?)?.toInt() ?? 0,
+            ),
+          );
+    for (final c in withHistory) {
       final jid = c['jid'] as String? ?? '';
-      if (jid.isEmpty || _waToMatrix.containsKey(_key(accountId, jid)))
+      if (jid.isEmpty || _waToMatrix.containsKey(_key(accountId, jid))) {
         continue;
+      }
       await syncChat(
         jid,
         c['name'] as String? ?? '',
         c['is_group'] as bool? ?? false,
         days,
         accountId: accountId,
+        lastActivityMs: (c['last_activity'] as num?)?.toInt() ?? 0,
       );
     }
-    return chats.length;
+    return withHistory.length;
+  }
+
+  /// True when a room holds at least one real message (as opposed to only the
+  /// create/name/member state events every virtual room starts with).
+  bool _hasRealMessage(Room room) {
+    final last = room.lastEvent;
+    if (last == null) return false;
+    return last.type == EventTypes.Message ||
+        last.type == EventTypes.Encrypted ||
+        last.type == EventTypes.Sticker;
+  }
+
+  /// Delete WhatsApp 1:1 rooms that contain no messages at all.
+  ///
+  /// These are the "phantom chats" that used to appear for people you had never
+  /// messaged: WhatsApp sends protocol traffic (sender-key distribution, device
+  /// sync) addressed to a DM with a group participant, and the bridge created a
+  /// room for it before checking whether the message was renderable. The cause
+  /// is fixed, but rooms created earlier stay until removed.
+  ///
+  /// Conservative by design — a chat is only removed when it has no messages in
+  /// the timeline *and* no cached history on the Go side, so a chat you opened
+  /// from the picker and haven't written in yet survives. Groups are never
+  /// touched. Removing a chat is not destructive: it reappears on the next
+  /// message, or via the chat picker.
+  Future<int> removeEmptyDirectChats() async {
+    final client = _client;
+    if (client == null) return 0;
+
+    // Per account, the chats that actually have cached history. An account whose
+    // cache can't be read is skipped entirely rather than risking a wrong delete.
+    final withHistory = <String, Set<String>>{};
+    for (final accountId in {..._matrixToAccount.values}) {
+      try {
+        final chats = await TjenaBridge.instance.listCachedChats(
+          accountID: accountId,
+        );
+        withHistory[accountId] = {
+          for (final c in chats)
+            if (((c['last_ts'] as num?)?.toInt() ?? 0) > 0)
+              (c['jid'] as String? ?? ''),
+        };
+      } catch (e) {
+        Logs().w('[WaBridge] empty-chat cleanup: cache read failed: $e');
+      }
+    }
+
+    var removed = 0;
+    for (final entry in Map.of(_matrixToWa).entries) {
+      final matrixId = entry.key;
+      final waId = entry.value;
+      if (waId.endsWith('@g.us')) continue; // never touch groups
+      final accountId = _accOf(matrixId);
+      final known = withHistory[accountId];
+      if (known == null) continue; // couldn't verify → leave alone
+      if (known.contains(waId)) continue; // has history
+      final room = client.getRoomById(matrixId);
+      if (room == null) continue;
+      if (_hasRealMessage(room)) continue;
+      await unsyncChat(waId, accountId: accountId);
+      removed++;
+    }
+    if (removed > 0) {
+      Logs().w('[WaBridge] removed $removed empty WhatsApp chat(s)');
+    }
+    return removed;
   }
 
   /// Remove a chat's room from the bridge (keeps WhatsApp linked).
@@ -971,6 +1131,67 @@ class WaMatrixBridge {
     _matrixToWa.remove(mid);
     _matrixToAccount.remove(mid);
     await _saveRoomMappings();
+  }
+
+  // ── Deferred media ────────────────────────────────────────────────────────────
+
+  /// Fetch attachments that were deferred in a WhatsApp room. Called when the
+  /// chat is opened: media is downloaded on open rather than on arrival, so a
+  /// chat you never read costs no data.
+  ///
+  /// Does nothing when auto-download is off for this chat (or Data Saver is on)
+  /// — those images wait for an explicit tap instead.
+  Future<void> downloadPendingForRoom(String matrixRoomId) async {
+    final waId = _matrixToWa[matrixRoomId];
+    if (waId == null) return;
+    if (!MediaAutoDownload.enabledFor(matrixRoomId)) return;
+    try {
+      await TjenaBridge.instance.downloadPendingForChat(
+        waId,
+        accountID: _accOf(matrixRoomId),
+      );
+    } catch (e) {
+      Logs().d('[WaBridge] downloadPendingForChat failed: $e');
+    }
+  }
+
+  /// Fetch one deferred attachment — the tap-a-preview path. Returns false if
+  /// there was nothing to fetch or the download failed.
+  Future<bool> downloadPendingEvent(String matrixRoomId, String eventId) async {
+    final waId = _matrixToWa[matrixRoomId];
+    if (waId == null) return false;
+    // The event id embeds the WhatsApp message id ("$wa_<msgID>"); fall back to
+    // that when the in-memory hint is gone (e.g. after an app restart).
+    final msgId =
+        _pendingMediaMsgIds['$matrixRoomId/$eventId'] ??
+        (eventId.startsWith('\$wa_') ? eventId.substring(4) : null);
+    if (msgId == null) return false;
+    try {
+      await TjenaBridge.instance.downloadPendingMedia(
+        waId,
+        msgId,
+        accountID: _accOf(matrixRoomId),
+      );
+      _pendingMediaMsgIds.remove('$matrixRoomId/$eventId');
+      return true;
+    } catch (e) {
+      Logs().d('[WaBridge] downloadPendingMedia failed: $e');
+      return false;
+    }
+  }
+
+  /// How many attachments are still waiting in a WhatsApp room.
+  Future<int> pendingMediaCount(String matrixRoomId) async {
+    final waId = _matrixToWa[matrixRoomId];
+    if (waId == null) return 0;
+    try {
+      return await TjenaBridge.instance.countPendingMedia(
+        waId,
+        accountID: _accOf(matrixRoomId),
+      );
+    } catch (_) {
+      return 0;
+    }
   }
 
   /// Last event a room was marked read up to, to skip repeated no-op work when
@@ -1325,6 +1546,15 @@ class WaMatrixBridge {
       case BridgeEventType.state:
         final phone = evt.data['phone'] as String? ?? '';
         final connected = evt.data['connected'] as bool? ?? false;
+        final linked = evt.data['linked'] as bool? ?? false;
+        // Linked-but-offline means whatsmeow is reconnecting on its own, so
+        // the chat shows "connecting" rather than a hard failure.
+        _setConnState(
+          acc,
+          connected
+              ? WaConnState.connected
+              : (linked ? WaConnState.connecting : WaConnState.disconnected),
+        );
         if (connected && phone.isNotEmpty && _connectedPhones[acc] != phone) {
           _connectedPhones[acc] = phone;
           // ignore: unawaited_futures
@@ -1432,6 +1662,18 @@ class WaMatrixBridge {
             size,
             evt.data,
           );
+        }
+
+      case BridgeEventType.mediaPending:
+        // The attachment arrived but wasn't downloaded (deferred until the chat
+        // is opened, or Data Saver is on). Record which WhatsApp message id
+        // backs this event so tapping the preview can fetch exactly that one.
+        final waRoomId = evt.data['room_id'] as String? ?? '';
+        final eventId = evt.data['event_id'] as String? ?? '';
+        final msgId = evt.data['msg_id'] as String? ?? '';
+        final matrixId = _waToMatrix[_key(acc, waRoomId)];
+        if (matrixId != null && eventId.isNotEmpty && msgId.isNotEmpty) {
+          _pendingMediaMsgIds['$matrixId/$eventId'] = msgId;
         }
 
       case BridgeEventType.reaction:
@@ -1658,12 +1900,19 @@ class WaMatrixBridge {
   /// Returns true only when a brand-new room is created (not when the chat
   /// already exists or is aliased to an existing room) — callers use this to
   /// kick off the default backfill for genuinely new chats.
+  /// [lastActivityMs] is the chat's real last-message time (ms since epoch), if
+  /// known. It becomes the created room's `m.room.create` timestamp, which is
+  /// what `Room.latestEventReceivedTime` falls back to while the room has no
+  /// events yet — so the chat list is in true recency order from the first
+  /// frame, instead of being ordered by whichever backfill happened to land
+  /// first. 0 means unknown (room sorts by creation time, as before).
   bool _ensureRoom(
     String accountId,
     String waId,
     String name, {
     required bool isDM,
     String? altWaId,
+    int lastActivityMs = 0,
   }) {
     final mapKey = _key(accountId, waId);
     if (_waToMatrix.containsKey(mapKey)) {
@@ -1705,7 +1954,14 @@ class WaMatrixBridge {
     _matrixToAccount[matrixId] = accountId;
     // ignore: unawaited_futures
     _saveRoomMappings();
-    _createRoom(accountId, matrixId, waId, name, isDM);
+    _createRoom(
+      accountId,
+      matrixId,
+      waId,
+      name,
+      isDM,
+      lastActivityMs: lastActivityMs,
+    );
     // Always parent the chat to this account's WhatsApp space — even if we don't
     // know the phone number yet (picker chats are created from cache before the
     // connected-state event arrives). The space name is refined once connected.
@@ -1724,12 +1980,22 @@ class WaMatrixBridge {
     String matrixId,
     String waId,
     String name,
-    bool isDM,
-  ) {
+    bool isDM, {
+    int lastActivityMs = 0,
+  }) {
     final client = _client;
     if (client?.userID == null) return;
     final myUserId = client!.userID!;
     final now = DateTime.now();
+    // The create event carries the chat's last activity so an empty room still
+    // sorts by recency (see _ensureRoom). Clamp to now: a clock-skewed or
+    // bogus future timestamp would pin the chat to the top forever.
+    final lastActivity = lastActivityMs > 0
+        ? DateTime.fromMillisecondsSinceEpoch(lastActivityMs)
+        : null;
+    final createTs = (lastActivity == null || lastActivity.isAfter(now))
+        ? now
+        : lastActivity;
     final token = client.prevBatch ?? '';
     final sid = _safe(waId);
 
@@ -1746,7 +2012,7 @@ class WaMatrixBridge {
                   content: {'creator': myUserId, 'room_version': '10'},
                   senderId: myUserId,
                   eventId: '\$wacreate_$sid',
-                  originServerTs: now,
+                  originServerTs: createTs,
                   stateKey: '',
                 ),
                 MatrixEvent(

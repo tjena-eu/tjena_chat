@@ -164,6 +164,27 @@ func (s *LocalStore) RunMigrations(ctx context.Context) error {
 			is_group INTEGER NOT NULL DEFAULT 0,
 			last_ts  INTEGER NOT NULL DEFAULT 0
 		)`,
+		// Media that arrived but was deliberately NOT downloaded yet (the chat
+		// hasn't been opened, or Data Saver / the per-chat setting is off). The
+		// marshalled waE2E.Message is kept because it carries the decryption
+		// keys and CDN path — without it the attachment can never be fetched.
+		// Persisted (not just held in memory) so a pending image survives an app
+		// restart and can still be opened days later.
+		`CREATE TABLE IF NOT EXISTS wa_pending_media (
+			chat_jid    TEXT NOT NULL,
+			msg_id      TEXT NOT NULL,
+			event_id    TEXT NOT NULL DEFAULT '',
+			msgtype     TEXT NOT NULL DEFAULT '',
+			body        TEXT NOT NULL DEFAULT '',
+			sender      TEXT NOT NULL DEFAULT '',
+			sender_name TEXT NOT NULL DEFAULT '',
+			ts          INTEGER NOT NULL DEFAULT 0,
+			is_own      INTEGER NOT NULL DEFAULT 0,
+			mimetype    TEXT NOT NULL DEFAULT '',
+			proto       BLOB NOT NULL,
+			PRIMARY KEY (chat_jid, msg_id)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_wa_pending_chat ON wa_pending_media(chat_jid, ts)`,
 	}
 	for _, stmt := range stmts {
 		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
@@ -576,6 +597,107 @@ func (s *LocalStore) UpdateMessageMedia(ctx context.Context, chatJID, msgID, mim
 		`UPDATE wa_history SET media_mime=?, media_size=? WHERE chat_jid=? AND msg_id=?`,
 		mime, size, chatJID, msgID)
 	return err
+}
+
+// --- Pending (not-yet-downloaded) media ---
+
+// PendingMedia is one attachment that arrived but has not been downloaded yet.
+type PendingMedia struct {
+	ChatJID    string
+	MsgID      string
+	EventID    string
+	MsgType    string
+	Body       string
+	Sender     string
+	SenderName string
+	TS         int64
+	IsOwn      bool
+	Mimetype   string
+	// Proto is the marshalled waE2E.Message — it holds the media keys and CDN
+	// path needed to fetch and decrypt the attachment later.
+	Proto []byte
+}
+
+func (s *LocalStore) AddPendingMedia(ctx context.Context, p PendingMedia) error {
+	own := 0
+	if p.IsOwn {
+		own = 1
+	}
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO wa_pending_media
+			(chat_jid, msg_id, event_id, msgtype, body, sender, sender_name, ts, is_own, mimetype, proto)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?)
+		ON CONFLICT(chat_jid, msg_id) DO UPDATE SET
+			event_id=excluded.event_id, msgtype=excluded.msgtype, body=excluded.body,
+			sender=excluded.sender, sender_name=excluded.sender_name, ts=excluded.ts,
+			is_own=excluded.is_own, mimetype=excluded.mimetype, proto=excluded.proto`,
+		p.ChatJID, p.MsgID, p.EventID, p.MsgType, p.Body, p.Sender, p.SenderName,
+		p.TS, own, p.Mimetype, p.Proto)
+	return err
+}
+
+// ListPendingMedia returns pending attachments for a chat, oldest first. A
+// limit of 0 means no limit.
+func (s *LocalStore) ListPendingMedia(ctx context.Context, chatJID string, limit int) ([]PendingMedia, error) {
+	query := `
+		SELECT chat_jid, msg_id, event_id, msgtype, body, sender, sender_name, ts, is_own, mimetype, proto
+		FROM wa_pending_media WHERE chat_jid=? ORDER BY ts ASC`
+	args := []any{chatJID}
+	if limit > 0 {
+		query += ` LIMIT ?`
+		args = append(args, limit)
+	}
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []PendingMedia
+	for rows.Next() {
+		var p PendingMedia
+		var own int
+		if err := rows.Scan(&p.ChatJID, &p.MsgID, &p.EventID, &p.MsgType, &p.Body,
+			&p.Sender, &p.SenderName, &p.TS, &own, &p.Mimetype, &p.Proto); err != nil {
+			return nil, err
+		}
+		p.IsOwn = own == 1
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+// GetPendingMedia returns a single pending attachment, or nil if there is none
+// (already downloaded, or never pending).
+func (s *LocalStore) GetPendingMedia(ctx context.Context, chatJID, msgID string) (*PendingMedia, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT chat_jid, msg_id, event_id, msgtype, body, sender, sender_name, ts, is_own, mimetype, proto
+		FROM wa_pending_media WHERE chat_jid=? AND msg_id=?`, chatJID, msgID)
+	var p PendingMedia
+	var own int
+	if err := row.Scan(&p.ChatJID, &p.MsgID, &p.EventID, &p.MsgType, &p.Body,
+		&p.Sender, &p.SenderName, &p.TS, &own, &p.Mimetype, &p.Proto); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	p.IsOwn = own == 1
+	return &p, nil
+}
+
+// DeletePendingMedia clears a pending entry once its attachment is downloaded.
+func (s *LocalStore) DeletePendingMedia(ctx context.Context, chatJID, msgID string) error {
+	_, err := s.db.ExecContext(ctx,
+		`DELETE FROM wa_pending_media WHERE chat_jid=? AND msg_id=?`, chatJID, msgID)
+	return err
+}
+
+// CountPendingMedia returns how many attachments are waiting in a chat.
+func (s *LocalStore) CountPendingMedia(ctx context.Context, chatJID string) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM wa_pending_media WHERE chat_jid=?`, chatJID).Scan(&n)
+	return n, err
 }
 
 // GetOldestCachedMessage returns the oldest cached message for a chat (the

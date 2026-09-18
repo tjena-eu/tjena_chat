@@ -133,6 +133,7 @@ class _WaChatPickerScreenState extends State<WaChatPickerScreen> {
         c['name'] as String? ?? '',
         c['is_group'] as bool? ?? false,
         accountId: widget.accountId,
+        lastActivityMs: (c['last_activity'] as num?)?.toInt() ?? 0,
       );
       if (!mounted) return;
       Navigator.of(context).pop(roomId);
@@ -173,6 +174,7 @@ class _WaChatPickerScreenState extends State<WaChatPickerScreen> {
           chat['is_group'] as bool? ?? false,
           days,
           accountId: widget.accountId,
+          lastActivityMs: (chat['last_activity'] as num?)?.toInt() ?? 0,
         );
       }
       for (final jid in toRemove) {

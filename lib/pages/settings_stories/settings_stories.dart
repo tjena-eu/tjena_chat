@@ -26,6 +26,7 @@ class _StoriesSettingsPageState extends State<StoriesSettingsPage> {
   late String _sendScope = AppSettings.storiesSendScope.value;
   late String _receiveScope = AppSettings.storiesReceiveScope.value;
   late int _retentionHours = AppSettings.storiesRetentionHours.value;
+  late bool _autoDownload = AppSettings.storiesAutoDownloadMedia.value;
   late final Set<String> _selected =
       Matrix.of(context).client.storiesSelectedRecipients.toSet();
 
@@ -84,6 +85,11 @@ class _StoriesSettingsPageState extends State<StoriesSettingsPage> {
   Future<void> _setRetention(int hours) async {
     setState(() => _retentionHours = hours);
     await AppSettings.storiesRetentionHours.setItem(hours);
+  }
+
+  Future<void> _setAutoDownload(bool value) async {
+    setState(() => _autoDownload = value);
+    await AppSettings.storiesAutoDownloadMedia.setItem(value);
   }
 
   Future<void> _deleteMyStories() async {
@@ -224,6 +230,16 @@ class _StoriesSettingsPageState extends State<StoriesSettingsPage> {
                 ),
               ),
           ],
+          const Divider(),
+          SwitchListTile.adaptive(
+            value: _autoDownload,
+            onChanged: _setAutoDownload,
+            title: const Text('Auto-download story media'),
+            subtitle: const Text(
+              'Download a story\'s photo or video as soon as you open it. Turn '
+              'off to save data — you then tap a story to load it.',
+            ),
+          ),
           const Divider(),
           ListTile(
             title: Text(

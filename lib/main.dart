@@ -8,8 +8,11 @@ import 'dart:ui';
 
 import 'package:collection/collection.dart';
 import 'package:fluffychat/config/app_config.dart';
+import 'package:flutter_foreground_task/flutter_foreground_task.dart';
+
 import 'package:fluffychat/utils/bridge_keepalive.dart';
 import 'package:fluffychat/utils/client_manager.dart';
+import 'package:fluffychat/utils/media_auto_download.dart';
 import 'package:fluffychat/utils/notification_background_handler.dart';
 import 'package:fluffychat/utils/platform_infos.dart';
 import 'package:flutter/foundation.dart';
@@ -72,7 +75,17 @@ void main(List<String> args) async {
   // widget bindings are initialized already.
   WidgetsFlutterBinding.ensureInitialized();
 
+  // Sets up the port the foreground service's task isolate talks back over.
+  // Required before startService registers a callback, or the isolate's
+  // dismissal notification never reaches us.
+  if (PlatformInfos.isAndroid) {
+    FlutterForegroundTask.initCommunicationPort();
+  }
+
   final store = await AppSettings.init();
+  // Per-chat media auto-download overrides, read synchronously on every
+  // timeline bubble build — must be in memory before the first frame.
+  await MediaAutoDownload.init();
   Logs().i('Welcome to ${AppSettings.applicationName.value} <3');
 
   if (!_vodozemacInitialized) {
@@ -158,6 +171,12 @@ void _subscribeAutoSave(Client client) {
           SignalMatrixBridge.instance.isSigRoom(roomId)) {
         return; // bridge rooms auto-save in their media-ready handler
       }
+      // Auto-saving here would download the attachment the moment it arrives,
+      // which is exactly what we no longer want: media is fetched when its chat
+      // is opened. So only save now if this chat auto-downloads anyway;
+      // otherwise the save happens on first display (see MxcImage), once the
+      // bytes exist locally.
+      if (!MediaAutoDownload.enabledFor(roomId)) return;
       event.autoSaveBackground();
     } catch (_) {}
   });

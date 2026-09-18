@@ -2799,5 +2799,30 @@
             }
         }
     },
-    "deviceIdentityKey": "Device identity key"
+    "deviceIdentityKey": "Device identity key",
+    "loginUsernameHelper": "You can also enter just your username.",
+    "@loginUsernameHelper": {
+        "type": "String",
+        "placeholders": {}
+    },
+    "tapToDownload": "Tap to download",
+    "@tapToDownload": {
+        "type": "String",
+        "placeholders": {}
+    },
+    "waConnected": "WhatsApp connected",
+    "@waConnected": {
+        "type": "String",
+        "placeholders": {}
+    },
+    "waConnecting": "WhatsApp reconnecting…",
+    "@waConnecting": {
+        "type": "String",
+        "placeholders": {}
+    },
+    "waDisconnected": "WhatsApp offline — messages will not be sent",
+    "@waDisconnected": {
+        "type": "String",
+        "placeholders": {}
+    }
 }

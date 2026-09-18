@@ -31,7 +31,11 @@ class TjenaBridgePlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamH
     // The Go Bridge instance — null until start() succeeds.
     private var bridge: Bridge? = null
 
+    // Needed to read the system Data Saver setting.
+    private var appContext: Context? = null
+
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
+        appContext = binding.applicationContext
         methodChannel = MethodChannel(binding.binaryMessenger, "tjena.eu/bridge")
         methodChannel.setMethodCallHandler(this)
         eventChannel = EventChannel(binding.binaryMessenger, "tjena.eu/bridge/events")
@@ -62,6 +66,29 @@ class TjenaBridgePlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamH
     // Account id from the call, defaulting to "default" for legacy callers.
     private fun acc(call: MethodCall): String =
         call.argument<String>("accountID") ?: "default"
+
+    /**
+     * True when the system's Data Saver is on AND it actually restricts this app
+     * right now.
+     *
+     * getRestrictBackgroundStatus() reports the *effective* status, so it already
+     * accounts for the current network being metered and for the user having
+     * allowlisted this app (which yields WHITELISTED, not ENABLED). Only ENABLED
+     * means "data is being saved for us", so that is the single case we treat as
+     * restricted — on unmetered Wi-Fi it reports DISABLED even with Data Saver
+     * switched on, which is exactly the behaviour we want.
+     */
+    private fun isDataSaverRestricted(): Boolean {
+        val ctx = appContext ?: return false
+        return try {
+            val cm = ctx.getSystemService(Context.CONNECTIVITY_SERVICE)
+                as? android.net.ConnectivityManager ?: return false
+            cm.restrictBackgroundStatus ==
+                android.net.ConnectivityManager.RESTRICT_BACKGROUND_STATUS_ENABLED
+        } catch (e: Exception) {
+            false
+        }
+    }
 
     override fun onMethodCall(call: MethodCall, result: Result) {
         try {
@@ -186,6 +213,30 @@ class TjenaBridgePlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamH
                 "clearCache" -> {
                     bridge!!.clearCache(acc(call))
                     result.success(null)
+                }
+                "setDeferMedia" -> {
+                    val defer = call.argument<Boolean>("defer") ?: false
+                    bridge?.setDeferMedia(defer)
+                    result.success(null)
+                }
+                "downloadPendingForChat" -> {
+                    val roomID = call.argument<String>("roomID") ?: ""
+                    val limit = call.argument<Int>("limit") ?: 0
+                    bridge?.downloadPendingForChat(acc(call), roomID, limit.toLong())
+                    result.success(null)
+                }
+                "downloadPendingMedia" -> {
+                    val roomID = call.argument<String>("roomID") ?: ""
+                    val msgID = call.argument<String>("msgID") ?: ""
+                    bridge?.downloadPendingMedia(acc(call), roomID, msgID)
+                    result.success(null)
+                }
+                "countPendingMedia" -> {
+                    val roomID = call.argument<String>("roomID") ?: ""
+                    result.success((bridge?.countPendingMedia(acc(call), roomID) ?: 0L).toInt())
+                }
+                "isDataSaverEnabled" -> {
+                    result.success(isDataSaverRestricted())
                 }
                 "getChatAvatarUrl" -> {
                     val roomID = call.argument<String>("roomID") ?: ""

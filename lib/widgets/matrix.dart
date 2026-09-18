@@ -8,12 +8,14 @@ import 'dart:convert';
 
 import 'package:collection/collection.dart';
 import 'package:fluffychat/l10n/l10n.dart';
+import 'package:fluffychat/utils/bridge_keepalive.dart';
 import 'package:fluffychat/utils/client_manager.dart';
 import 'package:fluffychat/utils/wa_matrix_bridge.dart';
 import 'package:fluffychat/utils/signal_matrix_bridge.dart';
 import 'package:fluffychat/utils/init_with_restore.dart';
 import 'package:fluffychat/utils/local_backup_service.dart';
 import 'package:fluffychat/utils/matrix_sdk_extensions/matrix_file_extension.dart';
+import 'package:fluffychat/utils/media_auto_download.dart';
 import 'package:fluffychat/utils/notification_background_handler.dart';
 import 'package:fluffychat/utils/platform_infos.dart';
 import 'package:fluffychat/utils/uia_request_manager.dart';
@@ -399,6 +401,15 @@ class MatrixState extends State<Matrix> with WidgetsBindingObserver {
     }
     if (state == AppLifecycleState.resumed && widget.clients.isNotEmpty) {
       LocalBackupService.runIfDue(widget.clients.first);
+      // Put the bridge notification back if it was swiped away. Android 13
+      // allows the dismissal but reports it to nobody, so re-asserting on
+      // resume is the only way to notice.
+      // ignore: unawaited_futures
+      BridgeKeepAlive.reassertNotification();
+      // Data Saver may have been switched on while we were away, or the device
+      // may have moved from Wi-Fi onto metered data.
+      // ignore: unawaited_futures
+      MediaAutoDownload.refreshDataSaver();
     }
   }
 

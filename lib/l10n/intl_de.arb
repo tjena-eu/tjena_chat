@@ -2758,5 +2758,10 @@
     "unsetLowPriority": "Niedrige Priorität aufheben",
     "setLowPriority": "Niedrige Priorität",
     "removeTag": "Tag entfernen",
-    "appDescription": "Schreibe mir anderen mithilfe des dezentralisierten [matrix] Netzwerks auf eine einfache und zugängliche Art für jeden."
+    "appDescription": "Schreibe mir anderen mithilfe des dezentralisierten [matrix] Netzwerks auf eine einfache und zugängliche Art für jeden.",
+    "loginUsernameHelper": "Du kannst auch nur deinen Benutzernamen eingeben.",
+    "tapToDownload": "Zum Herunterladen tippen",
+    "waConnected": "WhatsApp verbunden",
+    "waConnecting": "WhatsApp verbindet erneut…",
+    "waDisconnected": "WhatsApp offline — Nachrichten werden nicht gesendet"
 }

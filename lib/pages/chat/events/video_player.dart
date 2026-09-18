@@ -7,10 +7,12 @@ import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:fluffychat/config/app_config.dart';
-import 'package:fluffychat/config/setting_keys.dart';
 import 'package:fluffychat/pages/chat/events/file_send_status_indicator.dart';
 import 'package:fluffychat/utils/file_description.dart';
 import 'package:fluffychat/utils/matrix_sdk_extensions/event_extension.dart';
+import 'package:fluffychat/utils/media_auto_download.dart';
+import 'package:fluffychat/utils/wa_matrix_bridge.dart';
+import 'package:fluffychat/widgets/future_loading_dialog.dart';
 import 'package:fluffychat/utils/platform_infos.dart';
 import 'package:fluffychat/utils/url_launcher.dart';
 import 'package:fluffychat/widgets/blur_hash.dart';
@@ -81,7 +83,7 @@ class EventVideoPlayer extends StatelessWidget {
     final fileSendingStatus = event.fileSendingStatus;
 
     final Widget preview;
-    if (!AppSettings.showThumbnailsInTimeline.value) {
+    if (!MediaAutoDownload.enabledFor(event.room.id)) {
       preview = BlurHash(
         blurhash: blurHash,
         width: width,
@@ -118,7 +120,21 @@ class EventVideoPlayer extends StatelessWidget {
           color: Colors.black,
           borderRadius: BorderRadius.circular(AppConfig.borderRadius),
           child: InkWell(
-            onTap: () => supportsVideoPlayer
+            onTap: () async {
+              // A deferred WhatsApp video has no bytes on the device yet, so
+              // fetch it before opening the player — otherwise the viewer opens
+              // on an empty attachment.
+              if (WaMatrixBridge.instance.isWaRoom(event.room.id) &&
+                  !event.hasAttachment) {
+                final result = await showFutureLoadingDialog(
+                  context: context,
+                  future: () => WaMatrixBridge.instance
+                      .downloadPendingEvent(event.room.id, event.eventId),
+                );
+                if (result.error != null || result.result != true) return;
+                if (!context.mounted) return;
+              }
+              return supportsVideoPlayer
                 ? Navigator.of(context).push(
                     PageRouteBuilder(
                       opaque: false,
@@ -134,7 +150,8 @@ class EventVideoPlayer extends StatelessWidget {
                       transitionsBuilder: (_, _, _, child) => child,
                     ),
                   )
-                : event.saveFile(context),
+                : event.saveFile(context);
+            },
             borderRadius: BorderRadius.circular(AppConfig.borderRadius),
             child: SizedBox(
               width: width,

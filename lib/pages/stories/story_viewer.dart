@@ -3,6 +3,8 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import 'package:fluffychat/config/setting_keys.dart';
+import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/pages/chat/events/video_player.dart';
 import 'package:fluffychat/utils/date_time_extension.dart';
 import 'package:fluffychat/utils/matrix_sdk_extensions/client_stories_extension.dart';
@@ -227,13 +229,33 @@ class _StoryViewerState extends State<StoryViewer>
   }
 }
 
-class _StoryContent extends StatelessWidget {
+class _StoryContent extends StatefulWidget {
   final Event event;
 
   const _StoryContent({required this.event});
 
   @override
+  State<_StoryContent> createState() => _StoryContentState();
+}
+
+class _StoryContentState extends State<_StoryContent> {
+  /// Set once the user taps a story whose media isn't auto-downloaded.
+  bool _loadRequested = false;
+
+  @override
   Widget build(BuildContext context) {
+    final event = widget.event;
+    // Stories are full-screen media, so honouring the auto-download setting
+    // here is where it saves the most data.
+    if (!AppSettings.storiesAutoDownloadMedia.value &&
+        !_loadRequested &&
+        (event.messageType == MessageTypes.Image ||
+            event.messageType == MessageTypes.Video)) {
+      return _TapToLoadStory(
+        onTap: () => setState(() => _loadRequested = true),
+      );
+    }
+
     switch (event.messageType) {
       case MessageTypes.Image:
         return MxcImage(
@@ -249,5 +271,26 @@ class _StoryContent extends StatelessWidget {
         // Text-only stories: nothing in the centre (text is overlaid below).
         return const SizedBox.shrink();
     }
+  }
+}
+
+/// Placeholder shown in place of a story's media while auto-download is off.
+class _TapToLoadStory extends StatelessWidget {
+  final VoidCallback onTap;
+
+  const _TapToLoadStory({required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: TextButton.icon(
+        onPressed: onTap,
+        icon: const Icon(Icons.download_outlined, color: Colors.white),
+        label: Text(
+          L10n.of(context).tapToDownload,
+          style: const TextStyle(color: Colors.white),
+        ),
+      ),
+    );
   }
 }

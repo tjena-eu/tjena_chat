@@ -25,6 +25,7 @@ import 'package:fluffychat/utils/error_reporter.dart';
 import 'package:fluffychat/utils/file_selector.dart';
 import 'package:fluffychat/utils/live_location/live_location_manager.dart';
 import 'package:fluffychat/utils/matrix_sdk_extensions/event_extension.dart';
+import 'package:fluffychat/utils/media_auto_download.dart';
 import 'package:fluffychat/utils/matrix_sdk_extensions/filtered_timeline_extension.dart';
 import 'package:fluffychat/utils/matrix_sdk_extensions/matrix_locals.dart';
 import 'package:fluffychat/utils/other_party_can_receive.dart';
@@ -419,8 +420,45 @@ class ChatController extends State<ChatPageWithRoom>
         ? lastEventThreadId ?? room.fullyRead
         : '';
     WidgetsBinding.instance.addObserver(this);
-    _tryLoadTimeline();
+    _tryLoadTimeline().then((_) => _onChatOpenedMedia());
   }
+
+  /// Media is downloaded when its chat is opened, not when it arrives. This is
+  /// that trigger, for both WhatsApp and regular Matrix rooms.
+  ///
+  /// Skipped entirely when auto-download is off for this chat (or Android's Data
+  /// Saver is restricting us) — then each image waits for a tap instead.
+  Future<void> _onChatOpenedMedia() async {
+    if (!mounted) return;
+    if (!MediaAutoDownload.enabledFor(room.id)) return;
+
+    if (WaMatrixBridge.instance.isWaRoom(room.id)) {
+      // WhatsApp: the bytes aren't on the device at all — ask the bridge to
+      // fetch what it deferred. Auto-save then happens in its media-ready path.
+      await WaMatrixBridge.instance.downloadPendingForRoom(room.id);
+      return;
+    }
+
+    // Matrix: the SDK downloads lazily as bubbles build, so opening the chat
+    // already pulls what is on screen. Auto-save is the part that no longer
+    // happens on arrival, so run it here for the recent attachments. It is
+    // de-duplicated per event id, so re-opening a chat costs nothing.
+    if (!AppSettings.autoSaveMedia.value) return;
+    final events = timeline?.events;
+    if (events == null) return;
+    for (final event in events.take(_autoSaveOnOpenLimit)) {
+      if (event.messageType != MessageTypes.Image &&
+          event.messageType != MessageTypes.Video) {
+        continue;
+      }
+      // ignore: unawaited_futures
+      event.autoSaveBackground();
+    }
+  }
+
+  /// How far back to auto-save when a chat is opened. Bounded so opening a chat
+  /// with years of history doesn't start hundreds of downloads.
+  static const _autoSaveOnOpenLimit = 30;
 
   final Set<String> expandedEventIds = {};
 

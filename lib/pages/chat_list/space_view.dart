@@ -13,7 +13,6 @@ import 'package:fluffychat/config/themes.dart';
 import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/pages/chat_list/unread_bubble.dart';
 import 'package:fluffychat/utils/localized_exception_extension.dart';
-import 'package:fluffychat/utils/space_child_visibility.dart';
 import 'package:fluffychat/utils/matrix_sdk_extensions/client_stories_extension.dart';
 import 'package:fluffychat/utils/matrix_sdk_extensions/matrix_locals.dart';
 import 'package:fluffychat/utils/stream_extension.dart';
@@ -44,7 +43,7 @@ enum SpaceChildAction {
 
 enum _SpaceSortMode { dateDesc, dateAsc, nameAsc, nameDesc }
 
-enum SpaceActions { settings, invite, members, showOutside, leave }
+enum SpaceActions { settings, invite, members, leave }
 
 class SpaceView extends StatefulWidget {
   final String spaceId;
@@ -414,21 +413,6 @@ class _SpaceViewState extends State<SpaceView> {
         if (!mounted) return;
         context.push('/rooms/${widget.spaceId}/details/members');
         break;
-      case SpaceActions.showOutside:
-        // Toggle whether this space's chats also appear in the main chat list.
-        final nowHidden =
-            !SpaceChildVisibility.instance.isHiddenOutside(widget.spaceId);
-        await SpaceChildVisibility.instance
-            .setHiddenOutside(widget.spaceId, nowHidden);
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(nowHidden
-                ? 'This space\'s chats are now hidden from the main list.'
-                : 'This space\'s chats now also show in the main list.'),
-          ),
-        );
-        break;
       case SpaceActions.leave:
         final confirmed = await showOkCancelAlertDialog(
           context: context,
@@ -771,25 +755,6 @@ class _SpaceViewState extends State<SpaceView> {
                         room?.summary.mJoinedMemberCount ?? 1,
                       ),
                     ),
-                  ],
-                ),
-              ),
-              PopupMenuItem(
-                value: SpaceActions.showOutside,
-                child: Row(
-                  mainAxisSize: .min,
-                  children: [
-                    Icon(
-                      SpaceChildVisibility.instance.isHiddenOutside(widget.spaceId)
-                          ? Icons.visibility_off_outlined
-                          : Icons.visibility_outlined,
-                    ),
-                    const SizedBox(width: 12),
-                    const Flexible(child: Text('Show chats in main list')),
-                    const SizedBox(width: 8),
-                    if (!SpaceChildVisibility.instance
-                        .isHiddenOutside(widget.spaceId))
-                      const Icon(Icons.check, size: 18),
                   ],
                 ),
               ),

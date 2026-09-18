@@ -359,6 +359,47 @@ func (b *Bridge) ClearCache(accountID string) error {
 	return b.withAccount(accountID, func(c *core.Bridge) error { return c.ClearCache() })
 }
 
+// SetDeferMedia switches attachment downloading between on-arrival (false) and
+// on-demand (true: fetched when the chat is opened or the preview is tapped).
+// Applies to every started account, since the policy is app-wide.
+func (b *Bridge) SetDeferMedia(defer_ bool) {
+	b.mu.Lock()
+	cores := make([]*core.Bridge, 0, len(b.accounts))
+	for _, a := range b.accounts {
+		if a.core != nil {
+			cores = append(cores, a.core)
+		}
+	}
+	b.mu.Unlock()
+	for _, c := range cores {
+		c.SetDeferMedia(defer_)
+	}
+}
+
+// DownloadPendingForChat fetches attachments deferred in a chat, newest-first
+// up to limit (0 = all). Called when the chat is opened.
+func (b *Bridge) DownloadPendingForChat(accountID, roomID string, limit int) error {
+	return b.withAccount(accountID, func(c *core.Bridge) error {
+		return c.DownloadPendingForChat(roomID, limit)
+	})
+}
+
+// DownloadPendingMedia fetches one deferred attachment (tap-to-load).
+func (b *Bridge) DownloadPendingMedia(accountID, roomID, msgID string) error {
+	return b.withAccount(accountID, func(c *core.Bridge) error {
+		return c.DownloadPendingMedia(roomID, msgID)
+	})
+}
+
+// CountPendingMedia returns how many attachments are still deferred in a chat.
+func (b *Bridge) CountPendingMedia(accountID, roomID string) int {
+	c := b.coreOf(accountID)
+	if c == nil {
+		return 0
+	}
+	return c.CountPendingMedia(roomID)
+}
+
 func (b *Bridge) ListChatsJSON(accountID string) string {
 	c := b.coreOf(accountID)
 	if c == nil {
