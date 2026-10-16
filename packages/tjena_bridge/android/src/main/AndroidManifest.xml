@@ -1,3 +1,9 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-    <!-- No special permissions here; host app already has INTERNET, WAKE_LOCK, etc. -->
+    <!--
+      The host app already has INTERNET, WAKE_LOCK, etc. ACCESS_NETWORK_STATE is
+      declared here because this plugin is what needs it: it watches the default
+      network so the bridge can replace a socket left stale by a Wi-Fi drop or a
+      VPN, and it reads the Data Saver setting.
+    -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 </manifest>

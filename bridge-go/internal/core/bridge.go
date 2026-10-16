@@ -68,6 +68,11 @@ type Bridge struct {
 	pairingPhone bool // true while phone-link handshake is in progress
 	dnsDialer    *dnsCachingDialer
 
+	// Serialises forced socket replacements (see reconnectNow). Separate from mu
+	// because a reconnect blocks for seconds and must not hold the state lock.
+	reconnMu      sync.Mutex
+	lastReconnect time.Time
+
 	knownRooms  map[string]bool   // JID room IDs we've already emitted room_created for
 	goodNames   map[string]bool   // rooms whose name is a real name (not a bare number)
 	goodAvatars map[string]bool   // rooms we've already emitted a profile picture for
@@ -548,24 +553,128 @@ func (b *Bridge) RequestPhoneLink(phone string) error {
 // ConfirmPhoneLink is a no-op — phone linking completes automatically.
 func (b *Bridge) ConfirmPhoneLink(_ string) error { return nil }
 
-// SendText sends a text message through WhatsApp.
-// sendMessage sends a message with a generous timeout so a truly stalled
-// connection surfaces as an error (visible as a failed send) instead of hanging
-// silently. It does NOT force a reconnect — whatsmeow's own keepalive handles a
-// dead socket, and reconnecting right after a send can disrupt the multi-device
-// echo/sync of the just-sent message.
+// Send/reconnect timings. A send must fail fast enough that the user sees an
+// error marker rather than a frozen composer, but slowly enough to survive an
+// ordinary slow mobile round-trip.
+const (
+	sendAttemptTimeout = 20 * time.Second
+	reconnectWait      = 12 * time.Second
+	// A burst of network callbacks (a VPN coming up fires several) must not tear
+	// down a socket we only just rebuilt.
+	reconnectCoalesce = 4 * time.Second
+)
+
+// sendMessage sends msg and returns the WhatsApp message ID.
+//
+// A WhatsApp socket can be silently dead: after a brief Wi-Fi drop or a VPN
+// (Twingate) route change the TCP connection is half-open — no FIN ever
+// arrives, so IsConnected() keeps reporting true (and the UI keeps showing the
+// green dot) while writes vanish. whatsmeow only forces a reconnect after
+// KeepAliveMaxFailTime, i.e. three minutes of failing pings, so trusting
+// IsConnected() here used to mean a send that hung for its whole deadline.
+//
+// Instead: send with a short deadline and, if that fails, replace the socket and
+// retry exactly once. The retry reuses the same message ID, so if the first
+// attempt did reach the server and only its ack was lost, WhatsApp
+// de-duplicates it instead of the recipient seeing the message twice.
 func (b *Bridge) sendMessage(client *whatsmeow.Client, jid types.JID, msg *waE2E.Message) (string, error) {
-	if !client.IsConnected() {
+	msgID := client.GenerateMessageID()
+	id, err := b.trySend(client, jid, msg, msgID)
+	if err == nil {
+		return id, nil
+	}
+	b.appendLog("[Bridge] send failed (" + err.Error() + ") — replacing socket and retrying once")
+	if !b.reconnectNow(client, reconnectWait, true) {
+		return "", fmt.Errorf("no WhatsApp connection: %w", err)
+	}
+	return b.trySend(client, jid, msg, msgID)
+}
+
+// trySend is one send attempt, reconnecting first if the socket is known to be
+// down.
+func (b *Bridge) trySend(
+	client *whatsmeow.Client,
+	jid types.JID,
+	msg *waE2E.Message,
+	msgID types.MessageID,
+) (string, error) {
+	if !client.IsConnected() && !b.reconnectNow(client, reconnectWait, false) {
 		return "", fmt.Errorf("not connected to WhatsApp")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), sendAttemptTimeout)
 	defer cancel()
-	resp, err := client.SendMessage(ctx, jid, msg)
+	resp, err := client.SendMessage(ctx, jid, msg, whatsmeow.SendRequestExtra{
+		ID: msgID,
+		// Without this whatsmeow waits its own default 75s for the ack.
+		Timeout: sendAttemptTimeout,
+	})
 	if err != nil {
-		b.appendLog("[Bridge] send failed: " + err.Error())
 		return "", err
 	}
 	return resp.ID, nil
+}
+
+// reconnectNow tears down the current socket and builds a fresh one, waiting up
+// to d for the login handshake to finish. Returns whether the client is usable
+// afterwards.
+//
+// force replaces even a socket that claims to be connected — that is the whole
+// point after a network change, where IsConnected() cannot be trusted. Only one
+// reconnect runs at a time; concurrent callers reuse the result.
+func (b *Bridge) reconnectNow(client *whatsmeow.Client, d time.Duration, force bool) bool {
+	b.reconnMu.Lock()
+	defer b.reconnMu.Unlock()
+
+	usable := client.IsConnected() && client.IsLoggedIn()
+	// Someone else already rebuilt the socket while we waited for the lock.
+	if usable && (!force || time.Since(b.lastReconnect) < reconnectCoalesce) {
+		return true
+	}
+
+	b.mu.Lock()
+	linked := b.linked
+	b.mu.Unlock()
+	if !linked {
+		return false
+	}
+
+	client.Disconnect()
+	if err := client.Connect(); err != nil {
+		b.appendLog("[Bridge] forced reconnect failed: " + err.Error())
+		return false
+	}
+	deadline := time.Now().Add(d)
+	for time.Now().Before(deadline) {
+		if client.IsConnected() && client.IsLoggedIn() {
+			b.lastReconnect = time.Now()
+			return true
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	return false
+}
+
+// OnNetworkChange is called when the device's default network changes — Wi-Fi
+// ⇄ mobile, a dropped-and-restored Wi-Fi link, or a VPN such as Twingate coming
+// up or going down. The existing socket is bound to the old route and is
+// typically half-open, so replace it immediately rather than waiting the three
+// minutes whatsmeow's keepalive takes to notice.
+func (b *Bridge) OnNetworkChange() {
+	b.mu.Lock()
+	client := b.waClient
+	linked := b.linked
+	b.mu.Unlock()
+	if client == nil || !linked {
+		return
+	}
+	go func() {
+		if b.reconnectNow(client, reconnectWait, true) {
+			b.appendLog("[Bridge] reconnected after network change")
+			return
+		}
+		b.appendLog("[Bridge] reconnect after network change incomplete; retrying with backoff")
+		b.autoReconnect(client)
+	}()
 }
 
 // cacheOwnOutgoing stores a message we sent ourselves so it survives a
@@ -1067,6 +1176,45 @@ func (b *Bridge) handleWAEvent(rawEvt any) {
 		// list (link mode "all") are named immediately, instead of showing the
 		// numeric group id until GetGroupInfo answers per chat.
 		go b.cacheGroupNames()
+
+	case *waevents.KeepAliveTimeout:
+		// Pings are failing, so the socket is dead even though IsConnected()
+		// still says otherwise. whatsmeow would sit on it for
+		// KeepAliveMaxFailTime (3 minutes) before reconnecting, during which the
+		// UI shows a green dot and every send black-holes. Replace it after the
+		// second consecutive failure (~1 minute) and report the truth in the
+		// meantime.
+		// One missed ping can be a hiccup, so don't flicker the dot for it; from
+		// the second failure on, the socket is genuinely gone and saying
+		// "connected" would be the lie that made sends look like they worked.
+		if evt.ErrorCount < 2 {
+			b.appendLog(fmt.Sprintf("[Bridge] keepalive timed out (%d)", evt.ErrorCount))
+			return
+		}
+		b.mu.Lock()
+		b.connected = false
+		client := b.waClient
+		linked := b.linked
+		b.mu.Unlock()
+		b.emitter.Emit(map[string]any{
+			"type": "state", "linked": linked, "connected": false,
+			"reason": "keepalive_timeout",
+		})
+		if client != nil && linked {
+			b.appendLog(fmt.Sprintf(
+				"[Bridge] %d keepalives failed (last success %s) — replacing socket",
+				evt.ErrorCount, evt.LastSuccess.Format(time.RFC3339)))
+			go b.OnNetworkChange()
+		}
+
+	case *waevents.KeepAliveRestored:
+		b.mu.Lock()
+		b.connected = true
+		linked := b.linked
+		b.mu.Unlock()
+		b.emitter.Emit(map[string]any{
+			"type": "state", "linked": linked, "connected": true,
+		})
 
 	case *waevents.Disconnected:
 		b.mu.Lock()

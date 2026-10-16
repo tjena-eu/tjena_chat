@@ -39,6 +39,13 @@ enum WaConnState {
 
 /// Converts WA bridge events into virtual Matrix rooms injected via handleSync.
 /// Once injected, FluffyChat treats WA rooms identically to real Matrix rooms.
+/// Backstop for a send that never comes back. The Go bridge bounds each send
+/// itself (one attempt, a forced reconnect, one retry), so these are only here
+/// so a bubble can never sit on a clock forever if the platform side wedges —
+/// they are deliberately longer than the worst case Go allows.
+const _sendTimeout = Duration(minutes: 2);
+const _mediaSendTimeout = Duration(minutes: 6);
+
 class WaMatrixBridge {
   WaMatrixBridge._();
   static final instance = WaMatrixBridge._();
@@ -470,12 +477,14 @@ class WaMatrixBridge {
     // silent failure (e.g. a stalled connection over a VPN) is visible.
     _injectOutgoing(matrixRoomId, eventId, content, ts, EventStatus.sending);
     try {
-      await TjenaBridge.instance.sendText(
-        waId,
-        eventId,
-        rewritten.plainText,
-        accountID: _accOf(matrixRoomId),
-      );
+      await TjenaBridge.instance
+          .sendText(
+            waId,
+            eventId,
+            rewritten.plainText,
+            accountID: _accOf(matrixRoomId),
+          )
+          .timeout(_sendTimeout);
       _injectOutgoing(matrixRoomId, eventId, content, ts, EventStatus.sent);
     } catch (e) {
       Logs().w('[WaBridge] sendText failed: $e');
@@ -635,17 +644,19 @@ class WaMatrixBridge {
     );
 
     try {
-      await TjenaBridge.instance.sendMedia(
-        waId,
-        eventId,
-        sendMime,
-        sendBytes,
-        accountID: _accOf(matrixRoomId),
-        caption: caption,
-        thumbnail: thumb,
-        width: width,
-        height: height,
-      );
+      await TjenaBridge.instance
+          .sendMedia(
+            waId,
+            eventId,
+            sendMime,
+            sendBytes,
+            accountID: _accOf(matrixRoomId),
+            caption: caption,
+            thumbnail: thumb,
+            width: width,
+            height: height,
+          )
+          .timeout(_mediaSendTimeout);
       _injectOutgoing(matrixRoomId, eventId, content, sendTs, EventStatus.sent);
     } catch (e) {
       Logs().w('[WaBridge] sendFile failed: $e');

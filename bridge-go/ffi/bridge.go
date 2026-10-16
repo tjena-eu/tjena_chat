@@ -467,6 +467,21 @@ func (b *Bridge) OnBackground() {
 	}
 }
 
+// OnNetworkChange tells every account that the device's default network changed
+// (Wi-Fi ⇄ mobile, a restored Wi-Fi link, a VPN going up or down) so each one
+// replaces its now-stale socket instead of silently dropping sends.
+func (b *Bridge) OnNetworkChange() {
+	b.mu.Lock()
+	accs := make([]*account, 0, len(b.accounts))
+	for _, a := range b.accounts {
+		accs = append(accs, a)
+	}
+	b.mu.Unlock()
+	for _, a := range accs {
+		a.core.OnNetworkChange()
+	}
+}
+
 // --- Signal bridge (single account) ---
 
 func (b *Bridge) StartSignal() error {
