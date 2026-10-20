@@ -128,9 +128,7 @@ class WaMatrixBridge {
           id,
           st.connected
               ? WaConnState.connected
-              : (st.linked
-                    ? WaConnState.connecting
-                    : WaConnState.disconnected),
+              : (st.linked ? WaConnState.connecting : WaConnState.disconnected),
         );
       }
     } catch (e) {
@@ -447,7 +445,9 @@ class WaMatrixBridge {
       final waNumber = localpart.startsWith('wa_')
           ? localpart.substring(3)
           : localpart;
-      final name = room.unsafeGetUserFromMemoryOrFallback(mxid).calcDisplayname();
+      final name = room
+          .unsafeGetUserFromMemoryOrFallback(mxid)
+          .calcDisplayname();
       plain += '@$waNumber$rest';
       html +=
           '<a href="https://matrix.to/#/$mxid">${esc.convert(name)}</a>${esc.convert(rest)}';
@@ -793,6 +793,29 @@ class WaMatrixBridge {
       days,
       accountID: accountId,
     );
+  }
+
+  /// The per-chat "WA fix": everything [resyncRoom] does (space, name, photo,
+  /// members, clean re-pull of [days] days from the cache), then the bridge-side
+  /// repair for chats that stopped working — reconnect if the socket is dead,
+  /// re-check group membership / admin-only mode, ask the phone to resend
+  /// messages that failed to decrypt and request recent history from it.
+  /// Returns the bridge report plus `cached` (messages re-pulled from cache).
+  Future<Map<String, dynamic>> fixRoom(String matrixRoomId, int days) async {
+    final waId = _matrixToWa[matrixRoomId];
+    if (waId == null) throw Exception('not a WhatsApp chat');
+    final cached = await resyncRoom(matrixRoomId, days);
+    final report = await TjenaBridge.instance.fixChat(
+      waId,
+      days,
+      accountID: _accOf(matrixRoomId),
+    );
+    if (report['member'] == true && waId.endsWith('@g.us')) {
+      // Group info was just re-fetched; refresh the member list from it.
+      // ignore: unawaited_futures
+      syncGroupMembers(matrixRoomId);
+    }
+    return {...report, 'cached': cached};
   }
 
   /// Pull WhatsApp message history for a chat going back [days] days from the

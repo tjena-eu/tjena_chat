@@ -361,6 +361,20 @@ class TjenaBridge {
         'days': days,
       });
 
+  /// Per-chat "WA fix": reconnect if needed, re-check group membership,
+  /// re-request undecryptable messages from the phone and ask for [days] of
+  /// recent history. Returns the bridge's JSON report as a map.
+  Future<Map<String, dynamic>> fixChat(String roomID, int days,
+      {String accountID = 'default'}) async {
+    final raw = await _method.invokeMethod<String>('fixChat', {
+          'accountID': accountID,
+          'roomID': roomID,
+          'days': days,
+        }) ??
+        '{}';
+    return jsonDecode(raw) as Map<String, dynamic>;
+  }
+
   /// Decline an incoming WhatsApp call so it stops ringing (auto-decline).
   Future<void> rejectCall(String callerJID, String callID,
           {String accountID = 'default'}) =>

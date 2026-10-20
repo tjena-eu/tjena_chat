@@ -120,7 +120,7 @@ class ChatDetailsView extends StatelessWidget {
                                               // Re-fetch just this chat's
                                               // photo from WhatsApp — fixes a
                                               // blank/black icon without the
-                                              // heavy "WA sync" (name+photo+
+                                              // heavy "WA fix" (name+photo+
                                               // history) flow.
                                               if (isWaRoom) {
                                                 // ignore: unawaited_futures

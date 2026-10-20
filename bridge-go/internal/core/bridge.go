@@ -107,6 +107,14 @@ type Bridge struct {
 	// receipts when the user reads the chat in Tjena.
 	lastRecv map[string]*types.MessageInfo
 
+	// undecryptable holds recent messages per chat that arrived but failed to
+	// decrypt (typically a group whose sender key never reached this device).
+	// "WA fix" re-requests them from the phone. Entries are dropped once the
+	// message is delivered after all.
+	undecryptable map[string][]types.MessageInfo
+	// lastSendErr is the most recent send failure per chat, for "WA fix".
+	lastSendErr map[string]string
+
 	// On-demand server history requests in flight, keyed by room ID. When a chat
 	// is backfilled but the local cache doesn't cover the requested window, we
 	// ask WhatsApp's primary device for older messages and keep paginating (on
@@ -268,6 +276,21 @@ func New(dataDir string, em *emitter.Emitter) (*Bridge, error) {
 // (must be done before Connect).
 func (b *Bridge) newWAClient(deviceStore *store.Device, log walog.Logger) *whatsmeow.Client {
 	c := whatsmeow.NewClient(deviceStore, log)
+	// When a message can't be decrypted (common in groups: the sender key
+	// distribution never reached this linked device), ask the primary phone
+	// for the plaintext instead of silently losing it. Without this, affected
+	// groups stay permanently empty on Tjena while working fine on the phone.
+	c.AutomaticMessageRerequestFromPhone = true
+	// Persist sent messages so a recipient's retry receipt ("waiting for this
+	// message") can still be answered after Android killed and restarted the
+	// app. The in-memory cache alone is lost with the process, which left those
+	// messages permanently undelivered on the other side.
+	c.UseRetryMessageStore = true
+	// Keep decrypted plaintext until the event handler has finished. If the app
+	// dies between decrypting and acking, WhatsApp redelivers the message, but
+	// the Signal ratchet has already advanced, so without this buffer the
+	// redelivery fails as "old counter" and the message is lost for good.
+	c.EnableDecryptedEventBuffer = true
 	if b.proxyURL != "" {
 		if err := c.SetProxyAddress(b.proxyURL); err != nil {
 			b.appendLog("[Bridge] invalid proxy address: " + err.Error())
@@ -581,13 +604,36 @@ func (b *Bridge) sendMessage(client *whatsmeow.Client, jid types.JID, msg *waE2E
 	msgID := client.GenerateMessageID()
 	id, err := b.trySend(client, jid, msg, msgID)
 	if err == nil {
+		b.setSendErr(jid, "")
 		return id, nil
 	}
 	b.appendLog("[Bridge] send failed (" + err.Error() + ") — replacing socket and retrying once")
 	if !b.reconnectNow(client, reconnectWait, true) {
+		b.setSendErr(jid, err.Error())
 		return "", fmt.Errorf("no WhatsApp connection: %w", err)
 	}
-	return b.trySend(client, jid, msg, msgID)
+	id, err = b.trySend(client, jid, msg, msgID)
+	if err != nil {
+		b.setSendErr(jid, err.Error())
+	} else {
+		b.setSendErr(jid, "")
+	}
+	return id, err
+}
+
+// setSendErr remembers (or clears, with "") the last send failure for a chat.
+func (b *Bridge) setSendErr(jid types.JID, errText string) {
+	roomID := jid.User + "@" + string(jid.Server)
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if errText == "" {
+		delete(b.lastSendErr, roomID)
+		return
+	}
+	if b.lastSendErr == nil {
+		b.lastSendErr = make(map[string]string)
+	}
+	b.lastSendErr[roomID] = errText
 }
 
 // trySend is one send attempt, reconnecting first if the socket is known to be
@@ -1262,6 +1308,9 @@ func (b *Bridge) handleWAEvent(rawEvt any) {
 	case *waevents.Message:
 		b.handleWAMessage(evt)
 
+	case *waevents.UndecryptableMessage:
+		b.recordUndecryptable(evt)
+
 	case *waevents.Receipt:
 		b.handleWAReceipt(evt)
 
@@ -1852,6 +1901,9 @@ func (b *Bridge) handleWAMessage(evt *waevents.Message) {
 	if msg == nil {
 		return
 	}
+	// Any successfully decrypted copy (e.g. a phone resend) settles an earlier
+	// decrypt failure for the same message, renderable or not.
+	b.clearUndecryptable(evt.Info.Chat.User+"@"+string(evt.Info.Chat.Server), evt.Info.ID)
 
 	// NOTE: deliberately no ensureRoom() here. Creating the room before we know
 	// the message is renderable spawned empty "phantom" chats: when someone you
@@ -2041,6 +2093,12 @@ func waChatName(chat types.JID, pushName string) string {
 // Returns ("", "m.text") for messages with no recognised renderable content.
 func messageBodyType(msg *waE2E.Message) (body, msgtype string) {
 	msgtype = "m.text"
+	// Round video notes (PTV) are ordinary VideoMessages in a different field.
+	// Fold them in here so the media download path, which runs after this,
+	// handles them like any other video instead of the message vanishing.
+	if msg.GetPtvMessage() != nil && msg.GetVideoMessage() == nil {
+		msg.VideoMessage = msg.GetPtvMessage()
+	}
 	switch {
 	case msg.GetConversation() != "":
 		body = msg.GetConversation()
@@ -2083,6 +2141,42 @@ func messageBodyType(msg *waE2E.Message) (body, msgtype string) {
 		loc := msg.GetLiveLocationMessage()
 		body = fmt.Sprintf("📍 Live location\nhttps://www.google.com/maps/search/?api=1&query=%.6f,%.6f",
 			loc.GetDegreesLatitude(), loc.GetDegreesLongitude())
+
+	// Types Tjena can't render natively are shown as text rather than being
+	// dropped, so a chat never silently misses a message.
+	case msg.GetPollCreationMessage() != nil || msg.GetPollCreationMessageV2() != nil ||
+		msg.GetPollCreationMessageV3() != nil:
+		poll := msg.GetPollCreationMessage()
+		if poll == nil {
+			poll = msg.GetPollCreationMessageV2()
+		}
+		if poll == nil {
+			poll = msg.GetPollCreationMessageV3()
+		}
+		var sb strings.Builder
+		sb.WriteString("📊 Poll: " + poll.GetName())
+		for _, o := range poll.GetOptions() {
+			sb.WriteString("\n○ " + o.GetOptionName())
+		}
+		body = sb.String()
+	case msg.GetContactMessage() != nil:
+		body = "👤 Contact: " + msg.GetContactMessage().GetDisplayName()
+	case msg.GetContactsArrayMessage() != nil:
+		names := make([]string, 0, len(msg.GetContactsArrayMessage().GetContacts()))
+		for _, c := range msg.GetContactsArrayMessage().GetContacts() {
+			names = append(names, c.GetDisplayName())
+		}
+		body = "👤 Contacts: " + strings.Join(names, ", ")
+	case msg.GetEventMessage() != nil:
+		body = "📅 Event: " + msg.GetEventMessage().GetName()
+	case msg.GetGroupInviteMessage() != nil:
+		body = "👥 Group invite: " + msg.GetGroupInviteMessage().GetGroupName()
+	case msg.GetButtonsResponseMessage() != nil:
+		body = msg.GetButtonsResponseMessage().GetSelectedDisplayText()
+	case msg.GetListResponseMessage() != nil:
+		body = msg.GetListResponseMessage().GetTitle()
+	case msg.GetTemplateButtonReplyMessage() != nil:
+		body = msg.GetTemplateButtonReplyMessage().GetSelectedDisplayText()
 	}
 	return body, msgtype
 }

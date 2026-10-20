@@ -595,3 +595,12 @@ func (t tagListener) OnEvent(payload string) {
 	}
 	t.l.OnEvent(payload)
 }
+
+// FixChat runs the per-chat "WA fix" repair and returns a JSON report.
+func (b *Bridge) FixChat(accountID, roomID string, days int) string {
+	c := b.coreOf(accountID)
+	if c == nil {
+		return `{"problems":["WhatsApp account not started"]}`
+	}
+	return c.FixChat(roomID, days)
+}

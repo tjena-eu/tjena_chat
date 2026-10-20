@@ -25,7 +25,7 @@ enum ChatPopupMenuActions {
   leave,
   search,
   media,
-  syncWaRoom,
+  fixWaRoom,
   loadWaBackfill,
   toggleHidden,
 }
@@ -121,8 +121,8 @@ class ChatSettingsPopupMenuState extends State<ChatSettingsPopupMenu> {
               case ChatPopupMenuActions.encryption:
                 context.go('/rooms/${widget.room.id}/encryption');
                 break;
-              case ChatPopupMenuActions.syncWaRoom:
-                await _waSync();
+              case ChatPopupMenuActions.fixWaRoom:
+                await _waFix();
                 break;
               case ChatPopupMenuActions.loadWaBackfill:
                 await _loadWaBackfill();
@@ -209,12 +209,12 @@ class ChatSettingsPopupMenuState extends State<ChatSettingsPopupMenu> {
             if (PlatformInfos.isAndroid &&
                 WaMatrixBridge.instance.isWaRoom(widget.room.id))
               PopupMenuItem<ChatPopupMenuActions>(
-                value: ChatPopupMenuActions.syncWaRoom,
+                value: ChatPopupMenuActions.fixWaRoom,
                 child: const Row(
                   children: [
-                    Icon(Icons.sync_outlined),
+                    Icon(Icons.build_outlined),
                     SizedBox(width: 12),
-                    Text('WA sync'),
+                    Text('WA fix'),
                   ],
                 ),
               ),
@@ -234,13 +234,17 @@ class ChatSettingsPopupMenuState extends State<ChatSettingsPopupMenu> {
               value: ChatPopupMenuActions.toggleHidden,
               child: Row(
                 children: [
-                  Icon(HiddenRooms.instance.isHidden(widget.room.id)
-                      ? Icons.visibility_outlined
-                      : Icons.visibility_off_outlined),
+                  Icon(
+                    HiddenRooms.instance.isHidden(widget.room.id)
+                        ? Icons.visibility_outlined
+                        : Icons.visibility_off_outlined,
+                  ),
                   const SizedBox(width: 12),
-                  Text(HiddenRooms.instance.isHidden(widget.room.id)
-                      ? 'Unhide chat'
-                      : 'Hide chat'),
+                  Text(
+                    HiddenRooms.instance.isHidden(widget.room.id)
+                        ? 'Unhide chat'
+                        : 'Hide chat',
+                  ),
                 ],
               ),
             ),
@@ -309,39 +313,62 @@ class ChatSettingsPopupMenuState extends State<ChatSettingsPopupMenu> {
     if (wasHidden) {
       await HiddenRooms.instance.unhide(widget.room.id);
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Chat unhidden.')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Chat unhidden.')));
     } else {
       await HiddenRooms.instance.hide(widget.room.id);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Chat hidden — find it under Hidden chats.')),
+        const SnackBar(
+          content: Text('Chat hidden — find it under Hidden chats.'),
+        ),
       );
       context.go('/rooms');
     }
   }
 
-  /// The per-chat "WA sync": refresh name + photo (+ contact names), wipe the
-  /// local history for this chat and cleanly re-pull the requested days.
-  Future<void> _waSync() async {
-    final days = await _askBackfillDays('WA sync', 'Sync');
+  /// The per-chat "WA fix": repair a chat that isn't working (see
+  /// [WaMatrixBridge.fixRoom]) and show what was found.
+  Future<void> _waFix() async {
+    final days = await _askBackfillDays('WA fix', 'Fix');
     if (days == null || days < 1 || !mounted) return;
     final result = await showFutureLoadingDialog(
       context: context,
-      future: () =>
-          WaMatrixBridge.instance.resyncRoom(widget.room.id, days),
+      future: () => WaMatrixBridge.instance.fixRoom(widget.room.id, days),
     );
-    if (result.error == null && mounted) {
-      final count = result.result ?? 0;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(count > 0
-              ? 'Repaired chat (space, names, avatar) · loaded $count message(s) from the last $days days.'
-              : 'Repaired chat (space, names, avatar) · no cached history for the last $days days.'),
-        ),
-      );
-    }
+    final report = result.result;
+    if (report == null || !mounted) return;
+    final problems = (report['problems'] as List<dynamic>? ?? [])
+        .cast<String>();
+    final cached = report['cached'] as int? ?? 0;
+    final lines = <String>[
+      if (problems.isEmpty) 'No problems found.',
+      ...problems.map((p) => '• $p'),
+      '',
+      'Repaired space, name, avatar and members.',
+      cached > 0
+          ? 'Reloaded $cached cached message(s) from the last $days days.'
+          : 'No cached history for the last $days days.',
+      if (report['history_requested'] == true)
+        'Asked your phone for recent history — it may take a minute to arrive.',
+      if (report['participants'] != null)
+        'Group: ${report['participants']} participants'
+            '${report['addressing_mode'] != null && report['addressing_mode'] != '' ? ' · ${report['addressing_mode']} addressing' : ''}.',
+    ];
+    await showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('WA fix'),
+        content: SingleChildScrollView(child: Text(lines.join('\n'))),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _loadWaBackfill() async {
@@ -349,15 +376,18 @@ class ChatSettingsPopupMenuState extends State<ChatSettingsPopupMenu> {
     if (days == null || days < 1 || !mounted) return;
     final result = await showFutureLoadingDialog(
       context: context,
-      future: () => WaMatrixBridge.instance.requestBackfill(widget.room.id, days),
+      future: () =>
+          WaMatrixBridge.instance.requestBackfill(widget.room.id, days),
     );
     if (result.error == null && mounted) {
       final count = result.result ?? 0;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(count > 0
-              ? 'Loaded $count message(s) from the last $days days.'
-              : 'No cached history for the last $days days.'),
+          content: Text(
+            count > 0
+                ? 'Loaded $count message(s) from the last $days days.'
+                : 'No cached history for the last $days days.',
+          ),
         ),
       );
     }

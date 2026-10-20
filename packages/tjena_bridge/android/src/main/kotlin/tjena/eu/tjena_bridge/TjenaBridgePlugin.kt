@@ -39,6 +39,15 @@ class TjenaBridgePlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamH
     private lateinit var methodChannel: MethodChannel
     private lateinit var eventChannel: EventChannel
     private var eventSink: EventChannel.EventSink? = null
+
+    /**
+     * Events that arrived while Dart wasn't listening (stream not subscribed
+     * yet, or cancelled and not re-subscribed). Go has already acked those
+     * messages to WhatsApp, so dropping them here lost them for good. Only
+     * touched on the main thread; flushed in order on the next onListen.
+     */
+    private val pendingEvents = ArrayDeque<String>()
+    private val maxPendingEvents = 5000
     private val mainHandler = Handler(Looper.getMainLooper())
 
     // The Go Bridge instance — null until start() succeeds.
@@ -71,6 +80,7 @@ class TjenaBridgePlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamH
         "countPendingMedia", "getChatAvatarUrl", "getGroupMembers",
         "isDataSaverEnabled", "backfillFromCache", "requestBackfill",
         "requestServerHistory", "downloadPendingForChat", "downloadPendingMedia",
+        "fixChat",
     )
 
     /** Returned by [handle] for an unknown method, so the dispatcher can reply. */
@@ -179,8 +189,9 @@ class TjenaBridgePlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamH
 
     override fun onListen(arguments: Any?, sink: EventChannel.EventSink?) {
         eventSink = sink
-        // Wire existing bridge to the new sink (re-attach after hot-restart).
-        bridge?.setListener(buildListener(sink))
+        if (sink != null) {
+            while (pendingEvents.isNotEmpty()) sink.success(pendingEvents.removeFirst())
+        }
     }
 
     override fun onCancel(arguments: Any?) {
@@ -246,7 +257,7 @@ class TjenaBridgePlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamH
             val dataDir = call.argument<String>("dataDir")!!
             if (bridge == null) {
                 val b = Ffi.new_(dataDir)
-                b.setListener(buildListener(eventSink))
+                b.setListener(buildListener())
                 bridge = b
             }
             bridge!!.start()
@@ -365,6 +376,11 @@ class TjenaBridgePlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamH
             bridge!!.requestServerHistory(acc(call), roomID, days.toLong())
             null
         }
+        "fixChat" -> {
+            val roomID = call.argument<String>("roomID") ?: ""
+            val days = call.argument<Int>("days") ?: 7
+            bridge?.fixChat(acc(call), roomID, days.toLong()) ?: "{}"
+        }
         "rejectCall" -> {
             val callerJID = call.argument<String>("callerJID") ?: ""
             val callID = call.argument<String>("callID") ?: ""
@@ -463,10 +479,20 @@ class TjenaBridgePlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamH
         else -> NotImplemented
     }
 
-    private fun buildListener(sink: EventChannel.EventSink?): GoEventListener =
+    // Delivers to whichever sink is current *when the event arrives* (not the
+    // one captured at creation), buffering while there is none.
+    private fun buildListener(): GoEventListener =
         GoEventListener { payload ->
             // gomobile callbacks arrive on a Go goroutine — marshal to main thread.
-            mainHandler.post { sink?.success(payload) }
+            mainHandler.post {
+                val sink = eventSink
+                if (sink != null) {
+                    sink.success(payload)
+                } else {
+                    if (pendingEvents.size >= maxPendingEvents) pendingEvents.removeFirst()
+                    pendingEvents.addLast(payload)
+                }
+            }
         }
 }
 
