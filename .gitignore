@@ -1,6 +1,9 @@
 # +++++++++ Flutter Defaults +++++++++
 # From https://github.com/flutter/flutter/blob/master/.gitignore
 
+# My
+docs/
+
 # Miscellaneous
 *.class
 *.lock

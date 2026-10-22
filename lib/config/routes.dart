@@ -26,6 +26,7 @@ import 'package:fluffychat/pages/new_private_chat/new_private_chat.dart';
 import 'package:fluffychat/pages/settings/settings.dart';
 import 'package:fluffychat/pages/settings_3pid/settings_3pid.dart';
 import 'package:fluffychat/pages/settings_bridges/bridge_detail_page.dart';
+import 'package:fluffychat/pages/settings_bridges/own_bridge_page.dart';
 import 'package:fluffychat/pages/settings_bridges/settings_bridges.dart';
 import 'package:fluffychat/pages/settings_chat/settings_chat.dart';
 import 'package:fluffychat/pages/settings_emotes/settings_emotes.dart';
@@ -449,6 +450,15 @@ abstract class AppRoutes {
                         const SettingsBridges(),
                       ),
                       routes: [
+                        GoRoute(
+                          path: 'own-whatsapp',
+                          redirect: loggedOutRedirect,
+                          pageBuilder: (context, state) => defaultPageBuilder(
+                            context,
+                            state,
+                            const OwnBridgePage(),
+                          ),
+                        ),
                         GoRoute(
                           path: ':bridgeid',
                           redirect: loggedOutRedirect,

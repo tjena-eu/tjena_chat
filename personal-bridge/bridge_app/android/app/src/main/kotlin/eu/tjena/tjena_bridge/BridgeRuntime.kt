@@ -1,0 +1,169 @@
+package eu.tjena.tjena_bridge
+
+import android.content.Context
+import org.json.JSONArray
+import org.json.JSONObject
+import java.io.File
+import java.net.HttpURLConnection
+import java.net.ServerSocket
+import java.net.URL
+import java.util.concurrent.TimeUnit
+
+/** Paths, config generation and relay calls shared by the service and the UI channel. */
+class BridgeRuntime(val context: Context) {
+    val secrets = SecretStore(context)
+    val libDir = File(context.applicationInfo.nativeLibraryDir)
+    val bridgeBin = File(libDir, "libmautrixwhatsapp.so")
+    val relayBin = File(libDir, "librelay.so")
+    val dataDir = File(context.filesDir, "bridge").apply { mkdirs() }
+    val runDir = File(context.filesDir, "run").apply { mkdirs() }
+    val logDir = File(dataDir, "logs").apply { mkdirs() }
+    val exampleConfig = File(dataDir, "example-config.yaml")
+    val exampleVersion = File(dataDir, "example-config.version")
+    val bridgeConfig = File(runDir, "config.yaml")
+    val relayConfig = File(runDir, "relay.json")
+    val relayStatusFile = File(runDir, "relay-status.json")
+
+    fun bridgeVersion(): String {
+        val cache = File(dataDir, "binary.version")
+        val stamp = "${bridgeBin.length()}:${bridgeBin.lastModified()}"
+        if (cache.exists()) {
+            val lines = cache.readLines()
+            if (lines.size == 2 && lines[0] == stamp) return lines[1]
+        }
+        val v = runCapture(listOf(bridgeBin.path, "--version"), 20).trim().lines().firstOrNull() ?: "unknown"
+        cache.writeText("$stamp\n$v")
+        return v
+    }
+
+    fun runCapture(cmd: List<String>, timeoutSec: Long): String {
+        val p = ProcessBuilder(cmd).directory(dataDir).redirectErrorStream(true).start()
+        val out = p.inputStream.bufferedReader().readText()
+        if (!p.waitFor(timeoutSec, TimeUnit.SECONDS)) p.destroyForcibly()
+        return out
+    }
+
+    /** First-time (or per app update) setup of secrets that never leave the phone. */
+    fun ensureLocalSecrets() {
+        secrets.update { s ->
+            val settings = s.optJSONObject("settings") ?: JSONObject()
+            if (!settings.has("prov_secret")) settings.put("prov_secret", SecretStore.randomSecret())
+            if (!settings.has("pickle_key")) settings.put("pickle_key", SecretStore.randomSecret())
+            if (!settings.has("api_secret")) settings.put("api_secret", SecretStore.randomSecret())
+            if (!settings.has("extra_users")) settings.put("extra_users", JSONArray())
+            s.put("settings", settings)
+            if (!s.has("gateway_url")) s.put("gateway_url", DEFAULT_GATEWAY)
+        }
+    }
+
+    private fun freePort(): Int = ServerSocket(0).use { it.localPort }
+
+    /**
+     * Write bridge config + relay config from the Keystore-encrypted secrets.
+     * Returns the relay port. Files are deleted by the service after start.
+     */
+    fun writeRunConfigs(): Int {
+        ensureLocalSecrets()
+        val s = secrets.load()
+        val bundle = s.getJSONObject("bundle")
+        val settings = s.getJSONObject("settings")
+        val gateway = s.optString("gateway_url", DEFAULT_GATEWAY)
+
+        // Example config from the bundled bridge version; keeps upstream defaults.
+        val version = bridgeVersion()
+        if (!exampleConfig.exists() || !exampleVersion.exists() || exampleVersion.readText() != version) {
+            exampleConfig.delete()
+            runCapture(listOf(bridgeBin.path, "-e", "-c", exampleConfig.path), 30)
+            if (!exampleConfig.exists()) throw IllegalStateException("bridge could not generate example config")
+            exampleVersion.writeText(version)
+        }
+
+        val port = freePort()
+        val bundleFile = File(runDir, "bundle.json")
+        val settingsFile = File(runDir, "settings.json")
+        try {
+            bundleFile.writeText(bundle.toString())
+            settingsFile.writeText(
+                JSONObject()
+                    .put("data_dir", dataDir.path)
+                    .put("relay_port", port)
+                    .put("prov_secret", settings.getString("prov_secret"))
+                    .put("pickle_key", settings.getString("pickle_key"))
+                    .put("extra_users", settings.optJSONArray("extra_users") ?: JSONArray())
+                    .put("log_level", "info")
+                    .toString()
+            )
+            val out = runCapture(
+                listOf(relayBin.path, "bridge-config", exampleConfig.path, bundleFile.path, settingsFile.path, bridgeConfig.path), 30
+            )
+            if (!bridgeConfig.exists()) throw IllegalStateException("config generation failed: ${out.take(300)}")
+        } finally {
+            bundleFile.delete()
+            settingsFile.delete()
+        }
+        relayConfig.writeText(
+            JSONObject()
+                .put("listen", "127.0.0.1:$port")
+                .put("upstream", gateway)
+                .put("as_token", bundle.getString("as_token"))
+                .put("api_secret", settings.getString("api_secret"))
+                .put("prov_secret", settings.getString("prov_secret"))
+                .put("owner", bundle.getString("owner"))
+                .put("status_file", relayStatusFile.path)
+                .toString()
+        )
+        secrets.update { it.getJSONObject("settings").put("relay_port", port) }
+        return port
+    }
+
+    fun deleteRunConfigs() {
+        bridgeConfig.delete()
+        relayConfig.delete()
+    }
+
+    fun relayStatus(): JSONObject = try {
+        JSONObject(relayStatusFile.readText())
+    } catch (_: Exception) {
+        JSONObject()
+    }
+
+    /** HTTP call to the local relay API. Returns {status, body}. */
+    fun relayCall(method: String, path: String, body: String?, timeoutMs: Int = 15_000): JSONObject {
+        val s = secrets.load()
+        val settings = s.getJSONObject("settings")
+        val port = settings.optInt("relay_port", 0)
+        if (port == 0) return JSONObject().put("status", 0).put("body", "{\"error\":\"bridge not running\"}")
+        val conn = URL("http://127.0.0.1:$port$path").openConnection() as HttpURLConnection
+        conn.requestMethod = method
+        conn.connectTimeout = 3000
+        conn.readTimeout = timeoutMs
+        conn.setRequestProperty("Authorization", "Bearer " + settings.getString("api_secret"))
+        if (body != null) {
+            conn.doOutput = true
+            conn.setRequestProperty("Content-Type", "application/json")
+            conn.outputStream.use { it.write(body.toByteArray()) }
+        }
+        return try {
+            val code = conn.responseCode
+            val stream = if (code >= 400) conn.errorStream else conn.inputStream
+            JSONObject().put("status", code).put("body", stream?.bufferedReader()?.readText() ?: "")
+        } catch (e: Exception) {
+            JSONObject().put("status", 0).put("body", JSONObject().put("error", e.message ?: "error").toString())
+        } finally {
+            conn.disconnect()
+        }
+    }
+
+    /** Remove everything: secrets, bridge DB, logs. */
+    fun wipeAll() {
+        secrets.wipe()
+        dataDir.deleteRecursively()
+        runDir.deleteRecursively()
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().clear().apply()
+    }
+
+    companion object {
+        const val DEFAULT_GATEWAY = "https://wap.tjena.eu"
+        const val PREFS = "bridge_prefs"
+    }
+}

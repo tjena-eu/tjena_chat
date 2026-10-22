@@ -51,6 +51,21 @@ class SettingsBridgesView extends StatelessWidget {
                             ),
                   ),
                 ),
+                // Personal WhatsApp bridge (tjena Bridge app at home).
+                Card(
+                  margin: const EdgeInsets.only(bottom: 12),
+                  child: ListTile(
+                    leading: const Icon(Icons.home_outlined),
+                    title: const Text('WhatsApp: which bridge?'),
+                    subtitle: Text(
+                      controller.entries.any((e) => e.isOwnBridge)
+                          ? 'Using your own bridge at home'
+                          : 'Using the tjena server bridge · set up your own',
+                    ),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () => context.go('/rooms/settings/bridges/own-whatsapp'),
+                  ),
+                ),
                 const SizedBox(height: 16),
                 if (controller.entries.every(
                   (e) => e.availability == BridgeAvailability.unavailable,

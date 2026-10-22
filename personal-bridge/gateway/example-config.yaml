@@ -1,0 +1,36 @@
+# bridge-gateway config (/data/config.yaml in the container).
+
+# Public listener: reached through Cloudflare / reverse proxy as https://wap.tjena.eu.
+# Serves only: bridge websocket, the bridge's client-API calls (token-swapped), /provision/.
+public_listen: 0.0.0.0:29331
+# Internal listener: Synapse pushes appservice transactions here.
+# Never route it from the internet.
+internal_listen: 0.0.0.0:29332
+
+public_url: https://wap.tjena.eu
+# How Synapse reaches internal_listen (goes into every slot registration).
+internal_url: http://tjena-bridge-gateway:29332
+
+server_name: tjena.eu
+# Internal Synapse URL (same Docker network).
+synapse_url: http://tjena_matrix:8008
+
+data_dir: /data
+# Slot registration files are written here. Mount this directory into the
+# Synapse container (read-only) at registration_dir_in_synapse.
+registration_dir: /registrations
+registration_dir_in_synapse: /data/personal-bridges
+
+# Slot N gets bot @waNNbot:tjena.eu and ghosts @waNN_*:tjena.eu.
+slot_prefix: wa
+# Must not overlap other bridges' namespaces.
+reserved_prefixes: [whatsapp, signal]
+# Optional: only these users may claim a bridge (regexes). Empty = all local users.
+allowed_users: []
+claim_rate_limit_per_hour: 5
+max_slots_per_user: 1
+
+transaction_timeout_seconds: 60
+keepalive_interval_seconds: 30
+# Optional bearer token for GET /_tjena/status on the internal listener.
+status_token: ""

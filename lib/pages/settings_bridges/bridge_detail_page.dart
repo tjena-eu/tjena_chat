@@ -194,6 +194,21 @@ class _BridgeDetailPageState extends State<BridgeDetailPage> {
         padding: const EdgeInsets.all(16),
         children: [
           _BridgeHeaderCard(entry: entry),
+          if (entry.def.id == 'whatsapp')
+            Card(
+              margin: const EdgeInsets.only(top: 12),
+              child: ListTile(
+                leading: Icon(
+                  entry.isOwnBridge ? Icons.home_outlined : Icons.cloud_outlined,
+                ),
+                title: Text(
+                  entry.isOwnBridge ? 'My own bridge (home)' : 'tjena server bridge',
+                ),
+                subtitle: Text(entry.botUserId),
+                trailing: const Text('Change'),
+                onTap: () => context.go('/rooms/settings/bridges/own-whatsapp'),
+              ),
+            ),
           const SizedBox(height: 20),
           Text(
             'ACTIONS',

@@ -5,6 +5,7 @@ import 'package:collection/collection.dart';
 import 'package:flutter/material.dart';
 import 'package:matrix/matrix.dart';
 
+import '../../utils/personal_bridge.dart';
 import '../../widgets/matrix.dart';
 import 'bridge_definition.dart';
 import 'settings_bridges_view.dart';
@@ -16,10 +17,12 @@ class BridgeEntry {
   final String botUserId;
   BridgeAvailability availability;
   Room? dmRoom;
+  final bool isOwnBridge;
 
   BridgeEntry({
     required this.def,
     required this.botUserId,
+    this.isOwnBridge = false,
     this.availability = BridgeAvailability.checking,
     this.dmRoom,
   });
@@ -45,11 +48,16 @@ class SettingsBridgesController extends State<SettingsBridges> {
     final client = Matrix.of(context).client;
     final domain = client.userID?.domain ?? '';
 
+    // WhatsApp may use the user's own bridge (tjena Bridge app at home).
+    final waConfig = WhatsAppBridgeConfig.of(client);
     entries = kBridges
         .map(
           (def) => BridgeEntry(
             def: def,
-            botUserId: def.botUserId(domain),
+            botUserId: def.id == 'whatsapp' && waConfig.usesOwn
+                ? waConfig.ownBot!
+                : def.botUserId(domain),
+            isOwnBridge: def.id == 'whatsapp' && waConfig.usesOwn,
           ),
         )
         .toList();
