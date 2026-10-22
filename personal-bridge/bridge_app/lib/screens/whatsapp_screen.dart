@@ -25,6 +25,7 @@ class _WhatsAppScreenState extends State<WhatsAppScreen> {
   String? _qr; // QR data
   String? _instructions;
   bool _waiting = false;
+  bool _showAdd = false; // login form when an account is already linked
   final _phone = TextEditingController();
 
   @override
@@ -101,7 +102,11 @@ class _WhatsAppScreenState extends State<WhatsAppScreen> {
       _stepId = step['step_id'] as String?;
       if (step['login_id'] != null) _loginId = step['login_id'] as String;
       if (type == 'complete') {
-        setState(_resetLogin);
+        setState(() {
+          _resetLogin();
+          _showAdd = false;
+          _phone.clear();
+        });
         if (!mounted) return;
         toast(context, 'WhatsApp connected');
         await _load();
@@ -147,8 +152,20 @@ class _WhatsAppScreenState extends State<WhatsAppScreen> {
   }
 
   Future<void> _logout(String id) async {
-    if (!await confirm(context, 'Log out of WhatsApp?',
-        'The bridge stops relaying this WhatsApp account. Your chats stay in tjena.', ok: 'Log out', danger: true)) {
+    var deleteChats = true;
+    try {
+      deleteChats = (await Native.options())['delete_chats_on_logout'] as bool? ?? true;
+    } catch (_) {}
+    if (!mounted) return;
+    if (!await confirm(
+        context,
+        'Log out of WhatsApp?',
+        deleteChats
+            ? 'The bridge stops relaying this WhatsApp account and removes its chats and space from tjena. '
+                'WhatsApp itself keeps all messages. (Settings → Chats & history to keep chats instead.)'
+            : 'The bridge stops relaying this WhatsApp account. Its chats stay in tjena but stop updating.',
+        ok: 'Log out',
+        danger: true)) {
       return;
     }
     final r = await Native.relay('POST', '/relay/provision/v3/logout/$id', body: {});
@@ -175,15 +192,13 @@ class _WhatsAppScreenState extends State<WhatsAppScreen> {
           Text('WhatsApp', style: t.textTheme.headlineSmall),
           const SizedBox(height: 8),
           if (_loading) const LinearProgressIndicator(),
-          for (final l in _logins)
-            Card(
-              child: ListTile(
-                leading: const Icon(Icons.check_circle, color: Colors.green),
-                title: Text('${l['name'] ?? l['id']}'),
-                subtitle: Text(((l['state'] as Map?)?['state_event'] ?? '').toString()),
-                trailing: IconButton(icon: const Icon(Icons.logout), onPressed: () => _logout(l['id'] as String)),
-              ),
+          if (_logins.length > 1)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 4),
+              child: Text('${_logins.length} accounts linked. Each has its own chats in tjena.',
+                  style: t.textTheme.bodySmall),
             ),
+          for (final l in _logins) _LoginCard(login: l, onLogout: () => _logout(l['id'] as String)),
           if (_code != null) ...[
             const SizedBox(height: 16),
             Text('Your pairing code', style: t.textTheme.titleMedium),
@@ -231,7 +246,24 @@ class _WhatsAppScreenState extends State<WhatsAppScreen> {
             const Center(child: CircularProgressIndicator()),
             TextButton(onPressed: _cancel, child: const Text('Cancel')),
           ] else ...[
-            if (_logins.isEmpty) ...[
+            if (_logins.isNotEmpty && !_showAdd) ...[
+              const SizedBox(height: 8),
+              OutlinedButton.icon(
+                onPressed: () => setState(() => _showAdd = true),
+                icon: const Icon(Icons.add),
+                label: const Text('Add another WhatsApp account'),
+              ),
+            ],
+            if (_logins.isEmpty || _showAdd) ...[
+              if (_showAdd) ...[
+                const SizedBox(height: 16),
+                Row(children: [
+                  Expanded(child: Text('Add another account', style: t.textTheme.titleLarge)),
+                  IconButton(onPressed: () => setState(() => _showAdd = false), icon: const Icon(Icons.close)),
+                ]),
+                const Text('Link a second WhatsApp number (e.g. a work phone). Its chats appear separately in tjena.'),
+                const SizedBox(height: 12),
+              ],
               const WarningCard(
                 icon: Icons.info_outline,
                 title: 'Ban risk',
@@ -257,6 +289,34 @@ class _WhatsAppScreenState extends State<WhatsAppScreen> {
           ],
           if (_error != null) ...[const SizedBox(height: 12), ErrorText(_error!)],
         ],
+      ),
+    );
+  }
+}
+
+class _LoginCard extends StatelessWidget {
+  final Map<String, dynamic> login;
+  final VoidCallback onLogout;
+  const _LoginCard({required this.login, required this.onLogout});
+
+  @override
+  Widget build(BuildContext context) {
+    final profile = (login['profile'] as Map?)?.cast<String, dynamic>() ?? {};
+    final state = ((login['state'] as Map?)?['state_event'] ?? '').toString();
+    final ok = state == 'CONNECTED';
+    final phone = profile['phone'] as String?;
+    final name = profile['name'] as String? ?? login['name'] as String?;
+    return Card(
+      child: ListTile(
+        leading: Icon(
+          ok ? Icons.check_circle : Icons.error_outline,
+          color: ok ? Colors.green : (state == 'CONNECTING' || state == 'BACKFILLING' ? Colors.orange : Colors.red),
+        ),
+        title: Text(name ?? phone ?? '${login['id']}'),
+        subtitle: Text([if (phone != null && phone != name) phone, state.toLowerCase().replaceAll('_', ' ')]
+            .where((s) => s.isNotEmpty)
+            .join(' · ')),
+        trailing: IconButton(tooltip: 'Log out', icon: const Icon(Icons.logout), onPressed: onLogout),
       ),
     );
   }

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import 'package:flutter_foreground_task/flutter_foreground_task.dart';
-
+import 'package:fluffychat/config/setting_keys.dart';
 import 'package:fluffychat/utils/platform_infos.dart';
+import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:matrix/matrix.dart';
 import 'package:tjena_bridge/tjena_bridge.dart';
 
@@ -117,8 +117,17 @@ class BridgeKeepAlive {
 
   /// Start the service if any local-bridge account is linked, otherwise stop it.
   /// Idempotent — safe to call on app start and on every bridge state change.
+  ///
+  /// Also stops it when the built-in bridge is turned off, or when the user
+  /// turned the background service off (the bridge then only stays connected
+  /// while the app is open).
   static Future<void> refresh() async {
     if (!PlatformInfos.isAndroid) return;
+    if (!AppSettings.localBridgesEnabled.value ||
+        !AppSettings.localBridgeBackgroundService.value) {
+      await _stop();
+      return;
+    }
     var anyLinked = false;
     var anyConnected = false;
     try {
@@ -147,9 +156,13 @@ class BridgeKeepAlive {
     );
   }
 
-  /// Force-start the service (used during pairing, before an account is linked).
-  static Future<void> start() async {
+  /// Start the service. [force] is used during pairing (before an account is
+  /// linked, and even if the background service is turned off): Android would
+  /// otherwise kill the connection while the user types the code in WhatsApp.
+  /// [refresh] stops it again afterwards if it isn't wanted.
+  static Future<void> start({bool force = false}) async {
     if (!PlatformInfos.isAndroid) return;
+    if (!force && !AppSettings.localBridgeBackgroundService.value) return;
     if (await isRunning) return;
 
     // Android 13+ suppresses the notification without this, and a foreground

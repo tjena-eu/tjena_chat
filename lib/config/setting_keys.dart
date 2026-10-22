@@ -58,6 +58,17 @@ enum AppSettings<T> {
   // Off means the viewer shows a tap-to-load placeholder instead.
   storiesAutoDownloadMedia<bool>('chat.fluffy.stories_auto_download', true),
   experimentalVoip<bool>('chat.fluffy.experimental_voip', true),
+  // The old built-in (on-device) WhatsApp/Signal bridge. Being phased out in
+  // favour of the personal bridge (tjena Bridge app), so it is an
+  // experimental opt-in. Existing users who had an account linked are opted
+  // in once by LocalBridgeControl.migrate.
+  localBridgesEnabled<bool>('eu.tjena.local_bridges_enabled', false),
+  // Whether the built-in bridge keeps a foreground service (persistent
+  // notification) to stay connected while the app is closed.
+  localBridgeBackgroundService<bool>(
+    'eu.tjena.local_bridge_background_service',
+    true,
+  ),
   shareKeysWith<String>('chat.fluffy.share_keys_with_2', 'all'),
   noEncryptionWarningShown<bool>(
     'chat.fluffy.no_encryption_warning_shown',

@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../native.dart';
+import 'security_screen.dart';
 import 'widgets.dart';
 
 /// Screen 3: is everything running?
@@ -57,11 +58,20 @@ class _StatusScreenState extends State<StatusScreen> {
       });
       return;
     }
-    final l = logins.first as Map<String, dynamic>;
-    final st = ((l['state'] as Map?)?['state_event'] ?? l['state_event'] ?? '?').toString();
+    Health health(String st) =>
+        st == 'CONNECTED' ? Health.ok : (st == 'CONNECTING' || st == 'BACKFILLING' ? Health.warn : Health.bad);
+    final parts = <String>[];
+    var worst = Health.ok;
+    for (final raw in logins) {
+      final l = (raw as Map).cast<String, dynamic>();
+      final st = ((l['state'] as Map?)?['state_event'] ?? l['state_event'] ?? '?').toString();
+      parts.add('${l['name'] ?? l['id']}: $st');
+      final h = health(st);
+      if (h.index > worst.index) worst = h;
+    }
     setState(() {
-      _wa = '${l['name'] ?? l['id']}: $st';
-      _waHealth = st == 'CONNECTED' ? Health.ok : (st == 'CONNECTING' || st == 'BACKFILLING' ? Health.warn : Health.bad);
+      _wa = parts.join('\n');
+      _waHealth = worst;
     });
   }
 
@@ -111,6 +121,17 @@ class _StatusScreenState extends State<StatusScreen> {
           ),
           StatusRow('WhatsApp', _wa, _waHealth),
           StatusRow('Last event from tjena', ago(s.lastEvent), s.lastEvent == null ? Health.unknown : Health.ok),
+          ListTile(
+            dense: true,
+            leading: const Icon(Icons.lock, color: Colors.green, size: 16),
+            title: const Text('Encryption'),
+            subtitle: const Text('Required on both sides'),
+            trailing: TextButton(
+              onPressed: () => Navigator.of(context)
+                  .push(MaterialPageRoute(builder: (_) => SecurityScreen(state: s))),
+              child: const Text('View keys'),
+            ),
+          ),
           const SectionTitle('This phone'),
           StatusRow(
             'Battery optimisation',

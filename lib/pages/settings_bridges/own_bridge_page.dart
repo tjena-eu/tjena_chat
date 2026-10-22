@@ -10,6 +10,7 @@ import 'package:pretty_qr_code/pretty_qr_code.dart';
 
 import '../../utils/personal_bridge.dart';
 import '../../widgets/matrix.dart';
+import 'bridge_security_card.dart';
 
 /// Settings → Bridges → WhatsApp → "Which bridge": the shared tjena server
 /// bridge or the user's own bridge running in the tjena Bridge app at home.
@@ -381,6 +382,16 @@ class _OwnBridgePageState extends State<OwnBridgePage> {
                 label: const Text('Pair a new bridge phone'),
               ),
             ]),
+            const SizedBox(height: 8),
+            Card(
+              child: ExpansionTile(
+                leading: const Icon(Icons.shield_outlined),
+                title: const Text('Security'),
+                subtitle: const Text('Encryption and keys to compare with the bridge app'),
+                childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                children: [BridgeSecurityCard(client: client, bot: st.botMxid)],
+              ),
+            ),
             const SizedBox(height: 16),
             TextButton.icon(
               style: TextButton.styleFrom(foregroundColor: theme.colorScheme.error),

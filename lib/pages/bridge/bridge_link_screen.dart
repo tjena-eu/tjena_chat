@@ -92,7 +92,7 @@ class _BridgeLinkScreenState extends State<BridgeLinkScreen> {
     // Shared keep-alive service — force-start it for pairing; once an account is
     // linked it stays running (managed by BridgeKeepAlive) so messages keep
     // arriving in the background.
-    await BridgeKeepAlive.start();
+    await BridgeKeepAlive.start(force: true);
     _serviceRunning = true;
   }
 

@@ -3,6 +3,7 @@
 
 import 'dart:async';
 
+import 'package:fluffychat/utils/local_bridge_control.dart';
 import 'package:fluffychat/utils/wa_matrix_bridge.dart';
 import 'package:fluffychat/widgets/matrix.dart';
 import 'package:flutter/material.dart';
@@ -46,12 +47,12 @@ class _SettingsDebugState extends State<SettingsDebug> {
     final client = Matrix.of(context).client;
     final dms = client.rooms.where((r) => !r.isSpace && r.isDirectChat).toList()
       ..addAll(
-        client.rooms
-            .where((r) => WaMatrixBridge.instance.isWaRoom(r.id))
-            .where((r) {
-          final state = r.getState('org.tjena.bridge.local');
-          return state?.content['is_dm'] as bool? ?? false;
-        }),
+        client.rooms.where((r) => WaMatrixBridge.instance.isWaRoom(r.id)).where(
+          (r) {
+            final state = r.getState('org.tjena.bridge.local');
+            return state?.content['is_dm'] as bool? ?? false;
+          },
+        ),
       );
     final unique = {for (final r in dms) r.id: r}.values.toList();
     final confirmed = await _confirm(
@@ -92,7 +93,59 @@ class _SettingsDebugState extends State<SettingsDebug> {
     await _deleteRooms(selected);
   }
 
-  Future<bool> _confirm(String title, String body) async {
+  Future<void> _repairWhatsApp() async {
+    final bridgeOn = LocalBridgeControl.enabled;
+    final confirmed = await _confirm(
+      'Clean up WhatsApp chats?',
+      bridgeOn
+          ? 'Removes WhatsApp chats and spaces that keep coming back after you '
+                'deleted them, and those of accounts you removed. Chats of linked '
+                'accounts stay.'
+          : 'The built-in bridge is off, so this removes all built-in WhatsApp '
+                'chats and spaces from this device.',
+      action: 'Clean up',
+    );
+    if (!confirmed || !mounted) return;
+    final client = Matrix.of(context).client;
+    setState(() => _busy = true);
+    Map<String, int>? r;
+    Object? error;
+    try {
+      r = await WaMatrixBridge.instance.repairRooms(
+        client,
+        bridgeEnabled: bridgeOn,
+      );
+    } catch (e) {
+      error = e;
+    }
+    if (!mounted) return;
+    setState(() => _busy = false);
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('WhatsApp cleanup'),
+        content: Text(
+          error != null
+              ? 'Failed: $error'
+              : 'Removed ${r!['chats']} chats and ${r['spaces']} spaces.\n'
+                    'Fixed ${r['mappings']} stale room links and '
+                    '${r['space_entries']} space entries.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<bool> _confirm(
+    String title,
+    String body, {
+    String action = 'Delete',
+  }) async {
     if (!mounted) return false;
     final result = await showDialog<bool>(
       context: context,
@@ -107,7 +160,7 @@ class _SettingsDebugState extends State<SettingsDebug> {
           FilledButton(
             style: FilledButton.styleFrom(backgroundColor: Colors.redAccent),
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Delete'),
+            child: Text(action),
           ),
         ],
       ),
@@ -172,6 +225,22 @@ class _SettingsDebugState extends State<SettingsDebug> {
                   ),
                 ),
                 const SizedBox(height: 24),
+                _sectionLabel(theme, 'WHATSAPP (BUILT-IN BRIDGE)'),
+                const SizedBox(height: 8),
+                Card(
+                  margin: EdgeInsets.zero,
+                  child: ListTile(
+                    leading: const Icon(Icons.cleaning_services_outlined),
+                    title: const Text('Fix chats that keep coming back'),
+                    subtitle: const Text(
+                      'Removes deleted WhatsApp chats and spaces that reappear, '
+                      'and leftovers of removed accounts',
+                    ),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: _repairWhatsApp,
+                  ),
+                ),
+                const SizedBox(height: 24),
                 _sectionLabel(theme, 'ENCRYPTION / KEY BACKUP'),
                 const SizedBox(height: 8),
                 Card(
@@ -214,8 +283,9 @@ class _SettingsDebugState extends State<SettingsDebug> {
                   child: Text(
                     'Matrix rooms: you leave the room on the server; the room stays '
                     'in your account and can be rejoined.\n\n'
-                    'WhatsApp rooms: removed from this device only; they reappear '
-                    'when new messages arrive.',
+                    'WhatsApp rooms: removed from this device only; a chat comes back '
+                    'when a new message arrives. Leaving a WhatsApp space hides it '
+                    'until the account is removed.',
                     style: theme.textTheme.bodySmall?.copyWith(
                       color: theme.colorScheme.onSurfaceVariant,
                     ),
@@ -227,12 +297,12 @@ class _SettingsDebugState extends State<SettingsDebug> {
   }
 
   Widget _sectionLabel(ThemeData theme, String text) => Text(
-        text,
-        style: theme.textTheme.labelSmall?.copyWith(
-          color: theme.colorScheme.onSurfaceVariant,
-          letterSpacing: 1.2,
-        ),
-      );
+    text,
+    style: theme.textTheme.labelSmall?.copyWith(
+      color: theme.colorScheme.onSurfaceVariant,
+      letterSpacing: 1.2,
+    ),
+  );
 }
 
 class _RoomPickerDialog extends StatefulWidget {
@@ -295,11 +365,9 @@ class _RoomPickerDialogState extends State<_RoomPickerDialog> {
           onPressed: _selected.isEmpty
               ? null
               : () => Navigator.pop(
-                    context,
-                    widget.rooms
-                        .where((r) => _selected.contains(r.id))
-                        .toList(),
-                  ),
+                  context,
+                  widget.rooms.where((r) => _selected.contains(r.id)).toList(),
+                ),
           child: Text(
             _selected.isEmpty ? 'Delete' : 'Delete (${_selected.length})',
           ),

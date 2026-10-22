@@ -328,14 +328,54 @@ class PersonalBridgeMonitor {
   final Client client;
   final status = ValueNotifier<OwnBridgeStatus?>(null);
   Timer? _timer;
+  // Cancelled when the monitor is replaced (start with another client).
+  // ignore: cancel_subscriptions
+  StreamSubscription<SyncUpdate>? _syncSub;
   bool _notifiedThisOutage = false;
+
+  /// Reasons the bridges use when they remove you from a chat they delete
+  /// (e.g. after you log a WhatsApp account out).
+  static const _portalDeletedReasons = {'Deleting portal', 'Logged out of bridge'};
+
+  /// When a WhatsApp bridge deletes a chat or space (logout cleanup), forget
+  /// it so it doesn't linger in the archive.
+  Future<void> _forgetDeletedPortals(SyncUpdate sync) async {
+    final left = sync.rooms?.leave;
+    if (left == null || left.isEmpty) return;
+    final bots = {
+      WhatsAppBridgeConfig.serverBot(client),
+      ?WhatsAppBridgeConfig.of(client).ownBot,
+    };
+    for (final entry in left.entries) {
+      final events = [...?entry.value.state, ...?entry.value.timeline?.events];
+      final removed = events.any(
+        (e) =>
+            e.type == EventTypes.RoomMember &&
+            e.stateKey == client.userID &&
+            bots.contains(e.senderId) &&
+            e.content['membership'] == 'leave' &&
+            _portalDeletedReasons.contains(e.content['reason']),
+      );
+      if (!removed) continue;
+      try {
+        await client.forgetRoom(entry.key);
+        await client.database.forgetRoom(entry.key);
+        client.archivedRooms.removeWhere((a) => a.room.id == entry.key);
+        Logs().i('[PersonalBridge] forgot chat ${entry.key} deleted by the bridge');
+      } catch (e) {
+        Logs().w('[PersonalBridge] could not forget ${entry.key}', e);
+      }
+    }
+  }
 
   PersonalBridgeMonitor._(this.client);
 
   static PersonalBridgeMonitor start(Client client) {
     if (_instance?.client == client) return _instance!;
     _instance?._timer?.cancel();
+    _instance?._syncSub?.cancel();
     final m = PersonalBridgeMonitor._(client);
+    m._syncSub = client.onSync.stream.listen(m._forgetDeletedPortals);
     m._timer = Timer.periodic(const Duration(minutes: 5), (_) => m.check());
     Future.delayed(const Duration(seconds: 30), m.check);
     _instance = m;

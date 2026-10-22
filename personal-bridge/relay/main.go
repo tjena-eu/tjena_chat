@@ -40,13 +40,14 @@ import (
 const localIDBase = int64(1) << 40
 
 type Config struct {
-	Listen       string `json:"listen"`        // 127.0.0.1:port
-	Upstream     string `json:"upstream"`      // https://wap.tjena.eu
-	ASToken      string `json:"as_token"`      // bridge's as_token (from the gateway)
-	APISecret    string `json:"api_secret"`    // protects /relay/* for the app
-	ProvSecret   string `json:"prov_secret"`   // bridge provisioning.shared_secret
-	Owner        string `json:"owner"`         // owner MXID, used as user_id for provisioning
-	StatusFile   string `json:"status_file"`   // optional: JSON status written here on change
+	Listen     string `json:"listen"`      // 127.0.0.1:port
+	Upstream   string `json:"upstream"`    // https://wap.tjena.eu
+	ASToken    string `json:"as_token"`    // bridge's as_token (from the gateway)
+	APISecret  string `json:"api_secret"`  // protects /relay/* for the app
+	ProvSecret string `json:"prov_secret"` // bridge provisioning.shared_secret
+	Owner      string `json:"owner"`       // owner MXID, used as user_id for provisioning
+	StatusFile string `json:"status_file"` // optional: JSON status written here on change
+	KeysFile   string `json:"keys_file"`   // optional: public keys the bridge uploaded (security screen)
 }
 
 type frame struct {
@@ -74,6 +75,7 @@ type Relay struct {
 	lastEvent     time.Time
 	lastHTTPOK    bool
 	writeMu       sync.Mutex
+	keysMu        sync.Mutex
 
 	nextID  atomic.Int64
 	waitMu  sync.Mutex
@@ -391,7 +393,7 @@ func (r *Relay) routes() http.Handler {
 	mux.HandleFunc("GET /_matrix/client/unstable/fi.mau.as_sync", r.handleBridge)
 	// Everything else the bridge sends (client API, media) goes to the gateway,
 	// which swaps the bridge token for the real one.
-	mux.Handle("/_matrix/", r.httpProxy())
+	mux.Handle("/_matrix/", r.observeKeyUploads(r.httpProxy()))
 	api := func(h http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, req *http.Request) {
 			if r.cfg.APISecret == "" || bearer(req) != r.cfg.APISecret {
@@ -414,6 +416,14 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "bridge-config" {
 		if err := runBridgeConfig(os.Args[2:]); err != nil {
 			fmt.Fprintln(os.Stderr, "bridge-config:", err)
+			os.Exit(1)
+		}
+		return
+	}
+	// Subcommand: read-only key/trust summary for the app's Security screen.
+	if len(os.Args) > 1 && os.Args[1] == "security-info" {
+		if err := runSecurityInfo(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "security-info:", err)
 			os.Exit(1)
 		}
 		return

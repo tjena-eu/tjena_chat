@@ -120,6 +120,39 @@ class MainActivity : FlutterActivity() {
                 if (prefs.getBoolean("enabled", false)) BridgeService.restart(this)
                 true
             }
+            "getOptions" -> bg(result) { rt.options().toString() }
+            "setOptions" -> bg(result) {
+                val o = JSONObject(call.argument<String>("options")!!)
+                val status = o.optString("status_broadcast", "off")
+                require(status in setOf("off", "muted", "on")) { "invalid status_broadcast" }
+                rt.setOptions(o)
+                if (prefs.getBoolean("enabled", false)) BridgeService.restart(this)
+                true
+            }
+            "securityInfo" -> bg(result) { rt.securityInfo() }
+            "setNotificationPrefs" -> bg(result) {
+                val style = call.argument<String>("style") ?: "normal"
+                require(style == "normal" || style == "minimal") { "invalid style" }
+                prefs.edit()
+                    .putString(BridgeService.PREF_NOTIF_STYLE, style)
+                    .putBoolean(BridgeService.PREF_ALERTS, call.argument<Boolean>("alerts") ?: true)
+                    .apply()
+                // The status notification switches channel on the next start.
+                if (prefs.getBoolean("enabled", false)) BridgeService.restart(this)
+                true
+            }
+            "openNotificationSettings" -> {
+                val channel = call.argument<String>("channel")
+                val i = if (channel != null) {
+                    Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
+                        .putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
+                        .putExtra(Settings.EXTRA_CHANNEL_ID, channel)
+                } else {
+                    Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
+                }
+                startActivity(i)
+                result.success(true)
+            }
             "requestBatteryExemption" -> {
                 try {
                     startActivity(
@@ -230,6 +263,8 @@ class MainActivity : FlutterActivity() {
             .put("relay", rt.relayStatus())
             .put("battery_unrestricted", pm.isIgnoringBatteryOptimizations(packageName))
             .put("binaries_present", rt.bridgeBin.exists() && rt.relayBin.exists())
+            .put("notif_style", prefs.getString(BridgeService.PREF_NOTIF_STYLE, "normal"))
+            .put("notif_alerts", prefs.getBoolean(BridgeService.PREF_ALERTS, true))
         if (rt.bridgeBin.exists()) o.put("bridge_version", try { rt.bridgeVersion() } catch (e: Exception) { "?" })
         try {
             val s = rt.secrets.load()

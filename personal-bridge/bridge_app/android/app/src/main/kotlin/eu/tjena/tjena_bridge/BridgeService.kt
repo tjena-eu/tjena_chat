@@ -261,19 +261,75 @@ class BridgeService : Service() {
                 description = "Shows that the WhatsApp bridge is running"
             }
         )
+        // Android requires a notification while the service runs. MIN keeps it
+        // out of the status bar and folded at the bottom of the shade.
+        nm.createNotificationChannel(
+            NotificationChannel(CHANNEL_MIN, "Bridge status (minimal)", NotificationManager.IMPORTANCE_MIN).apply {
+                description = "Required while the bridge runs; shown as small as Android allows"
+                setShowBadge(false)
+            }
+        )
+        nm.createNotificationChannel(
+            NotificationChannel(CHANNEL_ALERTS, "Bridge problems", NotificationManager.IMPORTANCE_DEFAULT).apply {
+                description = "When the bridge stops or can't reach tjena for a while"
+            }
+        )
     }
+
+    private val prefs get() = getSharedPreferences(BridgeRuntime.PREFS, Context.MODE_PRIVATE)
 
     private fun buildNotification(text: String): Notification {
         val open = PendingIntent.getActivity(
             this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE
         )
-        return Notification.Builder(this, CHANNEL)
+        val minimal = prefs.getString(PREF_NOTIF_STYLE, "normal") == "minimal"
+        return Notification.Builder(this, if (minimal) CHANNEL_MIN else CHANNEL)
             .setSmallIcon(android.R.drawable.stat_notify_sync)
             .setContentTitle("tjena Bridge")
             .setContentText(text)
             .setContentIntent(open)
             .setOngoing(true)
+            .setShowWhen(false)
             .build()
+    }
+
+    private var alertShownFor: String? = null
+    private var upstreamDownSince = 0L
+
+    /** One alert per problem: bridge halted, or tjena unreachable for 10 minutes. */
+    private fun checkAlerts(st: org.json.JSONObject) {
+        if (!prefs.getBoolean(PREF_ALERTS, true)) return
+        val now = System.currentTimeMillis()
+        val up = st.optBoolean("upstream_connected")
+        upstreamDownSince = if (up || state != "running") 0L else if (upstreamDownSince == 0L) now else upstreamDownSince
+        val problem = when {
+            state == "halted" -> "The bridge stopped: ${stateDetail ?: ""}"
+            upstreamDownSince != 0L && now - upstreamDownSince > 10 * 60_000 ->
+                "The bridge can't reach tjena for 10 minutes. Check Wi-Fi on this phone."
+            else -> null
+        }
+        val nm = getSystemService(NotificationManager::class.java)
+        if (problem == null) {
+            if (alertShownFor != null) nm.cancel(ALERT_ID)
+            alertShownFor = null
+            return
+        }
+        if (alertShownFor == problem) return
+        alertShownFor = problem
+        val open = PendingIntent.getActivity(
+            this, 1, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE
+        )
+        nm.notify(
+            ALERT_ID,
+            Notification.Builder(this, CHANNEL_ALERTS)
+                .setSmallIcon(android.R.drawable.stat_notify_error)
+                .setContentTitle("tjena Bridge needs attention")
+                .setContentText(problem)
+                .setStyle(Notification.BigTextStyle().bigText(problem))
+                .setContentIntent(open)
+                .setAutoCancel(true)
+                .build()
+        )
     }
 
     private fun updateNotification() {
@@ -285,6 +341,7 @@ class BridgeService : Service() {
             else -> state
         }
         getSystemService(NotificationManager::class.java).notify(NOTIF_ID, buildNotification(text))
+        checkAlerts(st)
     }
 
     private fun setState(s: String, detail: String?) {
@@ -296,7 +353,12 @@ class BridgeService : Service() {
     companion object {
         const val TAG = "BridgeService"
         const val CHANNEL = "bridge"
+        const val CHANNEL_MIN = "bridge_min"
+        const val CHANNEL_ALERTS = "bridge_alerts"
         const val NOTIF_ID = 1
+        const val ALERT_ID = 2
+        const val PREF_NOTIF_STYLE = "notif_style"
+        const val PREF_ALERTS = "notif_alerts"
         const val ACTION_STOP = "eu.tjena.bridge.STOP"
         const val ACTION_RESTART = "eu.tjena.bridge.RESTART"
 

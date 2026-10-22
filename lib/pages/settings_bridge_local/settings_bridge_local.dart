@@ -3,7 +3,9 @@
 
 import 'dart:async';
 
+import 'package:fluffychat/config/setting_keys.dart';
 import 'package:fluffychat/utils/bridge_keepalive.dart';
+import 'package:fluffychat/utils/local_bridge_control.dart';
 import 'package:fluffychat/utils/platform_infos.dart';
 import 'package:fluffychat/utils/wa_matrix_bridge.dart';
 import 'package:fluffychat/widgets/matrix.dart';
@@ -285,31 +287,20 @@ class _SettingsBridgeLocalState extends State<SettingsBridgeLocal> {
   }
 
   Future<void> _unlink() async {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Unlink WhatsApp?'),
-        content: const Text(
-          'This disconnects WhatsApp on this device. Your WhatsApp account and '
-          'other linked devices are not affected. You can re-link any time.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            style: FilledButton.styleFrom(backgroundColor: Colors.redAccent),
-            child: const Text('Unlink'),
-          ),
-        ],
-      ),
+    final deleteChats = await confirmWaAccountRemoval(
+      context,
+      title: 'Unlink WhatsApp?',
+      text: 'This disconnects WhatsApp on this device. Your WhatsApp account '
+          'and other linked devices are not affected. You can re-link any time.',
+      action: 'Unlink',
+      deleteChatsDefault: false,
     );
-    if (ok != true || !mounted) return;
-    try {
-      await TjenaBridge.instance.logout(accountID: widget.accountId);
-    } catch (_) {}
+    if (deleteChats == null || !mounted) return;
+    await WaMatrixBridge.instance.unlinkAccount(
+      Matrix.of(context).client,
+      widget.accountId,
+      deleteChats: deleteChats,
+    );
     _refreshState();
   }
 
@@ -328,7 +319,7 @@ class _SettingsBridgeLocalState extends State<SettingsBridgeLocal> {
         children: [
           _ConnectionCard(state: _state),
           const SizedBox(height: 12),
-          const _BackgroundServiceCard(),
+          const LocalBridgeBackgroundCard(),
           if (_histSeen) ...[
             const SizedBox(height: 12),
             Builder(builder: (context) {
@@ -527,14 +518,17 @@ class _DaysFieldState extends State<_DaysField> {
 /// notification) is actually running. Without it the OS kills the bridge as
 /// soon as the app is backgrounded, and the failure is otherwise completely
 /// invisible — the notification simply never appears.
-class _BackgroundServiceCard extends StatefulWidget {
-  const _BackgroundServiceCard();
+class LocalBridgeBackgroundCard extends StatefulWidget {
+  const LocalBridgeBackgroundCard({super.key});
 
   @override
-  State<_BackgroundServiceCard> createState() => _BackgroundServiceCardState();
+  State<LocalBridgeBackgroundCard> createState() => _LocalBridgeBackgroundCardState();
 }
 
-class _BackgroundServiceCardState extends State<_BackgroundServiceCard> {
+/// On/off switch for the keep-alive foreground service. Off means no
+/// persistent notification, but WhatsApp/Signal only stay connected while the
+/// app is open.
+class _LocalBridgeBackgroundCardState extends State<LocalBridgeBackgroundCard> {
   bool? _running;
   bool _busy = false;
 
@@ -549,68 +543,65 @@ class _BackgroundServiceCardState extends State<_BackgroundServiceCard> {
     if (mounted) setState(() => _running = running);
   }
 
-  Future<void> _enable() async {
+  Future<void> _set(bool on) async {
     setState(() => _busy = true);
-    final granted = await BridgeKeepAlive.ensureNotificationPermission();
-    if (granted) await BridgeKeepAlive.start();
-    if (!mounted) return;
-    setState(() => _busy = false);
+    if (on) {
+      final granted = await BridgeKeepAlive.ensureNotificationPermission();
+      await LocalBridgeControl.setBackgroundService(true);
+      if (!granted && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              BridgeKeepAlive.lastError ??
+                  'Allow notifications for Tjena in Android settings, '
+                      'otherwise the background service cannot run.',
+            ),
+          ),
+        );
+      }
+    } else {
+      await LocalBridgeControl.setBackgroundService(false);
+    }
     await _check();
-    if (!mounted) return;
-    final running = _running == true;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          running
-              ? 'Background service running.'
-              : BridgeKeepAlive.lastError ??
-                    'Could not start the background service. Allow '
-                        'notifications for Tjena in Android settings.',
-        ),
-      ),
-    );
+    if (mounted) setState(() => _busy = false);
   }
 
   @override
   Widget build(BuildContext context) {
     if (!PlatformInfos.isAndroid) return const SizedBox.shrink();
     final theme = Theme.of(context);
+    final wanted = AppSettings.localBridgeBackgroundService.value;
     final running = _running;
+    final String subtitle;
+    if (!wanted) {
+      subtitle = 'Off: no persistent notification, but WhatsApp and Signal '
+          'only stay connected while Tjena is open.';
+    } else if (running == true) {
+      subtitle = 'Tjena stays connected while closed. Android requires the '
+          'persistent notification for this.';
+    } else if (running == false) {
+      subtitle = BridgeKeepAlive.lastError ??
+          'Not running yet. It starts once an account is linked. If it '
+              'doesn\'t, allow notifications for Tjena.';
+    } else {
+      subtitle = 'Checking…';
+    }
     return Card(
       margin: EdgeInsets.zero,
-      child: ListTile(
-        leading: Icon(
-          running == true
+      child: SwitchListTile(
+        secondary: Icon(
+          wanted && running == true
               ? Icons.notifications_active_outlined
               : Icons.notifications_off_outlined,
-          color: running == true
-              ? theme.colorScheme.primary
-              : theme.colorScheme.error,
+          color: wanted && running != true
+              ? theme.colorScheme.error
+              : theme.colorScheme.primary,
         ),
-        title: Text(
-          running == null
-              ? 'Checking background service…'
-              : running
-              ? 'Background service running'
-              : 'Background service not running',
-        ),
-        subtitle: Text(
-          running == true
-              ? 'Tjena keeps WhatsApp connected while closed. The persistent '
-                    'notification is required by Android and cannot be hidden.'
-              : 'WhatsApp messages will only arrive while the app is open. '
-                    'Allow notifications to fix this.',
-        ),
+        title: const Text('Run in background'),
+        subtitle: Text(subtitle),
         isThreeLine: true,
-        trailing: running == true
-            ? null
-            : _busy
-            ? const SizedBox(
-                width: 20,
-                height: 20,
-                child: CircularProgressIndicator(strokeWidth: 2.5),
-              )
-            : FilledButton(onPressed: _enable, child: const Text('Enable')),
+        value: wanted,
+        onChanged: _busy ? null : _set,
       ),
     );
   }
@@ -899,4 +890,51 @@ class _ProxySectionState extends State<_ProxySection> {
       ],
     );
   }
+}
+
+/// Confirm dialog for removing/unlinking a built-in WhatsApp account, with the
+/// choice to also remove its chats and space from tjena. Returns null when
+/// cancelled, else whether to delete the chats.
+Future<bool?> confirmWaAccountRemoval(
+  BuildContext context, {
+  required String title,
+  required String text,
+  required String action,
+  required bool deleteChatsDefault,
+}) {
+  var deleteChats = deleteChatsDefault;
+  return showDialog<bool?>(
+    context: context,
+    builder: (ctx) => StatefulBuilder(
+      builder: (ctx, setState) => AlertDialog(
+        title: Text(title),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(text),
+            const SizedBox(height: 8),
+            CheckboxListTile(
+              contentPadding: EdgeInsets.zero,
+              value: deleteChats,
+              onChanged: (v) => setState(() => deleteChats = v ?? false),
+              title: const Text('Also remove its chats and space from tjena'),
+              subtitle: const Text('WhatsApp itself keeps all messages.'),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.redAccent),
+            onPressed: () => Navigator.pop(ctx, deleteChats),
+            child: Text(action),
+          ),
+        ],
+      ),
+    ),
+  );
 }

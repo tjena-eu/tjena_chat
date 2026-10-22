@@ -81,6 +81,12 @@ class WaMatrixBridge {
   final _senderNames = <String, String>{};
 
   StreamSubscription<BridgeEvent>? _sub;
+  // ignore: cancel_subscriptions
+  StreamSubscription<SyncUpdate>? _leaveSub;
+
+  // Accounts whose space you left: not recreated until the account is removed.
+  final _hiddenSpaces = <String>{};
+  static const _hiddenSpacesKey = 'wa_bridge_hidden_spaces';
 
   // Serializes all handleSync injections. The SDK's handleSync is NOT internally
   // serialized, so concurrent unawaited calls interleave at every await and the
@@ -233,6 +239,7 @@ class WaMatrixBridge {
     // ② Supplement from client.rooms (covers first-ever install + space rooms).
     for (final room in client.rooms) {
       if (room.id.startsWith('!wa_space')) continue; // space rooms aren't chats
+      if (room.membership != Membership.join) continue; // left = deleted
       final st = room.getState(_bridgeStateType)?.content;
       var waId = st?['wa_room_id'] as String?;
       final accountId = (st?['account_id'] as String?) ?? _defaultAccount;
@@ -283,6 +290,11 @@ class WaMatrixBridge {
     }
     _customNames.forEach(_injectName);
 
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      _hiddenSpaces.addAll(prefs.getStringList(_hiddenSpacesKey) ?? const []);
+    } catch (_) {}
+
     // ④ Ensure each account's WhatsApp space exists and (re-)parents all of its
     // chats. This repairs chats that were created without a space (e.g. via the
     // picker before the account had connected). _initSpace adds every known
@@ -290,6 +302,20 @@ class WaMatrixBridge {
     for (final accountId in _matrixToAccount.values.toSet()) {
       _ensureSpace(accountId);
     }
+
+    // Leaving a WhatsApp chat or space in the UI only marks it "left" locally.
+    // Remove it completely, otherwise the next name/space update re-joins it.
+    _leaveSub?.cancel();
+    _leaveSub = client.onSync.stream.listen((sync) {
+      final left = sync.rooms?.leave?.keys.where(
+        (id) => id.startsWith('!wa_') && id.endsWith(':local'),
+      );
+      if (left == null || left.isEmpty) return;
+      for (final id in left.toList()) {
+        // ignore: unawaited_futures
+        _onLeft(client, id);
+      }
+    });
 
     _sub?.cancel();
     _sub = TjenaBridge.instance.events.listen(
@@ -320,6 +346,7 @@ class WaMatrixBridge {
     var repaired = 0;
     for (final room in client.rooms) {
       if (room.id.startsWith('!wa_space')) continue;
+      if (room.membership != Membership.join) continue;
       final st = room.getState(_bridgeStateType)?.content;
       var waId = st?['wa_room_id'] as String?;
       final accountId =
@@ -1447,8 +1474,13 @@ class WaMatrixBridge {
 
   /// Remove a WA virtual room from all in-memory and DB state.
   Future<void> removeRoom(Client client, String matrixRoomId) async {
-    final waId = _matrixToWa.remove(matrixRoomId);
-    if (waId != null) _waToMatrix.remove(waId);
+    _matrixToWa.remove(matrixRoomId);
+    _matrixToAccount.remove(matrixRoomId);
+    // Drop every key pointing at this room: the account-prefixed key and any
+    // phone-number/LID alias. A leftover key made the room come back.
+    _waToMatrix.removeWhere((_, v) => v == matrixRoomId);
+    _pendingMediaEvents.remove(matrixRoomId);
+    if (_customNames.remove(matrixRoomId) != null) await _saveCustomNames();
     await _saveRoomMappings();
     try {
       await client.database.forgetRoom(matrixRoomId);
@@ -1496,10 +1528,18 @@ class WaMatrixBridge {
   /// the rooms. Used by the per-account "delete all WA rooms" action so it only
   /// affects the account whose settings are open.
   Future<void> clearAccountRooms(Client client, String accountId) async {
-    final mids = _matrixToAccount.entries
-        .where((e) => e.value == accountId)
-        .map((e) => e.key)
-        .toList();
+    // Rooms from the mapping, plus any room whose bridge state says it belongs
+    // to this account (the mapping can miss rooms, e.g. after a crash).
+    final mids = <String>{
+      ..._matrixToAccount.entries
+          .where((e) => e.value == accountId)
+          .map((e) => e.key),
+      for (final r in [
+        ...client.rooms,
+        ...client.archivedRooms.map((a) => a.room),
+      ])
+        if (!r.id.startsWith('!wa_space') && _belongsTo(r, accountId)) r.id,
+    };
     for (final mid in mids) {
       final jid = _matrixToWa[mid];
       try {
@@ -1511,14 +1551,277 @@ class WaMatrixBridge {
       _matrixToAccount.remove(mid);
       if (jid != null) _waToMatrix.remove(_key(accountId, jid));
     }
-    final sid = _spaceIds.remove(accountId);
-    if (sid != null) {
-      try {
-        await client.database.forgetRoom(sid);
-      } catch (_) {}
-      client.rooms.removeWhere((r) => r.id == sid);
-    }
+    // The space: fall back to its fixed id if it wasn't initialised this run.
+    final sid = _spaceIds.remove(accountId) ?? _spaceRoomIdFor(accountId);
+    try {
+      await client.database.forgetRoom(sid);
+    } catch (_) {}
+    client.rooms.removeWhere((r) => r.id == sid);
+    client.archivedRooms.removeWhere((r) => r.room.id == sid);
     await _saveRoomMappings();
+    await _setSpaceHidden(accountId, false);
+    Logs().i(
+      '[WaBridge] removed ${mids.length} chats and the space of $accountId',
+    );
+    // Let the chat list rebuild without the removed rooms.
+    client.onSync.add(SyncUpdate(nextBatch: client.prevBatch ?? ''));
+  }
+
+  Future<void> _setSpaceHidden(String accountId, bool hidden) async {
+    final changed = hidden
+        ? _hiddenSpaces.add(accountId)
+        : _hiddenSpaces.remove(accountId);
+    if (!changed) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setStringList(_hiddenSpacesKey, _hiddenSpaces.toList());
+    } catch (_) {}
+  }
+
+  static String? _accountOfSpace(String roomId) {
+    if (roomId == '!wa_space_local:local') return _defaultAccount;
+    const pre = '!wa_space_', post = '_local:local';
+    if (roomId.startsWith(pre) && roomId.endsWith(post)) {
+      return roomId.substring(pre.length, roomId.length - post.length);
+    }
+    return null;
+  }
+
+  String _accountOfRoom(Room r) =>
+      (r.getState(_bridgeStateType)?.content['account_id'] as String?) ??
+      _matrixToAccount[r.id] ??
+      _defaultAccount;
+
+  Future<void> _forgetLocal(Client client, String roomId) async {
+    try {
+      await client.database.forgetRoom(roomId);
+    } catch (_) {}
+    client.rooms.removeWhere((r) => r.id == roomId);
+    client.archivedRooms.removeWhere((r) => r.room.id == roomId);
+  }
+
+  /// A WhatsApp chat or space was left in the UI: delete it for good.
+  /// A left space stays hidden; its chats are kept.
+  Future<void> _onLeft(Client client, String roomId) async {
+    final spaceAcc = _accountOfSpace(roomId);
+    if (spaceAcc != null) {
+      _spaceIds.remove(spaceAcc);
+      await _setSpaceHidden(spaceAcc, true);
+      await _forgetLocal(client, roomId);
+    } else {
+      await removeRoom(client, roomId);
+    }
+    Logs().i('[WaBridge] left $roomId, removed it');
+  }
+
+  /// Debug repair for WhatsApp chats and spaces that keep coming back.
+  /// Removes: left/archived WhatsApp rooms still stored on this device; rooms
+  /// and spaces of accounts that no longer exist (all of them when the built-in
+  /// bridge is off); empty spaces; saved mappings to rooms that are gone; and
+  /// space entries pointing at deleted chats. Linked accounts' chats stay.
+  Future<Map<String, int>> repairRooms(
+    Client client, {
+    required bool bridgeEnabled,
+  }) async {
+    // Accounts that still exist. null = unknown, so nothing is removed for
+    // being orphaned.
+    Set<String>? live;
+    if (!bridgeEnabled) {
+      live = {};
+    } else {
+      try {
+        live = {
+          for (final a in await TjenaBridge.instance.listAccounts())
+            a['id'] as String,
+        };
+      } catch (e) {
+        Logs().w('[WaBridge] repair: could not list accounts: $e');
+      }
+    }
+
+    // Everything stored on this device, including left rooms not in memory.
+    final all = <String, Room>{};
+    try {
+      for (final r in await client.database.getRoomList(client)) {
+        all[r.id] = r;
+      }
+    } catch (e) {
+      Logs().w('[WaBridge] repair: could not read stored rooms: $e');
+    }
+    for (final r in [
+      ...client.rooms,
+      ...client.archivedRooms.map((a) => a.room),
+    ]) {
+      all[r.id] = r;
+    }
+    bool joined(String id) =>
+        client.getRoomById(id)?.membership == Membership.join;
+
+    var chats = 0, spaces = 0, mappings = 0, children = 0;
+    final keptByAccount = <String, int>{};
+
+    for (final r in all.values) {
+      if (!r.id.startsWith('!wa_') || !r.id.endsWith(':local')) continue;
+      if (_accountOfSpace(r.id) != null) continue;
+      final acc = _accountOfRoom(r);
+      if (!joined(r.id) || (live != null && !live.contains(acc))) {
+        await removeRoom(client, r.id);
+        await _forgetLocal(client, r.id);
+        chats++;
+      } else {
+        keptByAccount[acc] = (keptByAccount[acc] ?? 0) + 1;
+      }
+    }
+
+    // Mappings whose room no longer exists: messages would land in a nameless
+    // room. Without the mapping the next message creates the chat properly.
+    for (final mid in _matrixToWa.keys.toList()) {
+      if (joined(mid)) continue;
+      _matrixToWa.remove(mid);
+      _matrixToAccount.remove(mid);
+      _waToMatrix.removeWhere((_, v) => v == mid);
+      mappings++;
+    }
+    _waToMatrix.removeWhere((_, v) {
+      final gone = !joined(v);
+      if (gone) mappings++;
+      return gone;
+    });
+
+    for (final r in all.values) {
+      final acc = _accountOfSpace(r.id);
+      if (acc == null) continue;
+      final orphan = live != null && !live.contains(acc);
+      if (!joined(r.id) ||
+          orphan ||
+          _hiddenSpaces.contains(acc) ||
+          (keptByAccount[acc] ?? 0) == 0) {
+        _spaceIds.remove(acc);
+        await _forgetLocal(client, r.id);
+        if (orphan) await _setSpaceHidden(acc, false);
+        spaces++;
+        continue;
+      }
+      // Drop entries for chats that are gone.
+      final dead = [
+        for (final e
+            in r.states['m.space.child']?.entries ??
+                <MapEntry<String, StrippedStateEvent>>[])
+          if ((e.value.content['via'] as List?)?.isNotEmpty == true &&
+              !joined(e.key))
+            e.key,
+      ];
+      if (dead.isEmpty) continue;
+      children += dead.length;
+      final now = DateTime.now();
+      await _inject(
+        SyncUpdate(
+          nextBatch: client.prevBatch ?? '',
+          rooms: RoomsUpdate(
+            join: {
+              r.id: JoinedRoomUpdate(
+                state: [
+                  for (final id in dead)
+                    MatrixEvent(
+                      type: 'm.space.child',
+                      content: const {},
+                      senderId: client.userID!,
+                      eventId:
+                          '\$wa_spacechild_rm_${_safe(id)}_${now.millisecondsSinceEpoch}',
+                      originServerTs: now,
+                      stateKey: id,
+                    ),
+                ],
+              ),
+            },
+          ),
+        ),
+      );
+    }
+
+    await _saveRoomMappings();
+    client.onSync.add(SyncUpdate(nextBatch: client.prevBatch ?? ''));
+    final report = {
+      'chats': chats,
+      'spaces': spaces,
+      'mappings': mappings,
+      'space_entries': children,
+    };
+    Logs().w('[WaBridge] repair: $report');
+    return report;
+  }
+
+  /// Whether a WA virtual room belongs to [accountId]: by its bridge state,
+  /// else the mapping, else its room id (non-default accounts use the prefix
+  /// `!wa_<account>_`).
+  bool _belongsTo(Room r, String accountId) {
+    final st = r.getState(_bridgeStateType)?.content;
+    if (st != null) {
+      return ((st['account_id'] as String?) ?? _defaultAccount) == accountId;
+    }
+    final mapped = _matrixToAccount[r.id];
+    if (mapped != null) return mapped == accountId;
+    if (_waIdFromRoomId(r.id) == null) return false;
+    if (accountId != _defaultAccount) {
+      return r.id.startsWith('!wa_${accountId}_');
+    }
+    final others = {
+      ..._matrixToAccount.values,
+      ..._connectedPhones.keys,
+      ..._spaceIds.keys,
+    }..remove(_defaultAccount);
+    return !others.any((o) => r.id.startsWith('!wa_${o}_'));
+  }
+
+  /// Removes a WhatsApp account from the built-in bridge: logs it out, deletes
+  /// it on the native side and (with [deleteChats]) removes its chats, its
+  /// space and its history cache from tjena.
+  Future<void> removeAccount(
+    Client client,
+    String accountId, {
+    bool deleteChats = true,
+  }) async {
+    if (deleteChats) {
+      try {
+        await TjenaBridge.instance.clearCache(accountID: accountId);
+      } catch (e) {
+        Logs().w('[WaBridge] clearCache failed: $e');
+      }
+    }
+    try {
+      await TjenaBridge.instance.removeAccount(accountId);
+    } catch (e) {
+      Logs().w('[WaBridge] removeAccount failed: $e');
+    }
+    _forgetAccountState(accountId);
+    if (deleteChats) await clearAccountRooms(client, accountId);
+  }
+
+  /// Unlinks (logs out) an account but keeps it in the list.
+  Future<void> unlinkAccount(
+    Client client,
+    String accountId, {
+    bool deleteChats = false,
+  }) async {
+    try {
+      await TjenaBridge.instance.logout(accountID: accountId);
+    } catch (e) {
+      Logs().w('[WaBridge] logout failed: $e');
+    }
+    _forgetAccountState(accountId);
+    if (deleteChats) {
+      try {
+        await TjenaBridge.instance.clearCache(accountID: accountId);
+      } catch (_) {}
+      await clearAccountRooms(client, accountId);
+    }
+  }
+
+  void _forgetAccountState(String accountId) {
+    if (_connectedPhones.remove(accountId) != null) {
+      // ignore: unawaited_futures
+      _savePhones();
+    }
   }
 
   Future<void> clearAccountData(Client client, String accountId) async {
@@ -1799,7 +2102,9 @@ class WaMatrixBridge {
   /// Ensure this account's WhatsApp space exists so every WA chat can be parented
   /// to it, even before the phone number is known (the name is refined later).
   void _ensureSpace(String accountId) {
-    if (_spaceIds[accountId] != null) return;
+    if (_spaceIds[accountId] != null || _hiddenSpaces.contains(accountId)) {
+      return;
+    }
     _initSpace(accountId, _connectedPhones[accountId] ?? '');
   }
 
@@ -1808,6 +2113,7 @@ class WaMatrixBridge {
     if (client?.userID == null) return;
     final name = phone.isNotEmpty ? 'WA-local ($phone)' : 'WhatsApp';
     final spaceRoomId = _spaceRoomIdFor(accountId);
+    if (_hiddenSpaces.contains(accountId)) return;
 
     if (_spaceIds[accountId] != null) {
       _pushNameUpdate(accountId, spaceRoomId, name, isSpace: true);

@@ -54,6 +54,24 @@ class Native {
 
   static Future<void> setGatewayUrl(String url) => _ch.invokeMethod('setGatewayUrl', {'url': url});
 
+  static Future<Map<String, dynamic>> options() async =>
+      jsonDecode(await _ch.invokeMethod<String>('getOptions') ?? '{}') as Map<String, dynamic>;
+
+  /// Saves bridge options and restarts the bridge if it runs.
+  static Future<void> setOptions(Map<String, dynamic> options) =>
+      _ch.invokeMethod('setOptions', {'options': jsonEncode(options)});
+
+  /// Keys and trust as stored in the bridge's own database (read-only).
+  static Future<Map<String, dynamic>> securityInfo() async =>
+      jsonDecode(await _ch.invokeMethod<String>('securityInfo') ?? '{}') as Map<String, dynamic>;
+
+  static Future<void> setNotificationPrefs({required String style, required bool alerts}) =>
+      _ch.invokeMethod('setNotificationPrefs', {'style': style, 'alerts': alerts});
+
+  /// Opens Android's settings for one notification channel (or the whole app).
+  static Future<void> openNotificationSettings([String? channel]) =>
+      _ch.invokeMethod('openNotificationSettings', {'channel': channel});
+
   static Future<void> requestBatteryExemption() => _ch.invokeMethod('requestBatteryExemption');
 
   static Future<String> recentLog() async => await _ch.invokeMethod<String>('recentLog') ?? '';
@@ -109,6 +127,8 @@ class BridgeState {
   String get gatewayUrl => raw['gateway_url'] as String? ?? 'https://wap.tjena.eu';
   String? get homeserver => raw['homeserver'] as String?;
   List<String> get extraUsers => (raw['extra_users'] as List?)?.cast<String>() ?? [];
+  String get notifStyle => raw['notif_style'] as String? ?? 'normal';
+  bool get notifAlerts => raw['notif_alerts'] != false;
 
   Map<String, dynamic> get relay => (raw['relay'] as Map?)?.cast<String, dynamic>() ?? {};
   bool get bridgeConnected => relay['bridge_connected'] == true;

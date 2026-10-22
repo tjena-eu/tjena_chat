@@ -7,6 +7,7 @@ import 'package:async/async.dart';
 import 'package:fluffychat/config/setting_keys.dart';
 import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/utils/fluffy_share.dart';
+import 'package:fluffychat/utils/local_bridge_control.dart';
 import 'package:fluffychat/utils/platform_infos.dart';
 import 'package:fluffychat/widgets/avatar.dart';
 import 'package:fluffychat/widgets/matrix.dart';
@@ -199,72 +200,38 @@ class SettingsView extends StatelessWidget {
               onTap: () => context.go('/rooms/settings/identity-server'),
               tileColor:
                   activeRoute.startsWith('/rooms/settings/identity-server')
-                      ? theme.colorScheme.surfaceContainerHigh
-                      : null,
-            ),
-            Divider(color: theme.dividerColor),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 2),
-              child: Row(
-                children: [
-                  Icon(
-                    Icons.smartphone_outlined,
-                    size: 14,
-                    color: theme.colorScheme.primary,
-                  ),
-                  const SizedBox(width: 6),
-                  Text(
-                    'On-Device Bridges',
-                    style: theme.textTheme.labelMedium?.copyWith(
-                      color: theme.colorScheme.primary,
-                      fontWeight: FontWeight.w600,
-                      letterSpacing: 0.5,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            ListTile(
-              leading: const Icon(Icons.devices_outlined),
-              title: const Text('Local Bridges'),
-              subtitle: const Text('WhatsApp · Signal — run locally, no cloud'),
-              onTap: () => context.go('/rooms/settings/local-bridges'),
-              tileColor: activeRoute.startsWith('/rooms/settings/local-bridges') ||
-                      activeRoute.startsWith('/rooms/settings/bridge-local') ||
-                      activeRoute.startsWith('/rooms/settings/signal')
                   ? theme.colorScheme.surfaceContainerHigh
                   : null,
             ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 2),
-              child: Row(
-                children: [
-                  Icon(
-                    Icons.cloud_outlined,
-                    size: 14,
-                    color: theme.colorScheme.secondary,
-                  ),
-                  const SizedBox(width: 6),
-                  Text(
-                    'Homeserver Bridges',
-                    style: theme.textTheme.labelMedium?.copyWith(
-                      color: theme.colorScheme.secondary,
-                      fontWeight: FontWeight.w600,
-                      letterSpacing: 0.5,
-                    ),
-                  ),
-                ],
-              ),
-            ),
+            Divider(color: theme.dividerColor),
             ListTile(
               leading: const Icon(Icons.swap_horiz_outlined),
               title: const Text('Messaging Bridges'),
-              subtitle: const Text('WhatsApp · Signal via homeserver'),
+              subtitle: const Text(
+                'WhatsApp · Signal: server bridge or your own bridge',
+              ),
               onTap: () => context.go('/rooms/settings/bridges'),
               tileColor: activeRoute.startsWith('/rooms/settings/bridges')
                   ? theme.colorScheme.surfaceContainerHigh
                   : null,
             ),
+            // The old built-in bridge is an experimental opt-in now (turned on
+            // under Messaging Bridges → Experimental).
+            if (LocalBridgeControl.enabled)
+              ListTile(
+                leading: const Icon(Icons.science_outlined),
+                title: const Text('Built-in bridges (experimental)'),
+                subtitle: const Text('WhatsApp · Signal inside this app'),
+                onTap: () => context.go('/rooms/settings/local-bridges'),
+                tileColor:
+                    activeRoute.startsWith('/rooms/settings/local-bridges') ||
+                        activeRoute.startsWith(
+                          '/rooms/settings/bridge-local',
+                        ) ||
+                        activeRoute.startsWith('/rooms/settings/signal')
+                    ? theme.colorScheme.surfaceContainerHigh
+                    : null,
+              ),
             ListTile(
               leading: const Icon(Icons.archive_outlined),
               title: const Text('Local Backup'),
@@ -306,8 +273,7 @@ class SettingsView extends StatelessWidget {
               title: Text(L10n.of(context).about),
               subtitle: FutureBuilder<String>(
                 future: controller.versionFuture,
-                builder: (_, snapshot) =>
-                    Text(snapshot.data ?? '...'),
+                builder: (_, snapshot) => Text(snapshot.data ?? '...'),
               ),
               onTap: () => PlatformInfos.showDialog(context),
             ),

@@ -34,6 +34,111 @@ type Settings struct {
 	PickleKey  string   `json:"pickle_key"`  // encryption pickle key (kept in Android Keystore)
 	ExtraUsers []string `json:"extra_users"` // other MXIDs with "user" permission
 	LogLevel   string   `json:"log_level"`   // default "info" (no message content)
+	Options    Options  `json:"options"`     // user choices from the app's settings screen
+}
+
+// Options are the user-facing bridge settings. They map onto the bridge's
+// own config keys, so the bridge itself stays unmodified.
+type Options struct {
+	Backfill *BackfillOptions `json:"backfill,omitempty"` // nil = defaults below
+	// WhatsApp status updates (stories): "off" (default), "muted" or "on".
+	StatusBroadcast string `json:"status_broadcast,omitempty"`
+	// Remove a WhatsApp account's chats from tjena when you log it out
+	// (nil = yes). Its space is always removed.
+	DeleteChatsOnLogout *bool `json:"delete_chats_on_logout,omitempty"`
+}
+
+type BackfillOptions struct {
+	Enabled bool `json:"enabled"`
+	// Messages to load into a newly created chat.
+	MaxInitialMessages int `json:"max_initial_messages"`
+	// Messages missed while the bridge was offline, per chat.
+	MaxCatchupMessages int `json:"max_catchup_messages"`
+	// Chats to create right after linking WhatsApp (-1 = all). Others are
+	// created when a message arrives.
+	MaxInitialConversations int `json:"max_initial_conversations"`
+	// Ask the phone for up to a year of history instead of ~3 months when
+	// linking. Only applies when linking WhatsApp.
+	RequestFullSync bool `json:"request_full_sync"`
+	// Days of history to request with RequestFullSync (0 = WhatsApp default).
+	FullSyncDays int `json:"full_sync_days"`
+}
+
+// DefaultBackfill: recent history in the most recent chats, without
+// flooding tjena with hundreds of rooms after linking.
+var DefaultBackfill = BackfillOptions{
+	Enabled: true, MaxInitialMessages: 50, MaxCatchupMessages: 500, MaxInitialConversations: 25,
+}
+
+func clamp(v, lo, hi int) int { return max(lo, min(hi, v)) }
+
+// optionEdits turns Options into config edits.
+func (o Options) edits() ([]configEdit, error) {
+	bf := DefaultBackfill
+	if o.Backfill != nil {
+		bf = *o.Backfill
+	}
+	if bf.MaxInitialConversations < -1 {
+		return nil, errors.New("settings: max_initial_conversations must be -1 or more")
+	}
+	bf.MaxInitialMessages = clamp(bf.MaxInitialMessages, 0, 10000)
+	bf.MaxCatchupMessages = clamp(bf.MaxCatchupMessages, 0, 10000)
+	bf.FullSyncDays = clamp(bf.FullSyncDays, 0, 3650)
+	var days any // null = WhatsApp default
+	if bf.RequestFullSync && bf.FullSyncDays > 0 {
+		days = bf.FullSyncDays
+	}
+	statusOn, statusMuted := false, true
+	switch o.StatusBroadcast {
+	case "", "off":
+	case "muted":
+		statusOn = true
+	case "on":
+		statusOn, statusMuted = true, false
+	default:
+		return nil, fmt.Errorf("settings: status_broadcast must be off, muted or on, not %q", o.StatusBroadcast)
+	}
+	var statusTag any // null = no tag
+	if statusMuted {
+		statusTag = "m.lowpriority"
+	}
+	// Logging out: "delete" kicks you from the chat and the bot leaves it, so
+	// it disappears from tjena. If WhatsApp itself ends the session (bad
+	// credentials) chats stay, so linking again continues in the same chats.
+	cleanup := "nothing"
+	if o.DeleteChatsOnLogout == nil || *o.DeleteChatsOnLogout {
+		cleanup = "delete"
+	}
+	return []configEdit{
+		{true, []string{"bridge", "cleanup_on_logout", "enabled"}},
+		{cleanup, []string{"bridge", "cleanup_on_logout", "manual", "private"}},
+		{cleanup, []string{"bridge", "cleanup_on_logout", "manual", "relayed"}},
+		{cleanup, []string{"bridge", "cleanup_on_logout", "manual", "shared_no_users"}},
+		{"nothing", []string{"bridge", "cleanup_on_logout", "manual", "shared_has_users"}},
+		{"nothing", []string{"bridge", "cleanup_on_logout", "bad_credentials", "private"}},
+		{"nothing", []string{"bridge", "cleanup_on_logout", "bad_credentials", "relayed"}},
+		{"nothing", []string{"bridge", "cleanup_on_logout", "bad_credentials", "shared_no_users"}},
+		{"nothing", []string{"bridge", "cleanup_on_logout", "bad_credentials", "shared_has_users"}},
+		{bf.Enabled, []string{"backfill", "enabled"}},
+		{bf.MaxInitialMessages, []string{"backfill", "max_initial_messages"}},
+		{bf.MaxCatchupMessages, []string{"backfill", "max_catchup_messages"}},
+		{bf.MaxInitialConversations, []string{"network", "history_sync", "max_initial_conversations"}},
+		{bf.RequestFullSync, []string{"network", "history_sync", "request_full_sync"}},
+		{days, []string{"network", "history_sync", "full_sync_config", "days_limit"}},
+		// Standard Synapse can't insert messages into the past, so the
+		// backwards backfill queue stays off.
+		{false, []string{"backfill", "queue", "enabled"}},
+
+		{statusOn, []string{"network", "enable_status_broadcast"}},
+		{statusMuted, []string{"network", "mute_status_broadcast"}},
+		{statusTag, []string{"network", "status_broadcast_tag"}},
+		{true, []string{"network", "disable_status_broadcast_send"}},
+	}, nil
+}
+
+type configEdit struct {
+	value any
+	keys  []string
 }
 
 var mxidRe = regexp.MustCompile(`^@[a-z0-9._=/+-]+:[a-zA-Z0-9.-]+(:\d+)?$`)
@@ -152,10 +257,7 @@ func generateBridgeConfig(example []byte, b Bundle, s Settings) ([]byte, error) 
 	for _, u := range s.ExtraUsers {
 		perms[u] = "user"
 	}
-	edits := []struct {
-		value any
-		keys  []string
-	}{
+	edits := []configEdit{
 		{fmt.Sprintf("http://127.0.0.1:%d", s.RelayPort), []string{"homeserver", "address"}},
 		{b.ServerName, []string{"homeserver", "domain"}},
 		{"standard", []string{"homeserver", "software"}},
@@ -212,6 +314,11 @@ func generateBridgeConfig(example []byte, b Bundle, s Settings) ([]byte, error) 
 
 		{s.LogLevel, []string{"logging", "min_level"}},
 	}
+	optEdits, err := s.Options.edits()
+	if err != nil {
+		return nil, err
+	}
+	edits = append(edits, optEdits...)
 	for _, e := range edits {
 		if err := set(root, e.value, e.keys...); err != nil {
 			return nil, fmt.Errorf("set %s: %w", strings.Join(e.keys, "."), err)

@@ -3,6 +3,8 @@ import 'package:share_plus/share_plus.dart';
 
 import '../matrix_api.dart';
 import '../native.dart';
+import 'options_screen.dart';
+import 'security_screen.dart';
 import 'widgets.dart';
 
 /// Screen 5: proxy URL, log export, restart, re-pair, unpair.
@@ -103,11 +105,69 @@ class _SettingsScreenState extends State<SettingsScreen> {
     });
   }
 
+  Future<void> _setNotif({String? style, bool? alerts}) => _guard(() async {
+        await Native.setNotificationPrefs(
+          style: style ?? widget.state.notifStyle,
+          alerts: alerts ?? widget.state.notifAlerts,
+        );
+        await widget.refresh();
+      });
+
+  void _open(Widget page) => Navigator.of(context).push(MaterialPageRoute(builder: (_) => page));
+
   @override
   Widget build(BuildContext context) {
     final s = widget.state;
     return ListView(
       children: [
+        const SectionTitle('WhatsApp'),
+        ListTile(
+          leading: const Icon(Icons.history),
+          title: const Text('Chats & history'),
+          subtitle: const Text('How many old messages to copy · WhatsApp status updates'),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: () => _open(const OptionsScreen()),
+        ),
+        ListTile(
+          leading: const Icon(Icons.shield_outlined),
+          title: const Text('Security'),
+          subtitle: const Text('Encryption on both sides and the keys to compare'),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: () => _open(SecurityScreen(state: s)),
+        ),
+        const SectionTitle('Notifications'),
+        RadioGroup<String>(
+          groupValue: s.notifStyle,
+          onChanged: (v) => _busy || v == null ? null : _setNotif(style: v),
+          child: const Column(children: [
+            RadioListTile<String>(
+              value: 'normal',
+              title: Text('Status notification'),
+              subtitle: Text('Shows the bridge state in the status bar'),
+            ),
+            RadioListTile<String>(
+              value: 'minimal',
+              title: Text('Minimal'),
+              subtitle: Text(
+                'Hidden from the status bar and folded away. Android always needs a notification while the '
+                'bridge runs, so it can\'t be removed completely.',
+              ),
+            ),
+          ]),
+        ),
+        SwitchListTile(
+          secondary: const Icon(Icons.notification_important_outlined),
+          title: const Text('Alert me about problems'),
+          subtitle: const Text('When the bridge stops, or can\'t reach tjena for 10 minutes'),
+          value: s.notifAlerts,
+          onChanged: _busy ? null : (v) => _setNotif(alerts: v),
+        ),
+        ListTile(
+          leading: const Icon(Icons.tune),
+          title: const Text('Android notification settings'),
+          subtitle: const Text('Hide or silence the bridge notifications completely in Android'),
+          onTap: () => Native.openNotificationSettings(),
+        ),
         const SectionTitle('Server'),
         ListTile(title: const Text('Homeserver'), subtitle: Text(s.homeserver ?? '—')),
         ListTile(title: const Text('Your account'), subtitle: Text(s.owner)),

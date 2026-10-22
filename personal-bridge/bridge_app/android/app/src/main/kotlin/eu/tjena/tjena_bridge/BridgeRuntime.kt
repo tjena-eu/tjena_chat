@@ -23,6 +23,9 @@ class BridgeRuntime(val context: Context) {
     val bridgeConfig = File(runDir, "config.yaml")
     val relayConfig = File(runDir, "relay.json")
     val relayStatusFile = File(runDir, "relay-status.json")
+    /** Public keys the bridge uploaded, recorded by the relay (security screen). */
+    val observedKeysFile = File(dataDir, "observed-keys.json")
+    val bridgeDb = File(dataDir, "bridge.db")
 
     fun bridgeVersion(): String {
         val cache = File(dataDir, "binary.version")
@@ -91,6 +94,7 @@ class BridgeRuntime(val context: Context) {
                     .put("pickle_key", settings.getString("pickle_key"))
                     .put("extra_users", settings.optJSONArray("extra_users") ?: JSONArray())
                     .put("log_level", "info")
+                    .put("options", settings.optJSONObject("options") ?: JSONObject())
                     .toString()
             )
             val out = runCapture(
@@ -110,6 +114,7 @@ class BridgeRuntime(val context: Context) {
                 .put("prov_secret", settings.getString("prov_secret"))
                 .put("owner", bundle.getString("owner"))
                 .put("status_file", relayStatusFile.path)
+                .put("keys_file", observedKeysFile.path)
                 .toString()
         )
         secrets.update { it.getJSONObject("settings").put("relay_port", port) }
@@ -152,6 +157,35 @@ class BridgeRuntime(val context: Context) {
         } finally {
             conn.disconnect()
         }
+    }
+
+    /** Bridge options (backfill, status updates); see relay Options. */
+    fun options(): JSONObject =
+        secrets.load().optJSONObject("settings")?.optJSONObject("options") ?: JSONObject()
+
+    fun setOptions(o: JSONObject) {
+        secrets.update { it.getJSONObject("settings").put("options", o) }
+    }
+
+    /**
+     * Read-only key and trust summary from the bridge's own database (relay
+     * subcommand). Public keys only; the pickle key stays in this process.
+     */
+    fun securityInfo(): String {
+        val s = secrets.load()
+        val bundle = s.getJSONObject("bundle")
+        val pickleKey = s.getJSONObject("settings").getString("pickle_key")
+        val p = ProcessBuilder(
+            listOf(
+                relayBin.path, "security-info", bridgeDb.path, pickleKey,
+                bundle.getString("owner"), bundle.getString("bot_mxid"), observedKeysFile.path,
+            )
+        ).directory(dataDir).start()
+        val out = p.inputStream.bufferedReader().readText()
+        val err = p.errorStream.bufferedReader().readText()
+        if (!p.waitFor(30, TimeUnit.SECONDS)) p.destroyForcibly()
+        if (p.exitValue() != 0) throw IllegalStateException(err.trim().ifEmpty { "security-info failed" })
+        return out
     }
 
     /** Remove everything: secrets, bridge DB, logs. */

@@ -10,7 +10,7 @@ import 'package:collection/collection.dart';
 import 'package:fluffychat/config/app_config.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 
-import 'package:fluffychat/utils/bridge_keepalive.dart';
+import 'package:fluffychat/utils/local_bridge_control.dart';
 import 'package:fluffychat/utils/client_manager.dart';
 import 'package:fluffychat/utils/media_auto_download.dart';
 import 'package:fluffychat/utils/notification_background_handler.dart';
@@ -21,8 +21,6 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_vodozemac/flutter_vodozemac.dart' as vod;
 import 'package:matrix/matrix.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:tjena_bridge/bridge_room_store.dart' as tjena_bridge show BridgeRoomStore;
-import 'package:tjena_bridge/tjena_bridge.dart' as tjena_bridge show TjenaBridge;
 
 import 'utils/matrix_sdk_extensions/event_extension.dart';
 import 'utils/wa_matrix_bridge.dart';
@@ -151,7 +149,9 @@ Future<void> startGui(List<Client> clients, SharedPreferences store) async {
       SignalMatrixBridge.instance.init(firstClient);
       _subscribeAutoSave(firstClient);
     }
-    _startBridge(store);
+    await LocalBridgeControl.migrate();
+    // ignore: unawaited_futures
+    LocalBridgeControl.startIfEnabled();
   }
 
   runApp(FluffyChatApp(clients: clients, pincode: pin, store: store));
@@ -180,18 +180,6 @@ void _subscribeAutoSave(Client client) {
       event.autoSaveBackground();
     } catch (_) {}
   });
-}
-
-void _startBridge(SharedPreferences store) {
-  try {
-    tjena_bridge.BridgeRoomStore.instance.startListening();
-    tjena_bridge.TjenaBridge.instance
-        .start()
-        .then((_) => BridgeKeepAlive.refresh())
-        .catchError((Object e) { Logs().w('[Bridge] start failed: $e'); });
-  } catch (e) {
-    Logs().w('[Bridge] init failed: $e');
-  }
 }
 
 /// Watches the lifecycle changes to start the application when it

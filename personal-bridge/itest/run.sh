@@ -129,7 +129,7 @@ PROV_SECRET="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["p
 cat > "$WORK/phone/relay.json" <<EOF
 {"listen":"127.0.0.1:$RELAY_PORT","upstream":"http://127.0.0.1:29331","as_token":"$BRIDGE_AS",
  "api_secret":"$API_SECRET","prov_secret":"$PROV_SECRET","owner":"@alice:pbtest.local",
- "status_file":"$WORK/phone/relay-status.json"}
+ "status_file":"$WORK/phone/relay-status.json","keys_file":"$WORK/phone/observed-keys.json"}
 EOF
 "$WORK/bin/relay" -config "$WORK/phone/relay.json" > "$WORK/phone/relay.log" 2>&1 &
 PIDS+=($!)
@@ -200,7 +200,7 @@ PROV2="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["prov_se
 cat > "$WORK/phone2/relay.json" <<EOF2
 {"listen":"127.0.0.1:$RELAY_PORT2","upstream":"http://127.0.0.1:29331","as_token":"$BRIDGE_AS2",
  "api_secret":"$API_SECRET","prov_secret":"$PROV2","owner":"@alice:pbtest.local",
- "status_file":"$WORK/phone2/relay-status.json"}
+ "status_file":"$WORK/phone2/relay-status.json","keys_file":"$WORK/phone2/observed-keys.json"}
 EOF2
 "$WORK/bin/relay" -config "$WORK/phone2/relay.json" > "$WORK/phone2/relay.log" 2>&1 &
 PIDS+=($!)
@@ -242,6 +242,29 @@ PY
 else
   fail "client against new phone failed"; cat "$WORK/client2.err"; tail -30 "$WORK/phone2/bridge.out"
 fi
+
+log "Security screen data matches what Synapse publishes"
+PICKLE2="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["pickle_key"])' "$WORK/phone2/settings.json")"
+"$WORK/bin/relay" security-info "$WORK/phone2/bridge.db" "$PICKLE2" "@alice:pbtest.local" "$BOT" \
+  "$WORK/phone2/observed-keys.json" > "$WORK/security.json" 2> "$WORK/security.err" || cat "$WORK/security.err"
+ALICE_TOK="$(login alice alicepass 'key check')"
+curl -sf -X POST -H "Authorization: Bearer $ALICE_TOK" -H 'Content-Type: application/json' \
+  -d "{\"device_keys\":{\"$BOT\":[]}}" http://127.0.0.1:18008/_matrix/client/v3/keys/query > "$WORK/keys-query.json"
+python3 - "$WORK/security.json" "$WORK/keys-query.json" "$BOT" <<'PY' && pass "security info: bridge keys from the phone match Synapse; owner device trusted" || fail "security info mismatch"
+import json,sys
+info=json.load(open(sys.argv[1])); q=json.load(open(sys.argv[2])); bot=sys.argv[3]
+m=info["matrix"]
+devs=q["device_keys"][bot]
+dev=devs[m["device_id"]]
+assert dev["keys"]["ed25519:"+m["device_id"]]==m["ed25519"], "device key differs"
+master=list(q["master_keys"][bot]["keys"].values())[0]
+assert m["master_key"]==master, ("master key differs", m.get("master_key"), master)
+assert any(d["cross_signed"] for d in m["owner"]["devices"]), "no trusted owner device"
+assert not m["owner"]["master_key_changed"]
+assert not info.get("errors"), info.get("errors")
+PY
+python3 -c 'import json,sys;o=json.load(open(sys.argv[1]));assert o.get("master_key") and o.get("ed25519"),o' "$WORK/phone2/observed-keys.json" \
+  && pass "relay recorded the keys the bridge uploaded" || fail "observed-keys.json incomplete: $(cat "$WORK/phone2/observed-keys.json" 2>/dev/null)"
 BRIDGE_AS="$BRIDGE_AS2"
 
 log "Isolation"
