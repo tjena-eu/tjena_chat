@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Builds an UNMODIFIED upstream mautrix-whatsapp tag for android/arm64.
 #
-# Output: out/<tag>/libmautrixwhatsapp.so and out/<tag>/librelay.so
+# Output: out/<tag>/libmautrixwhatsapp.so, librelay.so and libwacall.so
 # (executables named .so so that Android extracts them to nativeLibraryDir,
 # where exec is allowed), also copied into bridge_app's jniLibs.
 #
@@ -62,9 +62,18 @@ echo "Building bridge-relay for android/arm64"
     "$GO" build -trimpath -ldflags "-s -w" -o "$OUT/librelay.so" .
 )
 
+# WhatsApp calls daemon (personal-bridge/wacall). -checklinkname=0: pion's
+# Android network-interface lookup (wlynxg/anet) links to a net internal.
+echo "Building wacall for android/arm64"
+(
+  cd "$HERE/../wacall"
+  CGO_ENABLED=1 GOOS=android GOARCH=arm64 CC="$CC" \
+    "$GO" build -trimpath -ldflags "-s -w -checklinkname=0" -o "$OUT/libwacall.so" .
+)
+
 # Install into the bridge app (jniLibs is git-ignored).
 JNI="$HERE/../bridge_app/android/app/src/main/jniLibs/arm64-v8a"
 mkdir -p "$JNI"
-cp "$OUT/libmautrixwhatsapp.so" "$OUT/librelay.so" "$JNI/"
-file "$OUT/libmautrixwhatsapp.so" "$OUT/librelay.so" || true
+cp "$OUT/libmautrixwhatsapp.so" "$OUT/librelay.so" "$OUT/libwacall.so" "$JNI/"
+file "$OUT/libmautrixwhatsapp.so" "$OUT/librelay.so" "$OUT/libwacall.so" || true
 ls -la "$OUT"

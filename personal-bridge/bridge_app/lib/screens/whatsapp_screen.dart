@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:pretty_qr_code/pretty_qr_code.dart';
@@ -30,10 +32,104 @@ class _WhatsAppScreenState extends State<WhatsAppScreen> {
   bool _pausedHere = false; // this login flow paused it
   final _phone = TextEditingController();
 
+  // WhatsApp calls (calls daemon): status, null = not running.
+  Map<String, dynamic>? _calls;
+  bool _callsBusy = false;
+  String? _callsError;
+  Timer? _callsTimer;
+
   @override
   void initState() {
     super.initState();
     _load();
+    _loadCalls();
+    _callsTimer = Timer.periodic(const Duration(seconds: 3), (_) => _loadCalls());
+  }
+
+  @override
+  void dispose() {
+    _callsTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _loadCalls() async {
+    try {
+      final r = await Native.wacall('GET', '/status', timeout: const Duration(seconds: 4));
+      if (mounted) setState(() => _calls = r.ok ? r.json : null);
+    } catch (_) {}
+  }
+
+  static String _digits(String s) => s.replaceAll(RegExp(r'[^0-9]'), '');
+
+  /// Calls setup of one account: turn the calls daemon on if needed, then
+  /// get a pairing code for this account's number.
+  Future<void> _setupCalls(String phone) async {
+    setState(() {
+      _callsBusy = true;
+      _callsError = null;
+    });
+    try {
+      if (_calls == null) {
+        await Native.setCallsEnabled(true);
+        for (var i = 0; i < 30 && _calls == null; i++) {
+          await Future<void>.delayed(const Duration(seconds: 1));
+          await _loadCalls();
+        }
+        if (_calls == null) throw 'The calls service did not start. Is the bridge running?';
+      }
+      final r = await Native.wacall('POST', '/link', body: {'phone': phone}, timeout: const Duration(seconds: 40));
+      if (!r.ok) throw r.json['error'] ?? 'Linking failed (${r.status})';
+      await _loadCalls();
+    } catch (e) {
+      if (mounted) setState(() => _callsError = '$e');
+    } finally {
+      if (mounted) setState(() => _callsBusy = false);
+    }
+  }
+
+  Future<void> _cancelCalls() async {
+    await Native.wacall('POST', '/link/cancel', body: {});
+    await _loadCalls();
+  }
+
+  Future<void> _removeCalls(String phone, {bool ask = true}) async {
+    if (ask &&
+        !await confirm(
+          context,
+          'Turn off calls for this account?',
+          'Removes "tjena calls" from this account\'s WhatsApp linked devices. Chats are not affected.',
+          ok: 'Turn off',
+          danger: true,
+        )) {
+      return;
+    }
+    setState(() => _callsBusy = true);
+    try {
+      final r = await Native.wacall('POST', '/unlink', body: {'phone': phone}, timeout: const Duration(seconds: 30));
+      if (!r.ok && mounted) setState(() => _callsError = r.json['error'] as String? ?? 'Failed');
+    } finally {
+      if (mounted) setState(() => _callsBusy = false);
+      await _loadCalls();
+    }
+  }
+
+  /// What the calls row of an account shows.
+  _CallsInfo _callsInfo(String phone) {
+    final wa = (_calls?['whatsapp'] as Map?)?.cast<String, dynamic>();
+    final accounts = ((wa?['accounts'] as List?) ?? []).cast<Map>();
+    final acct = accounts.firstWhere((a) => a['phone'] == phone, orElse: () => {});
+    final pairing = (wa?['pairing'] as Map?)?.cast<String, dynamic>();
+    final mine = pairing != null && pairing['phone'] == phone;
+    return _CallsInfo(
+      linked: acct.isNotEmpty,
+      online: acct['connected'] == true,
+      error: (acct['last_error'] as String?)?.isNotEmpty == true
+          ? acct['last_error'] as String
+          : (mine ? pairing['error'] as String? : null) ?? (wa?['last_error'] as String?)?.nonEmpty,
+      code: mine ? (pairing['code'] as String?) : null,
+      linking: mine,
+      busy: _callsBusy,
+    );
   }
 
   Future<void> _load() async {
@@ -214,6 +310,12 @@ class _WhatsAppScreenState extends State<WhatsAppScreen> {
     }
     final r = await Native.relay('POST', '/relay/provision/v3/logout/$id', body: {});
     if (!r.ok && mounted) setState(() => _error = r.errorMessage);
+    // Its calls device goes too (best effort).
+    if (_callsInfo(_digits(id)).linked) {
+      try {
+        await _removeCalls(_digits(id), ask: false);
+      } catch (_) {}
+    }
     await _load();
   }
 
@@ -242,7 +344,17 @@ class _WhatsAppScreenState extends State<WhatsAppScreen> {
               child: Text('${_logins.length} accounts linked. Each has its own chats in tjena.',
                   style: t.textTheme.bodySmall),
             ),
-          for (final l in _logins) _LoginCard(login: l, onLogout: () => _logout(l['id'] as String)),
+          for (final l in _logins)
+            _LoginCard(
+              login: l,
+              onLogout: () => _logout(l['id'] as String),
+              calls: _callsInfo(_digits(l['id'] as String)),
+              onSetupCalls: () => _setupCalls(_digits(l['id'] as String)),
+              onCancelCalls: _cancelCalls,
+              onRemoveCalls: () => _removeCalls(_digits(l['id'] as String)),
+            ),
+          if (_callsError != null)
+            Padding(padding: const EdgeInsets.symmetric(vertical: 8), child: ErrorText(_callsError!)),
           if (_code != null) ...[
             const SizedBox(height: 16),
             Text('Your pairing code', style: t.textTheme.titleMedium),
@@ -356,10 +468,73 @@ class _WhatsAppScreenState extends State<WhatsAppScreen> {
   }
 }
 
+extension on String {
+  String? get nonEmpty => isEmpty ? null : this;
+}
+
+class _CallsInfo {
+  final bool linked, online, linking, busy;
+  final String? error, code;
+  const _CallsInfo({
+    required this.linked,
+    required this.online,
+    required this.linking,
+    required this.busy,
+    this.error,
+    this.code,
+  });
+}
+
 class _LoginCard extends StatelessWidget {
   final Map<String, dynamic> login;
   final VoidCallback onLogout;
-  const _LoginCard({required this.login, required this.onLogout});
+  final _CallsInfo calls;
+  final VoidCallback onSetupCalls, onCancelCalls, onRemoveCalls;
+  const _LoginCard({
+    required this.login,
+    required this.onLogout,
+    required this.calls,
+    required this.onSetupCalls,
+    required this.onCancelCalls,
+    required this.onRemoveCalls,
+  });
+
+  Widget _callsRow(BuildContext context) {
+    final t = Theme.of(context);
+    if (calls.linking) {
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Text('Set up calls: on the phone with this WhatsApp account, open Settings → Linked devices → '
+              'Link a device → Link with phone number instead, and enter:'),
+          const SizedBox(height: 8),
+          if (calls.code != null)
+            Center(
+              child: SelectableText(calls.code!,
+                  style: t.textTheme.headlineMedium?.copyWith(letterSpacing: 4, fontWeight: FontWeight.bold)),
+            )
+          else
+            const LinearProgressIndicator(),
+          if (calls.error != null) ErrorText(calls.error!),
+          Align(alignment: Alignment.centerRight, child: TextButton(onPressed: onCancelCalls, child: const Text('Cancel'))),
+        ]),
+      );
+    }
+    return ListTile(
+      dense: true,
+      leading: Icon(
+        calls.linked ? Icons.call : Icons.phone_disabled_outlined,
+        color: calls.linked ? (calls.online ? Colors.green : Colors.orange) : t.disabledColor,
+      ),
+      title: Text(calls.linked ? (calls.online ? 'Calls from tjena: on' : 'Calls from tjena: connecting…') : 'Calls from tjena: off'),
+      subtitle: calls.error != null && calls.linked ? Text(calls.error!, style: TextStyle(color: t.colorScheme.error)) : null,
+      trailing: calls.busy
+          ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+          : calls.linked
+              ? TextButton(onPressed: onRemoveCalls, child: const Text('Turn off'))
+              : TextButton(onPressed: onSetupCalls, child: const Text('Set up')),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -369,7 +544,8 @@ class _LoginCard extends StatelessWidget {
     final phone = profile['phone'] as String?;
     final name = profile['name'] as String? ?? login['name'] as String?;
     return Card(
-      child: ListTile(
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+       ListTile(
         leading: Icon(
           ok ? Icons.check_circle : Icons.error_outline,
           color: ok ? Colors.green : (state == 'CONNECTING' || state == 'BACKFILLING' ? Colors.orange : Colors.red),
@@ -379,7 +555,10 @@ class _LoginCard extends StatelessWidget {
             .where((s) => s.isNotEmpty)
             .join(' · ')),
         trailing: IconButton(tooltip: 'Log out', icon: const Icon(Icons.logout), onPressed: onLogout),
-      ),
+       ),
+       const Divider(height: 1),
+       _callsRow(context),
+      ]),
     );
   }
 }

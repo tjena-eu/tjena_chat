@@ -120,6 +120,19 @@ class MainActivity : FlutterActivity() {
                 if (prefs.getBoolean("enabled", false)) BridgeService.restart(this)
                 true
             }
+            "wacall" -> bg(result) {
+                rt.wacallCall(
+                    call.argument<String>("method")!!,
+                    call.argument<String>("path")!!,
+                    call.argument<String>("body"),
+                    call.argument<Int>("timeoutMs") ?: 15_000,
+                ).toString()
+            }
+            "setCallsEnabled" -> bg(result) {
+                // The service starts or stops the calls daemon within a few seconds.
+                rt.setCallsEnabled(call.argument<Boolean>("on") == true)
+                true
+            }
             "getOptions" -> bg(result) { rt.options().toString() }
             "setOptions" -> bg(result) {
                 val o = JSONObject(call.argument<String>("options")!!)
@@ -282,6 +295,7 @@ class MainActivity : FlutterActivity() {
         val o = JSONObject()
             .put("set_up", rt.secrets.isSetUp())
             .put("enabled", prefs.getBoolean("enabled", false))
+            .put("calls_enabled", try { rt.callsEnabled() } catch (_: Exception) { false })
             .put("service_state", BridgeService.state)
             .put("service_detail", BridgeService.stateDetail ?: JSONObject.NULL)
             .put("service_since", BridgeService.stateSince)

@@ -3,6 +3,7 @@ import 'package:share_plus/share_plus.dart';
 
 import '../matrix_api.dart';
 import '../native.dart';
+import 'calls_screen.dart';
 import 'options_screen.dart';
 import 'history_screen.dart';
 import 'security_screen.dart';
@@ -91,6 +92,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
           await Native.relay('POST', '/relay/provision/v3/logout/${(l as Map)['id']}', body: {});
         }
       } catch (_) {}
+      // ... and their calls devices, if linked.
+      try {
+        final st = await Native.wacall('GET', '/status');
+        final accounts = (((st.json['whatsapp'] as Map?)?['accounts'] as List?) ?? []).cast<Map>();
+        for (final a in accounts) {
+          await Native.wacall('POST', '/unlink', body: {'phone': a['phone']}, timeout: const Duration(seconds: 20));
+        }
+      } catch (_) {}
       // 2. Revoke at the gateway, 3. sign out the Matrix session.
       final s = await Native.session();
       if (s != null) {
@@ -128,6 +137,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
           subtitle: const Text('How many old messages to copy · WhatsApp status updates'),
           trailing: const Icon(Icons.chevron_right),
           onTap: () => _open(const OptionsScreen()),
+        ),
+        ListTile(
+          leading: const Icon(Icons.call_outlined),
+          title: const Text('Calls'),
+          subtitle: Text(s.callsEnabled ? 'On · call WhatsApp contacts from tjena' : 'Off'),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: () async {
+            await Navigator.of(context).push(MaterialPageRoute(builder: (_) => const CallsScreen()));
+            await widget.refresh();
+          },
         ),
         ListTile(
           leading: const Icon(Icons.downloading_outlined),

@@ -12,15 +12,16 @@ import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/pages/chat_list/chat_list_view.dart';
 import 'package:fluffychat/utils/error_reporter.dart';
 import 'package:fluffychat/utils/hidden_rooms.dart';
-import 'package:fluffychat/utils/personal_bridge.dart';
-import 'package:fluffychat/utils/space_child_visibility.dart';
 import 'package:fluffychat/utils/localized_exception_extension.dart';
 import 'package:fluffychat/utils/matrix_sdk_extensions/client_stories_extension.dart';
 import 'package:fluffychat/utils/matrix_sdk_extensions/matrix_locals.dart';
+import 'package:fluffychat/utils/personal_bridge.dart';
 import 'package:fluffychat/utils/platform_infos.dart';
 import 'package:fluffychat/utils/show_scaffold_dialog.dart';
 import 'package:fluffychat/utils/show_update_snackbar.dart';
+import 'package:fluffychat/utils/space_child_visibility.dart';
 import 'package:fluffychat/utils/stream_extension.dart';
+import 'package:fluffychat/utils/wa_call/wa_call_service.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/show_modal_action_popup.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/show_text_input_dialog.dart';
@@ -408,6 +409,8 @@ class ChatListController extends State<ChatList>
         Matrix.of(context).backgroundPush?.setupPush();
         // Notify when the user's own WhatsApp bridge (at home) is offline.
         PersonalBridgeMonitor.start(Matrix.of(context).client);
+        // WhatsApp calls through the own bridge (incoming call notices).
+        WaCallService.start(Matrix.of(context).client);
         UpdateNotifier.showUpdateSnackBar(context);
       }
 

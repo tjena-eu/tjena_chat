@@ -15,6 +15,8 @@ class BridgeRuntime(val context: Context) {
     val libDir = File(context.applicationInfo.nativeLibraryDir)
     val bridgeBin = File(libDir, "libmautrixwhatsapp.so")
     val relayBin = File(libDir, "librelay.so")
+    /** WhatsApp calls daemon (personal-bridge/wacall); optional. */
+    val wacallBin = File(libDir, "libwacall.so")
     val dataDir = File(context.filesDir, "bridge").apply { mkdirs() }
     val runDir = File(context.filesDir, "run").apply { mkdirs() }
     val logDir = File(dataDir, "logs").apply { mkdirs() }
@@ -222,6 +224,62 @@ class BridgeRuntime(val context: Context) {
         if (!p.waitFor(60, TimeUnit.SECONDS)) p.destroyForcibly()
         if (p.exitValue() != 0) throw IllegalStateException(err.trim().ifEmpty { "double-puppet $action failed" })
         return out
+    }
+
+    // ------------------------------------------------------------ calls
+
+    fun callsEnabled(): Boolean =
+        secrets.load().optJSONObject("settings")?.optBoolean("calls_enabled", false) ?: false
+
+    fun setCallsEnabled(on: Boolean) {
+        secrets.update { it.getJSONObject("settings").put("calls_enabled", on) }
+    }
+
+    /**
+     * Config for the calls daemon, given to it on stdin (the bridge token
+     * never goes to disk). Picks a new local port and remembers it.
+     */
+    fun wacallConfig(): String {
+        ensureLocalSecrets()
+        val s = secrets.load()
+        val bundle = s.getJSONObject("bundle")
+        val settings = s.getJSONObject("settings")
+        val port = freePort()
+        secrets.update { it.getJSONObject("settings").put("wacall_port", port) }
+        return JSONObject()
+            .put("data_dir", dataDir.path)
+            .put("listen", "127.0.0.1:$port")
+            .put("api_secret", settings.getString("api_secret"))
+            .put("gateway", s.optString("gateway_url", DEFAULT_GATEWAY))
+            .put("token", bundle.getString("as_token"))
+            .put("log_level", "info")
+            .toString()
+    }
+
+    /** HTTP call to the calls daemon's local API. Returns {status, body}. */
+    fun wacallCall(method: String, path: String, body: String?, timeoutMs: Int = 15_000): JSONObject {
+        val settings = secrets.load().getJSONObject("settings")
+        val port = settings.optInt("wacall_port", 0)
+        if (port == 0) return JSONObject().put("status", 0).put("body", "{\"error\":\"calls not running\"}")
+        val conn = URL("http://127.0.0.1:$port$path").openConnection() as HttpURLConnection
+        conn.requestMethod = method
+        conn.connectTimeout = 3000
+        conn.readTimeout = timeoutMs
+        conn.setRequestProperty("Authorization", "Bearer " + settings.getString("api_secret"))
+        if (body != null) {
+            conn.doOutput = true
+            conn.setRequestProperty("Content-Type", "application/json")
+            conn.outputStream.use { it.write(body.toByteArray()) }
+        }
+        return try {
+            val code = conn.responseCode
+            val stream = if (code >= 400) conn.errorStream else conn.inputStream
+            JSONObject().put("status", code).put("body", stream?.bufferedReader()?.readText() ?: "")
+        } catch (e: Exception) {
+            JSONObject().put("status", 0).put("body", JSONObject().put("error", e.message ?: "error").toString())
+        } finally {
+            conn.disconnect()
+        }
     }
 
     /** Remove everything: secrets, bridge DB, logs. */

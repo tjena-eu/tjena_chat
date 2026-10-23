@@ -17,6 +17,7 @@ import 'package:fluffychat/pages/chat/pinned_events.dart';
 import 'package:fluffychat/pages/chat/reply_display.dart';
 import 'package:fluffychat/utils/account_config.dart';
 import 'package:fluffychat/utils/localized_exception_extension.dart';
+import 'package:fluffychat/utils/wa_call/wa_call_service.dart';
 import 'package:fluffychat/utils/wa_matrix_bridge.dart';
 import 'package:fluffychat/widgets/chat_settings_popup_menu.dart';
 import 'package:fluffychat/widgets/future_loading_dialog.dart';
@@ -225,7 +226,8 @@ class ChatView extends StatelessWidget {
                             controller.room.isDirectChat) ||
                         (AppSettings.waCallsEnabled.value &&
                             WaMatrixBridge.instance
-                                .isWaDirectChat(controller.room.id)))
+                                .isWaDirectChat(controller.room.id)) ||
+                        WaCallService.callTarget(controller.room) != null)
                       IconButton(
                         onPressed: controller.onPhoneButtonTap,
                         icon: const Icon(Icons.call_outlined),

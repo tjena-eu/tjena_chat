@@ -39,6 +39,8 @@ type Gateway struct {
 	rate    map[string][]time.Time
 	authMu  sync.Mutex
 	authC   map[string]authCacheEntry
+
+	calls *callHub
 }
 
 type authCacheEntry struct {
@@ -58,6 +60,7 @@ func newGateway(cfg *Config, log *slog.Logger) (*Gateway, error) {
 		lastSeen: map[string]time.Time{},
 		rate:     map[string][]time.Time{},
 		authC:    map[string]authCacheEntry{},
+		calls:    newCallHub(),
 	}
 	g.adminToken, err = loadOrCreateSecret(filepath.Join(cfg.DataDir, "admin_token"))
 	if err != nil {
@@ -480,6 +483,8 @@ func (g *Gateway) publicRoutes() http.Handler {
 	mux.HandleFunc("GET /provision/v1/bridge", g.handleBridgeStatus)
 	mux.HandleFunc("DELETE /provision/v1/bridge", g.handleRevoke)
 	mux.HandleFunc("GET /provision/v1/info", g.handleInfo)
+	mux.HandleFunc("GET /_tjena/call/v1/phone", g.handleCallPhone)
+	mux.HandleFunc("GET /_tjena/call/v1/app", g.handleCallApp)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "M_UNRECOGNIZED", "Unrecognized endpoint")
 	})

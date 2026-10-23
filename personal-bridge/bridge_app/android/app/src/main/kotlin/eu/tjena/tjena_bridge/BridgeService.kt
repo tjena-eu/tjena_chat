@@ -29,6 +29,9 @@ class BridgeService : Service() {
     private var supervisor: Thread? = null
     @Volatile private var relayProc: Process? = null
     @Volatile private var bridgeProc: Process? = null
+    @Volatile private var wacallProc: Process? = null
+    private var wacallStartedAt = 0L
+    private var wacallBackoffMs = 5_000L
     private var wakeLock: PowerManager.WakeLock? = null
     private var wifiLock: WifiManager.WifiLock? = null
     private val main = android.os.Handler(android.os.Looper.getMainLooper())
@@ -82,6 +85,7 @@ class BridgeService : Service() {
     }
 
     private fun killProcesses() {
+        stopWacall()
         bridgeProc?.let { p -> p.destroy(); if (!p.waitFor(8, java.util.concurrent.TimeUnit.SECONDS)) p.destroyForcibly() }
         relayProc?.let { p -> p.destroy(); if (!p.waitFor(3, java.util.concurrent.TimeUnit.SECONDS)) p.destroyForcibly() }
     }
@@ -105,6 +109,8 @@ class BridgeService : Service() {
                 relayProc = launch(listOf(rt.relayBin.path, "-config", rt.relayConfig.path), "relay")
                 Thread.sleep(500)
                 bridgeProc = launch(listOf(rt.bridgeBin.path, "-c", rt.bridgeConfig.path, "-n"), "bridge")
+                wacallBackoffMs = 5_000L
+                startWacall()
                 // Both processes read their config at startup; remove the files
                 // so secrets aren't left on disk in plaintext.
                 thread {
@@ -237,6 +243,48 @@ class BridgeService : Service() {
         }
     }
 
+    // ------------------------------------------------------------ calls daemon
+
+    /** Starts the calls daemon if calls are on. Its failures never stop the bridge. */
+    private fun startWacall() {
+        if (!rt.callsEnabled() || !rt.wacallBin.exists()) return
+        try {
+            val p = launch(listOf(rt.wacallBin.path), "calls")
+            p.outputStream.use { it.write(rt.wacallConfig().toByteArray()) }
+            wacallProc = p
+            wacallStartedAt = System.currentTimeMillis()
+        } catch (e: Exception) {
+            Log.e(TAG, "calls daemon start failed", e)
+        }
+    }
+
+    private fun stopWacall() {
+        wacallProc?.let { p -> p.destroy(); if (!p.waitFor(3, java.util.concurrent.TimeUnit.SECONDS)) p.destroyForcibly() }
+        wacallProc = null
+    }
+
+    /** Keeps the calls daemon in line with the setting; restarts it with backoff. */
+    private fun superviseWacall() {
+        val on = rt.callsEnabled()
+        val p = wacallProc
+        if (!on) {
+            if (p != null) stopWacall()
+            return
+        }
+        if (p != null && p.isAlive) return
+        val now = System.currentTimeMillis()
+        if (p != null) {
+            Log.w(TAG, "calls daemon exited (${p.exitValue()})")
+            wacallProc = null
+            if (now - wacallStartedAt > 10 * 60_000) wacallBackoffMs = 5_000L
+            wacallStartedAt = now // backoff starts now
+            return
+        }
+        if (now - wacallStartedAt < wacallBackoffMs) return
+        startWacall()
+        wacallBackoffMs = (wacallBackoffMs * 2).coerceAtMost(5 * 60_000L)
+    }
+
     /** Waits until either process exits. Returns a reason if we must not restart. */
     private fun waitForExit(): String? {
         while (running.get()) {
@@ -253,6 +301,7 @@ class BridgeService : Service() {
                 lastExit = "$which at ${java.util.Date()}"
                 return haltReason
             }
+            superviseWacall()
             if (fastImportDone()) {
                 // Restart once with the double-puppet token back in place.
                 dpResumeDue = true

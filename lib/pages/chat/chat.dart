@@ -20,17 +20,19 @@ import 'package:fluffychat/pages/chat/start_poll_bottom_sheet.dart';
 import 'package:fluffychat/pages/chat/trust_user_key_dialog.dart';
 import 'package:fluffychat/pages/chat/utils/web_file_to_x_file.dart';
 import 'package:fluffychat/pages/chat_details/chat_details.dart';
+import 'package:fluffychat/pages/wa_call/wa_call_page.dart';
 import 'package:fluffychat/utils/adaptive_bottom_sheet.dart';
 import 'package:fluffychat/utils/error_reporter.dart';
 import 'package:fluffychat/utils/file_selector.dart';
 import 'package:fluffychat/utils/live_location/live_location_manager.dart';
 import 'package:fluffychat/utils/matrix_sdk_extensions/event_extension.dart';
-import 'package:fluffychat/utils/media_auto_download.dart';
 import 'package:fluffychat/utils/matrix_sdk_extensions/filtered_timeline_extension.dart';
 import 'package:fluffychat/utils/matrix_sdk_extensions/matrix_locals.dart';
+import 'package:fluffychat/utils/media_auto_download.dart';
 import 'package:fluffychat/utils/other_party_can_receive.dart';
 import 'package:fluffychat/utils/platform_infos.dart';
 import 'package:fluffychat/utils/show_scaffold_dialog.dart';
+import 'package:fluffychat/utils/wa_call/wa_call_service.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/show_modal_action_popup.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/show_text_input_dialog.dart';
@@ -50,9 +52,9 @@ import 'package:universal_html/universal_html.dart' as web;
 
 import '../../utils/account_bundles.dart';
 import '../../utils/localized_exception_extension.dart';
-import '../../utils/wa_matrix_bridge.dart';
-import '../../utils/wa_call_link.dart';
 import '../../utils/signal_matrix_bridge.dart';
+import '../../utils/wa_call_link.dart';
+import '../../utils/wa_matrix_bridge.dart';
 import 'send_file_dialog.dart';
 import 'send_live_location_dialog.dart';
 import 'send_location_dialog.dart';
@@ -398,6 +400,8 @@ class ChatController extends State<ChatPageWithRoom>
     // Resume an interrupted live-location share (e.g. after an app restart).
     // Use widget.room (sendingClient isn't assigned until later in initState).
     LiveLocationManager.instance.restoreIfActive(widget.room.client);
+    // Opened from an "Incoming call" notification of the own WhatsApp bridge.
+    WaCallService.start(widget.room.client).checkRoom(widget.room);
     super.initState();
     _displayChatDetailsColumn = ValueNotifier(
       AppSettings.displayChatDetailsColumn.value,
@@ -1624,6 +1628,12 @@ class ChatController extends State<ChatPageWithRoom>
       (event ?? selectedEvents.single).showInfoDialog(context);
 
   Future<void> onPhoneButtonTap() async {
+    // WhatsApp chat of the user's own bridge: a real WhatsApp call through
+    // the calls device on the bridge phone (voice only).
+    if (WaCallService.callTarget(room) != null) {
+      await startWaCall(context, room);
+      return;
+    }
     // VoIP required Android SDK 21
     if (PlatformInfos.isAndroid) {
       final androidInfo = await DeviceInfoPlugin().androidInfo;

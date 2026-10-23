@@ -49,6 +49,25 @@ class Native {
     return RelayResponse(m['status'] as int? ?? 0, m['body'] as String? ?? '');
   }
 
+  /// Calls the WhatsApp calls daemon's local API.
+  static Future<RelayResponse> wacall(
+    String method,
+    String path, {
+    Object? body,
+    Duration timeout = const Duration(seconds: 15),
+  }) async {
+    final raw = await _ch.invokeMethod<String>('wacall', {
+      'method': method,
+      'path': path,
+      'body': body == null ? null : jsonEncode(body),
+      'timeoutMs': timeout.inMilliseconds,
+    });
+    final m = jsonDecode(raw ?? '{}') as Map<String, dynamic>;
+    return RelayResponse(m['status'] as int? ?? 0, m['body'] as String? ?? '');
+  }
+
+  static Future<void> setCallsEnabled(bool on) => _ch.invokeMethod('setCallsEnabled', {'on': on});
+
   static Future<void> setExtraUsers(List<String> users) =>
       _ch.invokeMethod('setExtraUsers', {'users': users});
 
@@ -129,6 +148,7 @@ class BridgeState {
 
   bool get setUp => raw['set_up'] == true;
   bool get enabled => raw['enabled'] == true;
+  bool get callsEnabled => raw['calls_enabled'] == true;
   String get serviceState => raw['service_state'] as String? ?? 'stopped';
   String? get serviceDetail => raw['service_detail'] as String?;
   String? get lastExit => raw['last_exit'] as String?;

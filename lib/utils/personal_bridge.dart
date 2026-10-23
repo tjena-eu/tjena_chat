@@ -123,6 +123,9 @@ class PersonalBridgeApi {
     return _openIdToken!;
   }
 
+  /// OpenID token for the gateway (`openid:<token>` auth), cached.
+  static Future<String> openIdToken(Client c) => _openId(c);
+
   static String _trim(String s) => s.endsWith('/') ? s.substring(0, s.length - 1) : s;
 
   static Never _fail(http.Response r) {
