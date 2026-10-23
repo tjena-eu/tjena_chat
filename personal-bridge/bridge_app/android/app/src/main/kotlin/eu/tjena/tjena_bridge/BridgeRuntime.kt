@@ -188,6 +188,42 @@ class BridgeRuntime(val context: Context) {
         return out
     }
 
+    /** History import summary: bridge DB + JSON log, read-only (relay history-info). */
+    fun historyInfo(): String {
+        val p = ProcessBuilder(listOf(relayBin.path, "history-info", bridgeDb.path, logDir.path))
+            .directory(dataDir).redirectErrorStream(false).start()
+        val out = p.inputStream.bufferedReader().readText()
+        val err = p.errorStream.bufferedReader().readText()
+        if (!p.waitFor(60, TimeUnit.SECONDS)) p.destroyForcibly()
+        if (p.exitValue() != 0) throw IllegalStateException(err.trim().ifEmpty { "history-info failed" })
+        return out
+    }
+
+    /** Lets the bridge finish history imports that stopped early. Bridge must be stopped. */
+    fun historyCatchup(): String {
+        val p = ProcessBuilder(listOf(relayBin.path, "history-catchup", bridgeDb.path))
+            .directory(dataDir).redirectErrorStream(false).start()
+        val out = p.inputStream.bufferedReader().readText()
+        val err = p.errorStream.bufferedReader().readText()
+        if (!p.waitFor(60, TimeUnit.SECONDS)) p.destroyForcibly()
+        if (p.exitValue() != 0) throw IllegalStateException(err.trim().ifEmpty { "history-catchup failed" })
+        return out
+    }
+
+    /** Double-puppet token set aside during a fast history import (relay double-puppet). */
+    val dpStash = File(dataDir, "dp-stash.json")
+
+    /** pause / resume (bridge stopped) or status of the fast history import. Returns JSON. */
+    fun doublePuppet(action: String): String {
+        val p = ProcessBuilder(listOf(relayBin.path, "double-puppet", bridgeDb.path, dpStash.path, action))
+            .directory(dataDir).redirectErrorStream(false).start()
+        val out = p.inputStream.bufferedReader().readText()
+        val err = p.errorStream.bufferedReader().readText()
+        if (!p.waitFor(60, TimeUnit.SECONDS)) p.destroyForcibly()
+        if (p.exitValue() != 0) throw IllegalStateException(err.trim().ifEmpty { "double-puppet $action failed" })
+        return out
+    }
+
     /** Remove everything: secrets, bridge DB, logs. */
     fun wipeAll() {
         secrets.wipe()

@@ -7,7 +7,9 @@ import 'package:fluffychat/config/app_config.dart';
 import 'package:fluffychat/config/themes.dart';
 import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/pages/new_private_chat/new_private_chat.dart';
+import 'package:fluffychat/utils/local_bridge_control.dart';
 import 'package:fluffychat/utils/localized_exception_extension.dart';
+import 'package:fluffychat/utils/personal_bridge.dart';
 import 'package:fluffychat/utils/platform_infos.dart';
 import 'package:fluffychat/utils/signal_matrix_bridge.dart';
 import 'package:fluffychat/utils/url_launcher.dart';
@@ -329,9 +331,25 @@ List<Widget> _bridgeTiles(
   final theme = Theme.of(context);
   final tiles = <Widget>[];
 
-  // ── On-Device Bridges ──────────────────────────────────────────────────
-  final waLinked = WaMatrixBridge.instance.isLinked;
-  final sigLinked = SignalMatrixBridge.instance.isLinked;
+  // ── Your own WhatsApp bridge (at home) ────────────────────────────────
+  final ownBot = WhatsAppBridgeConfig.of(Matrix.of(context).client).ownBot;
+  if (ownBot != null) {
+    tiles.add(ListTile(
+      leading: const CircleAvatar(
+        backgroundColor: Color(0xFF25D366),
+        foregroundColor: Colors.white,
+        child: Icon(Icons.home_outlined),
+      ),
+      title: const Text('WhatsApp chat'),
+      subtitle: const Text('Your chats and contacts, via your own bridge'),
+      onTap: () => controller.openOwnBridgeChat(ownBot),
+    ));
+  }
+
+  // ── On-Device Bridges (experimental, off unless turned on) ────────────
+  final localOn = LocalBridgeControl.enabled;
+  final waLinked = localOn && WaMatrixBridge.instance.isLinked;
+  final sigLinked = localOn && SignalMatrixBridge.instance.isLinked;
   if (waLinked || sigLinked) {
     tiles.add(
       Padding(
@@ -341,7 +359,7 @@ List<Widget> _bridgeTiles(
             Icon(Icons.smartphone_outlined, size: 14, color: theme.colorScheme.primary),
             const SizedBox(width: 6),
             Text(
-              'On-Device Bridges',
+              'Built-in bridges (experimental)',
               style: theme.textTheme.labelMedium?.copyWith(
                 color: theme.colorScheme.primary,
                 fontWeight: FontWeight.w600,

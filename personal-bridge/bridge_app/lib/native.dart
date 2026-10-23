@@ -65,6 +65,20 @@ class Native {
   static Future<Map<String, dynamic>> securityInfo() async =>
       jsonDecode(await _ch.invokeMethod<String>('securityInfo') ?? '{}') as Map<String, dynamic>;
 
+  /// History import progress and problems (read-only).
+  static Future<Map<String, dynamic>> historyInfo() async =>
+      jsonDecode(await _ch.invokeMethod<String>('historyInfo') ?? '{}') as Map<String, dynamic>;
+
+  /// Stops the bridge, marks chats whose history import stopped early, and
+  /// starts it again so it copies the rest. Returns {chats, stored}.
+  /// Fast history import: 'pause' / 'resume' double puppeting (restarts the
+  /// bridge) or 'status' ({paused, import_done, pending, ...}).
+  static Future<Map<String, dynamic>> doublePuppet(String action) async =>
+      jsonDecode(await _ch.invokeMethod<String>('doublePuppet', {'action': action}) ?? '{}') as Map<String, dynamic>;
+
+  static Future<Map<String, dynamic>> historyCatchup() async =>
+      jsonDecode(await _ch.invokeMethod<String>('historyCatchup') ?? '{}') as Map<String, dynamic>;
+
   static Future<void> setNotificationPrefs({required String style, required bool alerts}) =>
       _ch.invokeMethod('setNotificationPrefs', {'style': style, 'alerts': alerts});
 
@@ -121,6 +135,7 @@ class BridgeState {
   bool get batteryUnrestricted => raw['battery_unrestricted'] == true;
   bool get binariesPresent => raw['binaries_present'] == true;
   String get bridgeVersion => raw['bridge_version'] as String? ?? '?';
+  String get appVersion => raw['app_version'] as String? ?? '?';
   String get owner => raw['owner'] as String? ?? '';
   String get slot => raw['slot'] as String? ?? '';
   String get botMxid => raw['bot_mxid'] as String? ?? '';
@@ -136,4 +151,7 @@ class BridgeState {
   bool get revoked => relay['revoked'] == true;
   String? get upstreamError => relay['upstream_error'] as String?;
   DateTime? get lastEvent => DateTime.tryParse(relay['last_event'] as String? ?? '');
+  /// Send pacing in the relay: rate_limit_hits, rate_limit_retried,
+  /// rate_limit_handed_back, sends_waiting, last_rate_limit.
+  Map<String, dynamic> get pace => (relay['pace'] as Map?)?.cast<String, dynamic>() ?? {};
 }

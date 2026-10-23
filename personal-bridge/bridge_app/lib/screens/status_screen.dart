@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../native.dart';
+import 'history_screen.dart';
 import 'security_screen.dart';
 import 'widgets.dart';
 
@@ -120,6 +121,16 @@ class _StatusScreenState extends State<StatusScreen> {
             s.upstreamConnected ? Health.ok : Health.bad,
           ),
           StatusRow('WhatsApp', _wa, _waHealth),
+          ListTile(
+            dense: true,
+            leading: const Icon(Icons.downloading_outlined, size: 16),
+            title: const Text('History import'),
+            subtitle: const Text('Progress and chats that are missing messages'),
+            trailing: TextButton(
+              onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const HistoryScreen())),
+              child: const Text('View'),
+            ),
+          ),
           StatusRow('Last event from tjena', ago(s.lastEvent), s.lastEvent == null ? Health.unknown : Health.ok),
           ListTile(
             dense: true,
@@ -141,6 +152,7 @@ class _StatusScreenState extends State<StatusScreen> {
                 ? null
                 : TextButton(onPressed: Native.requestBatteryExemption, child: const Text('Fix')),
           ),
+          StatusRow('App version', s.appVersion, Health.unknown),
           StatusRow('Bridge version', s.bridgeVersion, Health.unknown),
           if (s.lastExit != null) StatusRow('Last restart', s.lastExit!, Health.unknown),
           Padding(

@@ -130,6 +130,32 @@ class MainActivity : FlutterActivity() {
                 true
             }
             "securityInfo" -> bg(result) { rt.securityInfo() }
+            "historyInfo" -> bg(result) { rt.historyInfo() }
+            // Fast history import: set double puppeting aside / put it back.
+            "doublePuppet" -> bg(result) {
+                val action = call.argument<String>("action")!!
+                if (action == "status") {
+                    rt.doublePuppet("status")
+                } else {
+                    require(action == "pause" || action == "resume")
+                    val wasOn = prefs.getBoolean("enabled", false)
+                    stopAndWait()
+                    try {
+                        rt.doublePuppet(action)
+                    } finally {
+                        if (wasOn) BridgeService.start(this)
+                    }
+                }
+            }
+            "historyCatchup" -> bg(result) {
+                val wasOn = prefs.getBoolean("enabled", false)
+                stopAndWait()
+                try {
+                    rt.historyCatchup()
+                } finally {
+                    if (wasOn) BridgeService.start(this)
+                }
+            }
             "setNotificationPrefs" -> bg(result) {
                 val style = call.argument<String>("style") ?: "normal"
                 require(style == "normal" || style == "minimal") { "invalid style" }
@@ -261,6 +287,10 @@ class MainActivity : FlutterActivity() {
             .put("service_since", BridgeService.stateSince)
             .put("last_exit", BridgeService.lastExit ?: JSONObject.NULL)
             .put("relay", rt.relayStatus())
+            .put("app_version", try {
+                val pi = packageManager.getPackageInfo(packageName, 0)
+                "${pi.versionName} (${androidx.core.content.pm.PackageInfoCompat.getLongVersionCode(pi)})"
+            } catch (_: Exception) { "?" })
             .put("battery_unrestricted", pm.isIgnoringBatteryOptimizations(packageName))
             .put("binaries_present", rt.bridgeBin.exists() && rt.relayBin.exists())
             .put("notif_style", prefs.getString(BridgeService.PREF_NOTIF_STYLE, "normal"))

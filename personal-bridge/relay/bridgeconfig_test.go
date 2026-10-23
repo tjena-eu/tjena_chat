@@ -120,6 +120,7 @@ func TestBridgeConfigOptions(t *testing.T) {
 		"backfill.max_initial_messages":                    50,
 		"network.history_sync.max_initial_conversations":   25,
 		"network.history_sync.request_full_sync":           false,
+		"network.history_sync.dispatch_wait":               "5m",
 		"network.enable_status_broadcast":                  false,
 		"network.disable_status_broadcast_send":            true,
 		"backfill.queue.enabled":                           false,
@@ -143,6 +144,7 @@ func TestBridgeConfigOptions(t *testing.T) {
 		"network.history_sync.max_initial_conversations":   -1,
 		"network.history_sync.request_full_sync":           true,
 		"network.history_sync.full_sync_config.days_limit": 365,
+		"network.history_sync.dispatch_wait":               "10m",
 		"network.enable_status_broadcast":                  true,
 		"network.mute_status_broadcast":                    false,
 	} {

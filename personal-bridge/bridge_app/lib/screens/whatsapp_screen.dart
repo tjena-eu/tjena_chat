@@ -26,6 +26,8 @@ class _WhatsAppScreenState extends State<WhatsAppScreen> {
   String? _instructions;
   bool _waiting = false;
   bool _showAdd = false; // login form when an account is already linked
+  bool _fastImport = true; // set double puppeting aside during the history import
+  bool _pausedHere = false; // this login flow paused it
   final _phone = TextEditingController();
 
   @override
@@ -59,6 +61,43 @@ class _WhatsAppScreenState extends State<WhatsAppScreen> {
     _waiting = false;
   }
 
+  /// Fast import: the bridge restarts without the double-puppet token, so your
+  /// own old messages aren't rate-limited. Comes back by itself afterwards.
+  Future<bool> _prepareImport() async {
+    if (!_fastImport) return true;
+    setState(() => _instructions = 'Preparing fast history import…');
+    try {
+      await Native.doublePuppet('pause');
+      _pausedHere = true;
+    } catch (e) {
+      if (mounted) setState(() => _error = 'Could not prepare the fast import: $e');
+      return false;
+    }
+    // Wait for the restarted bridge.
+    for (var i = 0; i < 60 && mounted; i++) {
+      await Future.delayed(const Duration(seconds: 1));
+      try {
+        if ((await Native.state()).bridgeConnected) {
+          setState(() => _instructions = null);
+          return true;
+        }
+      } catch (_) {}
+    }
+    if (mounted) setState(() => _error = 'The bridge did not come back after restarting. Check the Status tab.');
+    return false;
+  }
+
+  /// Linking didn't happen: put double puppeting back right away.
+  Future<void> _undoPause() async {
+    if (!_pausedHere) return;
+    _pausedHere = false;
+    try {
+      await Native.doublePuppet('resume');
+    } catch (_) {
+      // The bridge app resumes it by itself after 30 minutes without a new account.
+    }
+  }
+
   Future<void> _startPhone() async {
     final number = _phone.text.replaceAll(RegExp(r'[\s()-]'), '');
     if (!RegExp(r'^\+\d{7,15}$').hasMatch(number)) {
@@ -70,6 +109,7 @@ class _WhatsAppScreenState extends State<WhatsAppScreen> {
       _resetLogin();
       _waiting = true;
     });
+    if (!await _prepareImport()) return setState(_resetLogin);
     var r = await Native.relay('POST', '/relay/provision/v3/login/start/phone', body: {});
     if (!r.ok) return _fail(r);
     _loginId = r.json['login_id'] as String?;
@@ -90,6 +130,7 @@ class _WhatsAppScreenState extends State<WhatsAppScreen> {
       _resetLogin();
       _waiting = true;
     });
+    if (!await _prepareImport()) return setState(_resetLogin);
     final r = await Native.relay('POST', '/relay/provision/v3/login/start/qr', body: {}, timeout: const Duration(seconds: 60));
     if (!r.ok) return _fail(r);
     _loginId = r.json['login_id'] as String?;
@@ -102,6 +143,7 @@ class _WhatsAppScreenState extends State<WhatsAppScreen> {
       _stepId = step['step_id'] as String?;
       if (step['login_id'] != null) _loginId = step['login_id'] as String;
       if (type == 'complete') {
+        _pausedHere = false; // resumes by itself once the import is done
         setState(() {
           _resetLogin();
           _showAdd = false;
@@ -138,6 +180,7 @@ class _WhatsAppScreenState extends State<WhatsAppScreen> {
   }
 
   void _fail(RelayResponse r) {
+    _undoPause();
     if (!mounted) return;
     setState(() {
       _resetLogin();
@@ -149,6 +192,7 @@ class _WhatsAppScreenState extends State<WhatsAppScreen> {
     final id = _loginId;
     setState(_resetLogin);
     if (id != null) await Native.relay('POST', '/relay/provision/v3/login/cancel/$id', body: {});
+    await _undoPause();
   }
 
   Future<void> _logout(String id) async {
@@ -176,7 +220,7 @@ class _WhatsAppScreenState extends State<WhatsAppScreen> {
   @override
   Widget build(BuildContext context) {
     final t = Theme.of(context);
-    if (!widget.state.bridgeConnected) {
+    if (!widget.state.bridgeConnected && !_waiting) {
       return const Center(
         child: Padding(
           padding: EdgeInsets.all(24),
@@ -244,6 +288,10 @@ class _WhatsAppScreenState extends State<WhatsAppScreen> {
           ] else if (_waiting) ...[
             const SizedBox(height: 24),
             const Center(child: CircularProgressIndicator()),
+            if (_instructions != null) Padding(
+              padding: const EdgeInsets.only(top: 12),
+              child: Text(_instructions!, textAlign: TextAlign.center),
+            ),
             TextButton(onPressed: _cancel, child: const Text('Cancel')),
           ] else ...[
             if (_logins.isNotEmpty && !_showAdd) ...[
@@ -268,6 +316,20 @@ class _WhatsAppScreenState extends State<WhatsAppScreen> {
                 icon: Icons.info_outline,
                 title: 'Ban risk',
                 text: 'This uses an unofficial WhatsApp client. WhatsApp may restrict or ban accounts that use it.',
+              ),
+              const SizedBox(height: 8),
+              Card(
+                child: SwitchListTile(
+                  value: _fastImport,
+                  onChanged: (v) => setState(() => _fastImport = v),
+                  title: const Text('Fast history import'),
+                  subtitle: Text(_fastImport
+                      ? 'Very fast. Your own old messages show as sent by "you on WhatsApp" instead of you. '
+                          'Once the import is done, messages you send show as you again (if double puppeting is on).'
+                      : 'Slow: tjena allows your own messages at about one every 5 seconds, so the import can take '
+                          'an hour. Your own old messages show as sent by you.'),
+                  isThreeLine: true,
+                ),
               ),
               const SizedBox(height: 16),
               Text('Link with your phone number', style: t.textTheme.titleMedium),

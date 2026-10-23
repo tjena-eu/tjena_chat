@@ -4,6 +4,7 @@ import 'package:share_plus/share_plus.dart';
 import '../matrix_api.dart';
 import '../native.dart';
 import 'options_screen.dart';
+import 'history_screen.dart';
 import 'security_screen.dart';
 import 'widgets.dart';
 
@@ -127,6 +128,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
           subtitle: const Text('How many old messages to copy · WhatsApp status updates'),
           trailing: const Icon(Icons.chevron_right),
           onTap: () => _open(const OptionsScreen()),
+        ),
+        ListTile(
+          leading: const Icon(Icons.downloading_outlined),
+          title: const Text('History import'),
+          subtitle: const Text('Progress after linking · which chats got all their messages'),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: () => _open(const HistoryScreen()),
         ),
         ListTile(
           leading: const Icon(Icons.shield_outlined),

@@ -80,6 +80,8 @@ type Relay struct {
 	nextID  atomic.Int64
 	waitMu  sync.Mutex
 	waiters map[int64]chan reply
+
+	pace *pacer
 }
 
 type Status struct {
@@ -90,6 +92,7 @@ type Status struct {
 	UpstreamError     string     `json:"upstream_error,omitempty"`
 	Revoked           bool       `json:"revoked"`
 	LastEvent         *time.Time `json:"last_event,omitempty"`
+	Pace              PaceStatus `json:"pace"`
 }
 
 func tp(t time.Time) *time.Time {
@@ -106,6 +109,7 @@ func (r *Relay) status() Status {
 		BridgeConnected: r.bridge != nil, BridgeSince: tp(r.bridgeSince),
 		UpstreamConnected: r.upstreamOK, UpstreamSince: tp(r.upstreamSince),
 		UpstreamError: r.upstreamErr, Revoked: r.revoked, LastEvent: tp(r.lastEvent),
+		Pace: r.pace.status(),
 	}
 }
 
@@ -393,7 +397,7 @@ func (r *Relay) routes() http.Handler {
 	mux.HandleFunc("GET /_matrix/client/unstable/fi.mau.as_sync", r.handleBridge)
 	// Everything else the bridge sends (client API, media) goes to the gateway,
 	// which swaps the bridge token for the real one.
-	mux.Handle("/_matrix/", r.observeKeyUploads(r.httpProxy()))
+	mux.Handle("/_matrix/", r.observeKeyUploads(r.pace.wrap(r.httpProxy())))
 	api := func(h http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, req *http.Request) {
 			if r.cfg.APISecret == "" || bearer(req) != r.cfg.APISecret {
@@ -428,6 +432,30 @@ func main() {
 		}
 		return
 	}
+	// Subcommand: read-only history import summary for the app.
+	if len(os.Args) > 1 && os.Args[1] == "history-info" {
+		if err := runHistoryInfo(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "history-info:", err)
+			os.Exit(1)
+		}
+		return
+	}
+	// Subcommand: let the bridge finish stopped history imports (bridge stopped).
+	if len(os.Args) > 1 && os.Args[1] == "history-catchup" {
+		if err := runHistoryCatchup(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "history-catchup:", err)
+			os.Exit(1)
+		}
+		return
+	}
+	// Subcommand: pause/resume double puppeting for a fast history import (bridge stopped).
+	if len(os.Args) > 1 && os.Args[1] == "double-puppet" {
+		if err := runDoublePuppet(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "double-puppet:", err)
+			os.Exit(1)
+		}
+		return
+	}
 	cfgPath := flag.String("config", "relay.json", "relay config (JSON)")
 	flag.Parse()
 	log := slog.New(slog.NewTextHandler(os.Stdout, nil))
@@ -445,8 +473,18 @@ func main() {
 		log.Error("listen must be on 127.0.0.1")
 		os.Exit(1)
 	}
-	r := &Relay{cfg: cfg, log: log, waiters: map[int64]chan reply{}}
+	r := &Relay{cfg: cfg, log: log, waiters: map[int64]chan reply{}, pace: newPacer()}
 	r.writeStatusFile()
+	// Keep the app's view of send pacing current.
+	go func() {
+		var last PaceStatus
+		for range time.Tick(5 * time.Second) {
+			if s := r.pace.status(); s.RateLimitHits != last.RateLimitHits || s.SendsWaiting != last.SendsWaiting || s.HandedBack != last.HandedBack {
+				last = s
+				r.writeStatusFile()
+			}
+		}
+	}()
 	srv := &http.Server{Addr: cfg.Listen, Handler: r.routes(), ReadHeaderTimeout: 10 * time.Second}
 	go func() {
 		log.Info("relay listening", "addr", cfg.Listen, "upstream", cfg.Upstream)

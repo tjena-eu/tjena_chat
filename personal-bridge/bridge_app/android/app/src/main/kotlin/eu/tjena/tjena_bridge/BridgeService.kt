@@ -123,6 +123,16 @@ class BridgeService : Service() {
             killProcesses()
             rt.deleteRunConfigs()
             if (!running.get()) break
+            if (dpResumeDue) {
+                dpResumeDue = false
+                try {
+                    Log.i(TAG, "fast import done, double puppeting back on: ${rt.doublePuppet("resume")}")
+                } catch (e: Exception) {
+                    Log.e(TAG, "double puppet resume failed", e)
+                }
+                backoffMs = 2_000L
+                continue
+            }
             val fix = dbFix
             if (fix != null) {
                 dbFix = null
@@ -210,6 +220,22 @@ class BridgeService : Service() {
     }
 
     @Volatile private var haltReason: String? = null
+    @Volatile private var dpResumeDue = false
+    private var dpCheckedAt = 0L
+
+    /** During a fast history import: true once double puppeting should come back. */
+    private fun fastImportDone(): Boolean {
+        if (!rt.dpStash.exists()) return false
+        val now = System.currentTimeMillis()
+        if (now - dpCheckedAt < 60_000) return false
+        dpCheckedAt = now
+        return try {
+            org.json.JSONObject(rt.doublePuppet("status")).optBoolean("import_done", false)
+        } catch (e: Exception) {
+            Log.w(TAG, "double puppet status: ${e.message}")
+            false
+        }
+    }
 
     /** Waits until either process exits. Returns a reason if we must not restart. */
     private fun waitForExit(): String? {
@@ -226,6 +252,11 @@ class BridgeService : Service() {
                 Log.w(TAG, which)
                 lastExit = "$which at ${java.util.Date()}"
                 return haltReason
+            }
+            if (fastImportDone()) {
+                // Restart once with the double-puppet token back in place.
+                dpResumeDue = true
+                return null
             }
             Thread.sleep(2_000)
             if (System.currentTimeMillis() % 30_000 < 2_000) updateNotification()

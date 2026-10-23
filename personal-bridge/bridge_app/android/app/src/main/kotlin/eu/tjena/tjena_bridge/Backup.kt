@@ -23,7 +23,8 @@ import javax.crypto.spec.SecretKeySpec
 object Backup {
     private val MAGIC = "TJBK1".toByteArray()
     private const val ITER = 310_000
-    private val DB_FILES = listOf("bridge.db", "bridge.db-wal", "bridge.db-shm")
+    // dp-stash.json: double-puppet token set aside during a fast history import.
+    private val DB_FILES = listOf("bridge.db", "bridge.db-wal", "bridge.db-shm", "dp-stash.json")
 
     private fun deriveKey(pass: String, salt: ByteArray): SecretKeySpec {
         val f = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256")

@@ -109,6 +109,15 @@ func (o Options) edits() ([]configEdit, error) {
 	if o.DeleteChatsOnLogout == nil || *o.DeleteChatsOnLogout {
 		cleanup = "delete"
 	}
+	// Each chat gets its history exactly once, when its room is created, from
+	// whatever the phone has sent by then. Rooms are created once no history
+	// chunk has arrived for dispatch_wait (upstream: 1m). Phones often pause
+	// longer between chunks, which left chats with only the first few
+	// messages, so wait longer.
+	dispatchWait := "5m"
+	if bf.RequestFullSync {
+		dispatchWait = "10m"
+	}
 	return []configEdit{
 		{true, []string{"bridge", "cleanup_on_logout", "enabled"}},
 		{cleanup, []string{"bridge", "cleanup_on_logout", "manual", "private"}},
@@ -125,6 +134,7 @@ func (o Options) edits() ([]configEdit, error) {
 		{bf.MaxInitialConversations, []string{"network", "history_sync", "max_initial_conversations"}},
 		{bf.RequestFullSync, []string{"network", "history_sync", "request_full_sync"}},
 		{days, []string{"network", "history_sync", "full_sync_config", "days_limit"}},
+		{dispatchWait, []string{"network", "history_sync", "dispatch_wait"}},
 		// Standard Synapse can't insert messages into the past, so the
 		// backwards backfill queue stays off.
 		{false, []string{"backfill", "queue", "enabled"}},

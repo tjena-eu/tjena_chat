@@ -11,6 +11,7 @@ import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/pages/new_private_chat/new_private_chat_view.dart';
 import 'package:fluffychat/pages/new_private_chat/qr_scanner_modal.dart';
 import 'package:fluffychat/pages/settings_bridges/bridge_definition.dart';
+import 'package:fluffychat/pages/new_private_chat/wa_bridge_chat_picker.dart';
 import 'package:fluffychat/pages/settings_bridge_local/wa_chat_picker_screen.dart';
 import 'package:fluffychat/utils/adaptive_bottom_sheet.dart';
 import 'package:fluffychat/utils/fluffy_share.dart';
@@ -158,6 +159,18 @@ class NewPrivateChatController extends State<NewPrivateChat> {
         (r) => r.isDirectChat && r.directChatMatrixID == botId,
       );
     }).toList();
+  }
+
+  /// WhatsApp via your own bridge: existing chats + contact search.
+  void openOwnBridgeChat(String bot) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => WaBridgeChatPicker(
+          client: Matrix.of(context).client,
+          bot: bot,
+        ),
+      ),
+    );
   }
 
   /// WhatsApp "new chat" entry: choose an existing chat from the list, or enter
