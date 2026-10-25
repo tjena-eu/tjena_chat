@@ -113,14 +113,12 @@ abstract class VideoThumbnailGenerator {
   /// only ever resolve against the local file store, so there is nothing to
   /// download when they are missing.
   static const Set<String> _localMediaHosts = {
-    'wa-media',
-    'wa-local',
     'sig-local',
     'video-thumb',
   };
 
-  /// The video itself, from the local file store when possible. Bridged
-  /// (WhatsApp/Signal) media always is; a remote Matrix upload is downloaded
+  /// The video itself, from the local file store when possible. Built-in
+  /// Signal bridge media always is; a remote Matrix upload is downloaded
   /// only when it is small enough to be worth it.
   static Future<Uint8List?> _videoBytes(Event event) async {
     try {

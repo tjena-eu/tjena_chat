@@ -46,8 +46,18 @@ type Config struct {
 	KeepaliveInterval  int `yaml:"keepalive_interval_seconds"`
 	// If set, GET /_tjena/status on the internal listener requires this bearer token.
 	StatusToken string `yaml:"status_token"`
+	// Extra services shown on the public status endpoint (Synapse is always
+	// checked). Each URL must answer 2xx when the service is up.
+	StatusChecks []StatusCheck `yaml:"status_checks"`
+	// Warn (log + "low" on /status/v1) when fewer free slots than this remain.
+	LowSlotsWarning int `yaml:"low_slots_warning"`
 
 	allowedUsers []*regexp.Regexp
+}
+
+type StatusCheck struct {
+	Name string `yaml:"name"`
+	URL  string `yaml:"url"`
 }
 
 var validPrefix = regexp.MustCompile(`^[a-z][a-z0-9]{0,15}$`)
@@ -83,6 +93,14 @@ func loadConfig(path string) (*Config, error) {
 	}
 	if cfg.KeepaliveInterval <= 0 {
 		cfg.KeepaliveInterval = 30
+	}
+	if cfg.LowSlotsWarning <= 0 {
+		cfg.LowSlotsWarning = 5
+	}
+	for _, c := range cfg.StatusChecks {
+		if c.Name == "" || !strings.HasPrefix(c.URL, "http") {
+			return nil, fmt.Errorf("status_checks: name and http(s) url required")
+		}
 	}
 	cfg.PublicURL = strings.TrimRight(cfg.PublicURL, "/")
 	cfg.InternalURL = strings.TrimRight(cfg.InternalURL, "/")

@@ -10,7 +10,6 @@ import 'package:collection/collection.dart';
 import 'package:fluffychat/config/app_config.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 
-import 'package:fluffychat/utils/local_bridge_control.dart';
 import 'package:fluffychat/utils/client_manager.dart';
 import 'package:fluffychat/utils/media_auto_download.dart';
 import 'package:fluffychat/utils/notification_background_handler.dart';
@@ -23,8 +22,7 @@ import 'package:matrix/matrix.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'utils/matrix_sdk_extensions/event_extension.dart';
-import 'utils/wa_matrix_bridge.dart';
-import 'utils/signal_matrix_bridge.dart';
+import 'utils/legacy_bridge_cleanup.dart';
 import 'package:universal_html/universal_html.dart' as web;
 
 import 'config/setting_keys.dart';
@@ -142,24 +140,18 @@ Future<void> startGui(List<Client> clients, SharedPreferences store) async {
   await firstClient?.roomsLoading;
   await firstClient?.accountDataLoading;
 
-  // Start on-device bridges (non-blocking; errors are non-fatal).
-  if (PlatformInfos.isAndroid) {
-    if (firstClient != null) {
-      await WaMatrixBridge.instance.init(firstClient);
-      SignalMatrixBridge.instance.init(firstClient);
-      _subscribeAutoSave(firstClient);
-    }
-    await LocalBridgeControl.migrate();
-    // ignore: unawaited_futures
-    LocalBridgeControl.startIfEnabled();
+  if (PlatformInfos.isAndroid && firstClient != null) {
+    // The built-in WhatsApp and Signal bridges are gone: remove what they
+    // left behind.
+    await LegacyBridgeCleanup.run(firstClient);
+    _subscribeAutoSave(firstClient);
   }
 
   runApp(FluffyChatApp(clients: clients, pincode: pin, store: store));
 }
 
 void _subscribeAutoSave(Client client) {
-  // Auto-save incoming images/videos to gallery for regular Matrix rooms.
-  // Bridge rooms (WA/Signal) handle auto-save in their own media-ready path.
+  // Auto-save incoming images/videos to gallery.
   client.onTimelineEvent.stream.listen((event) {
     try {
       if (event.messageType != MessageTypes.Image &&
@@ -167,10 +159,6 @@ void _subscribeAutoSave(Client client) {
         return;
       }
       final roomId = event.roomId ?? '';
-      if (WaMatrixBridge.instance.isWaRoom(roomId) ||
-          SignalMatrixBridge.instance.isSigRoom(roomId)) {
-        return; // bridge rooms auto-save in their media-ready handler
-      }
       // Auto-saving here would download the attachment the moment it arrives,
       // which is exactly what we no longer want: media is fetched when its chat
       // is opened. So only save now if this chat auto-downloads anyway;

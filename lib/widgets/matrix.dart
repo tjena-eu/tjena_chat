@@ -8,10 +8,7 @@ import 'dart:convert';
 
 import 'package:collection/collection.dart';
 import 'package:fluffychat/l10n/l10n.dart';
-import 'package:fluffychat/utils/bridge_keepalive.dart';
 import 'package:fluffychat/utils/client_manager.dart';
-import 'package:fluffychat/utils/wa_matrix_bridge.dart';
-import 'package:fluffychat/utils/signal_matrix_bridge.dart';
 import 'package:fluffychat/utils/init_with_restore.dart';
 import 'package:fluffychat/utils/local_backup_service.dart';
 import 'package:fluffychat/utils/matrix_sdk_extensions/matrix_file_extension.dart';
@@ -309,19 +306,6 @@ class MatrixState extends State<Matrix> with WidgetsBindingObserver {
           showLocalNotification,
         );
       });
-    } else if (PlatformInfos.isAndroid || PlatformInfos.isIOS) {
-      // On-device bridge rooms (WhatsApp/Signal) never reach the homeserver, so
-      // server push can't notify for them. Show a local notification ourselves
-      // for those rooms only (real Matrix rooms still notify via push).
-      c.onSync.stream.first.then((s) {
-        onNotification[name] ??= c.onNotification.stream.listen((event) {
-          final rid = event.room.id;
-          if (WaMatrixBridge.instance.isWaRoom(rid) ||
-              SignalMatrixBridge.instance.isSigRoom(rid)) {
-            showLocalNotification(event);
-          }
-        });
-      });
     }
   }
 
@@ -401,11 +385,6 @@ class MatrixState extends State<Matrix> with WidgetsBindingObserver {
     }
     if (state == AppLifecycleState.resumed && widget.clients.isNotEmpty) {
       LocalBackupService.runIfDue(widget.clients.first);
-      // Put the bridge notification back if it was swiped away. Android 13
-      // allows the dismissal but reports it to nobody, so re-asserting on
-      // resume is the only way to notice.
-      // ignore: unawaited_futures
-      BridgeKeepAlive.reassertNotification();
       // Data Saver may have been switched on while we were away, or the device
       // may have moved from Wi-Fi onto metered data.
       // ignore: unawaited_futures

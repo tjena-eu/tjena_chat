@@ -4,8 +4,6 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
-import '../../utils/local_bridge_control.dart';
-import '../settings_bridge_local/settings_bridge_local.dart';
 import 'settings_bridges.dart';
 
 class SettingsBridgesView extends StatelessWidget {
@@ -23,8 +21,6 @@ class SettingsBridgesView extends StatelessWidget {
     final signal = c.entryFor('signal');
     final mode = c.waConfig.mode;
     final own = c.ownStatus;
-    final local = c.local;
-    final localOn = LocalBridgeControl.enabled;
 
     // --- WhatsApp: tjena server bridge
     final serverInUse = mode != 'own';
@@ -58,22 +54,6 @@ class SettingsBridgesView extends StatelessWidget {
       );
     }
 
-    // --- WhatsApp: built-in
-    final _Badge localWaBadge;
-    if (!localOn) {
-      localWaBadge = const _Badge.neutral('Off · turn on under Experimental');
-    } else if (local == null) {
-      localWaBadge = const _Badge.neutral('Checking…');
-    } else if (local.waLinked == 0) {
-      localWaBadge = const _Badge.neutral('On · no account linked');
-    } else {
-      localWaBadge = _Badge.active(
-        '${local.waLinked} account${local.waLinked == 1 ? '' : 's'} linked'
-        '${local.waConnected < local.waLinked ? ' · ${local.waLinked - local.waConnected} offline' : ''}',
-      );
-    }
-    final twoWaBridges = (local?.waLinked ?? 0) > 0;
-
     return Scaffold(
       appBar: AppBar(
         title: const Text('Messaging Bridges'),
@@ -90,9 +70,8 @@ class SettingsBridgesView extends StatelessWidget {
         padding: const EdgeInsets.all(16),
         children: [
           Text(
-            'Bridges bring your WhatsApp and Signal chats into tjena. There are '
-            'up to three ways for each, and they differ in where your messages '
-            'are decrypted.',
+            'Bridges bring your WhatsApp and Signal chats into tjena. The ways '
+            'differ in where your messages are decrypted.',
             style: theme.textTheme.bodyMedium?.copyWith(
               color: theme.colorScheme.onSurfaceVariant,
             ),
@@ -133,39 +112,13 @@ class SettingsBridgesView extends StatelessWidget {
             recommended: true,
             onTap: () => context.go('/rooms/settings/bridges/own-whatsapp'),
           ),
-          _OptionCard(
-            color: _waGreen,
-            icon: Icons.science_outlined,
-            title: 'Built-in bridge in this app',
-            subtitle: 'Experimental · being phased out',
-            lines: const [
-              (Icons.smartphone, 'Chats only on this phone'),
-              (Icons.lock_outline, 'Messages are only decrypted on this phone'),
-            ],
-            badge: localWaBadge,
-            selected: (local?.waLinked ?? 0) > 0,
-            enabled: localOn,
-            onTap: localOn
-                ? () => context.go('/rooms/settings/local-bridges')
-                : null,
+          const _Hint(
+            icon: Icons.info_outline,
+            text:
+                'Switch between the server bridge and your own bridge on the '
+                '"Your own bridge" page. tjena logs WhatsApp out of the old '
+                'one first, so no chat appears twice.',
           ),
-          if (twoWaBridges)
-            _Hint(
-              icon: Icons.warning_amber_outlined,
-              text:
-                  'The built-in bridge has WhatsApp linked. If the same '
-                  'WhatsApp account is also linked to the '
-                  '${ownInUse ? 'your own' : 'tjena server'} bridge, every chat '
-                  'appears twice. Use only one.',
-            )
-          else
-            const _Hint(
-              icon: Icons.info_outline,
-              text:
-                  'Switch between the server bridge and your own bridge on the '
-                  '"Your own bridge" page. tjena logs WhatsApp out of the old '
-                  'one first, so no chat appears twice.',
-            ),
           const _Section('Signal'),
           _OptionCard(
             color: _signalBlue,
@@ -196,42 +149,6 @@ class SettingsBridgesView extends StatelessWidget {
                     extra: signal,
                   ),
           ),
-          _OptionCard(
-            color: _signalBlue,
-            icon: Icons.science_outlined,
-            title: 'Built-in bridge in this app',
-            subtitle: 'Experimental · being phased out',
-            lines: const [
-              (Icons.smartphone, 'Chats only on this phone'),
-              (Icons.lock_outline, 'Messages are only decrypted on this phone'),
-            ],
-            badge: !localOn
-                ? const _Badge.neutral('Off · turn on under Experimental')
-                : local?.signalLinked == true
-                ? (local!.signalConnected
-                      ? const _Badge.active('Linked · online')
-                      : const _Badge.error('Linked · offline'))
-                : const _Badge.neutral('On · not linked'),
-            selected: local?.signalLinked == true,
-            enabled: localOn,
-            onTap: localOn ? () => context.go('/rooms/settings/signal') : null,
-          ),
-          const _Section('Experimental'),
-          Card(
-            margin: const EdgeInsets.only(bottom: 12),
-            child: SwitchListTile(
-              secondary: const Icon(Icons.science_outlined),
-              title: const Text('Built-in bridges'),
-              subtitle: const Text(
-                'Run WhatsApp and Signal inside this app, on this phone only. '
-                'Being phased out in favour of your own bridge.',
-              ),
-              isThreeLine: true,
-              value: localOn,
-              onChanged: c.setLocalEnabled,
-            ),
-          ),
-          if (localOn) const LocalBridgeBackgroundCard(),
         ],
       ),
     );
@@ -290,11 +207,9 @@ class _OptionCard extends StatelessWidget {
   final Color color;
   final IconData icon;
   final String title;
-  final String? subtitle;
   final List<(IconData, String)> lines;
   final _Badge badge;
   final bool selected;
-  final bool enabled;
   final bool recommended;
   final VoidCallback? onTap;
 
@@ -304,9 +219,7 @@ class _OptionCard extends StatelessWidget {
     required this.title,
     required this.lines,
     required this.badge,
-    this.subtitle,
     this.selected = false,
-    this.enabled = true,
     this.recommended = false,
     this.onTap,
   });
@@ -315,98 +228,82 @@ class _OptionCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final muted = theme.colorScheme.onSurfaceVariant;
-    return Opacity(
-      opacity: enabled ? 1 : 0.6,
-      child: Card(
-        margin: const EdgeInsets.only(bottom: 12),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(12),
-          side: selected
-              ? BorderSide(color: theme.colorScheme.primary, width: 2)
-              : BorderSide.none,
-        ),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(12),
-          onTap: onTap,
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Container(
-                  width: 44,
-                  height: 44,
-                  decoration: BoxDecoration(
-                    color: enabled
-                        ? color
-                        : theme.colorScheme.surfaceContainerHighest,
-                    borderRadius: BorderRadius.circular(11),
-                  ),
-                  child: Icon(
-                    icon,
-                    color: enabled ? Colors.white : muted,
-                    size: 24,
-                  ),
+    return Card(
+      margin: const EdgeInsets.only(bottom: 12),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: selected
+            ? BorderSide(color: theme.colorScheme.primary, width: 2)
+            : BorderSide.none,
+      ),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: color,
+                  borderRadius: BorderRadius.circular(11),
                 ),
-                const SizedBox(width: 14),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Wrap(
-                        spacing: 8,
-                        crossAxisAlignment: WrapCrossAlignment.center,
-                        children: [
+                child: Icon(icon, color: Colors.white, size: 24),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Wrap(
+                      spacing: 8,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: [
+                        Text(
+                          title,
+                          style: theme.textTheme.titleMedium?.copyWith(
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        if (recommended)
                           Text(
-                            title,
-                            style: theme.textTheme.titleMedium?.copyWith(
+                            'Recommended',
+                            style: theme.textTheme.labelSmall?.copyWith(
+                              color: theme.colorScheme.primary,
                               fontWeight: FontWeight.w600,
                             ),
                           ),
-                          if (recommended)
-                            Text(
-                              'Recommended',
-                              style: theme.textTheme.labelSmall?.copyWith(
-                                color: theme.colorScheme.primary,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                        ],
-                      ),
-                      if (subtitle != null)
-                        Text(
-                          subtitle!,
-                          style: theme.textTheme.labelMedium?.copyWith(
-                            color: theme.colorScheme.tertiary,
-                          ),
-                        ),
-                      const SizedBox(height: 6),
-                      for (final (lineIcon, text) in lines)
-                        Padding(
-                          padding: const EdgeInsets.only(bottom: 2),
-                          child: Row(
-                            children: [
-                              Icon(lineIcon, size: 14, color: muted),
-                              const SizedBox(width: 6),
-                              Expanded(
-                                child: Text(
-                                  text,
-                                  style: theme.textTheme.bodySmall?.copyWith(
-                                    color: muted,
-                                  ),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    for (final (lineIcon, text) in lines)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 2),
+                        child: Row(
+                          children: [
+                            Icon(lineIcon, size: 14, color: muted),
+                            const SizedBox(width: 6),
+                            Expanded(
+                              child: Text(
+                                text,
+                                style: theme.textTheme.bodySmall?.copyWith(
+                                  color: muted,
                                 ),
                               ),
-                            ],
-                          ),
+                            ),
+                          ],
                         ),
-                      const SizedBox(height: 8),
-                      badge,
-                    ],
-                  ),
+                      ),
+                    const SizedBox(height: 8),
+                    badge,
+                  ],
                 ),
-                if (onTap != null) Icon(Icons.chevron_right, color: muted),
-              ],
-            ),
+              ),
+              if (onTap != null) Icon(Icons.chevron_right, color: muted),
+            ],
           ),
         ),
       ),

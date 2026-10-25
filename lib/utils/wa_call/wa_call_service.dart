@@ -7,10 +7,13 @@
 // linked WhatsApp device. tjena talks to it like this:
 //
 //   tjena ──wss wap.tjena.eu/_tjena/call/v1/app── gateway ── bridge phone ── WhatsApp
-//   tjena ════════ WebRTC audio (DTLS-SRTP, TURN if needed) ═══ bridge phone
+//   tjena ════ WebRTC audio + H.264 video (DTLS-SRTP, TURN if needed) ════ bridge phone
 //
-// The gateway only passes on small JSON messages; audio goes straight to the
+// The gateway only passes on small JSON messages; media goes straight to the
 // phone. tjena always sends the WebRTC offer with all ICE candidates in it.
+// Every call has a video channel (also voice calls), so the camera can be
+// turned on mid-call without a new offer: the camera track is just swapped in.
+// The bridge phone passes the H.264 through to WhatsApp unchanged.
 
 import 'dart:async';
 import 'dart:convert';
@@ -68,8 +71,32 @@ class WaCall extends ChangeNotifier {
   bool speaker = false;
   bool _ended = false;
 
+  /// The call can carry video (the bridge phone and this device do H.264).
+  bool videoPossible = false;
+
+  /// Our camera is on.
+  bool cameraOn = false;
+  bool frontCamera = true;
+
+  /// The WhatsApp peer's camera is on, and how to turn its picture upright
+  /// (quarter turns clockwise).
+  bool peerVideo = false;
+  int peerOrientation = 0;
+
+  /// The peer asks to switch this voice call to video.
+  bool upgradeRequested = false;
+
+  /// We asked the peer to switch to video and wait for the answer.
+  bool upgradePending = false;
+
   RTCPeerConnection? pc;
   MediaStream? local;
+  MediaStream? camera;
+  RTCRtpSender? videoSender;
+  final localRenderer = RTCVideoRenderer();
+  final remoteRenderer = RTCVideoRenderer();
+
+  bool get showsVideo => cameraOn || peerVideo;
 
   WaCall({
     required this.id,
@@ -112,7 +139,7 @@ class WaCallService {
   final ringing = ValueNotifier<List<WaRing>>([]);
   final current = ValueNotifier<WaCall?>(null);
 
-  final _sdpWaiters = <String, Completer<String>>{};
+  final _sdpWaiters = <String, Completer<Map<String, dynamic>>>{};
   final _shownRings = <String>{};
 
   WaCallService._(this.client);
@@ -289,7 +316,10 @@ class WaCallService {
         final id = m['wa_call_id'];
         ringing.value = ringing.value.where((x) => x.waCallId != id).toList();
         final c = current.value;
+        // "answered" goes to all of the user's devices; on the one that
+        // answered it only stops the ringing, it doesn't end the call.
         if (c != null &&
+            m['reason'] != 'answered' &&
             !c.outgoing &&
             c.waCallId == id &&
             c.phase == WaCallPhase.starting) {
@@ -297,7 +327,12 @@ class WaCallService {
         }
         break;
       case 'sdp':
-        _sdpWaiters.remove(m['id'])?.complete(m['sdp'] as String);
+        _sdpWaiters.remove(m['id'])?.complete(m);
+        break;
+      case 'video_state':
+        final c = current.value;
+        if (c == null || c.id != m['id']) return;
+        _onVideoState(c, m);
         break;
       case 'state':
         final c = current.value;
@@ -390,7 +425,7 @@ class WaCallService {
   }
 
   /// Calls the WhatsApp contact of [room]. Returns the call (also in [current]).
-  Future<WaCall> dial(Room room) async {
+  Future<WaCall> dial(Room room, {bool video = false}) async {
     final target = callTarget(room);
     if (target == null) {
       throw Exception('This is not a WhatsApp chat of your own bridge');
@@ -407,12 +442,17 @@ class WaCallService {
       'target': target,
       // Call out from the WhatsApp account this chat belongs to.
       if (call.account != null) 'account': call.account,
-    });
+    }, video: video);
     return call;
   }
 
-  /// Answers a ringing WhatsApp call.
-  Future<WaCall> answer(WaRing r, {required String title, Room? room}) async {
+  /// Answers a ringing WhatsApp call, with the camera on if [video].
+  Future<WaCall> answer(
+    WaRing r, {
+    required String title,
+    Room? room,
+    bool video = false,
+  }) async {
     final call = WaCall(
       id: _newId(),
       outgoing: false,
@@ -424,7 +464,12 @@ class WaCallService {
     ringing.value = ringing.value
         .where((x) => x.waCallId != r.waCallId)
         .toList();
-    await _startCall(call, {'type': 'answer', 'wa_call_id': r.waCallId});
+    // A video call starts with the peer's camera on.
+    call.peerVideo = r.video;
+    await _startCall(call, {
+      'type': 'answer',
+      'wa_call_id': r.waCallId,
+    }, video: video && r.video);
     return call;
   }
 
@@ -439,12 +484,18 @@ class WaCallService {
     _scheduleIdleClose();
   }
 
-  Future<void> _startCall(WaCall call, Map<String, dynamic> request) async {
+  Future<void> _startCall(
+    WaCall call,
+    Map<String, dynamic> request, {
+    bool video = false,
+  }) async {
     if (current.value != null && !current.value!.ended) {
       throw Exception('Another call is in progress');
     }
     current.value = call;
     try {
+      await call.localRenderer.initialize();
+      await call.remoteRenderer.initialize();
       await _ensureConnected();
       if (phoneOnline.value != true) {
         throw Exception(
@@ -472,10 +523,19 @@ class WaCallService {
       for (final t in local.getAudioTracks()) {
         await pc.addTrack(t, local);
       }
-      final offer = await pc.createOffer({
-        'offerToReceiveAudio': true,
-        'offerToReceiveVideo': false,
-      });
+      // The video channel, also for voice calls: the camera is swapped in
+      // when it is turned on.
+      final vt = await pc.addTransceiver(
+        kind: RTCRtpMediaType.RTCRtpMediaTypeVideo,
+        init: RTCRtpTransceiverInit(direction: TransceiverDirection.SendRecv),
+      );
+      call.videoSender = vt.sender;
+      pc.onTrack = (e) {
+        if (e.track.kind != 'video') return;
+        unawaited(_showRemoteVideo(call, e));
+      };
+      if (video) await _cameraOn(call);
+      final offer = await pc.createOffer({});
       final gathered = Completer<void>();
       pc.onIceGatheringState = (s) {
         if (s == RTCIceGatheringState.RTCIceGatheringStateComplete &&
@@ -491,15 +551,29 @@ class WaCallService {
       final desc = await pc.getLocalDescription();
       if (call.ended) return;
 
-      final answer = Completer<String>();
+      final answer = Completer<Map<String, dynamic>>();
       _sdpWaiters[call.id] = answer;
-      _send({...request, 'id': call.id, 'sdp': desc!.sdp, 'ice_servers': turn});
-      final sdp = await answer.future.timeout(const Duration(seconds: 40));
-      await pc.setRemoteDescription(RTCSessionDescription(sdp, 'answer'));
+      _send({
+        ...request,
+        'id': call.id,
+        'sdp': desc!.sdp,
+        'ice_servers': turn,
+        if (call.cameraOn) 'video': true,
+      });
+      final reply = await answer.future.timeout(const Duration(seconds: 40));
+      call.videoPossible = reply['video'] == true;
+      if (!call.videoPossible && call.cameraOn) {
+        // The bridge phone can't do video (older version, or no H.264 here).
+        await _cameraOff(call);
+      }
+      await pc.setRemoteDescription(
+        RTCSessionDescription(reply['sdp'] as String, 'answer'),
+      );
       if (call.phase == WaCallPhase.starting) {
         call._set(call.outgoing ? WaCallPhase.calling : WaCallPhase.connecting);
       }
-      await Helper.setSpeakerphoneOn(false);
+      // Video calls use the loudspeaker, like on WhatsApp.
+      await setSpeaker(call, call.showsVideo);
     } catch (e) {
       Logs().w('[WaCall] call failed', e);
       _end(
@@ -543,6 +617,128 @@ class WaCallService {
     call.changed();
   }
 
+  // ------------------------------------------------------------- video
+
+  Future<void> _showRemoteVideo(WaCall call, RTCTrackEvent e) async {
+    var stream = e.streams.firstOrNull;
+    if (stream == null) {
+      stream = await createLocalMediaStream('whatsapp');
+      await stream.addTrack(e.track);
+    }
+    call.remoteRenderer.srcObject = stream;
+    call.changed();
+  }
+
+  Future<void> _cameraOn(WaCall call) async {
+    final cam = await navigator.mediaDevices.getUserMedia({
+      'audio': false,
+      'video': {
+        'facingMode': call.frontCamera ? 'user' : 'environment',
+        'width': 640,
+        'height': 480,
+        'frameRate': 24,
+      },
+    });
+    final track = cam.getVideoTracks().first;
+    await call.videoSender?.replaceTrack(track);
+    call.camera = cam;
+    call.cameraOn = true;
+    call.localRenderer.srcObject = cam;
+    call.changed();
+  }
+
+  Future<void> _cameraOff(WaCall call) async {
+    final cam = call.camera;
+    call.camera = null;
+    call.cameraOn = false;
+    call.localRenderer.srcObject = null;
+    await call.videoSender?.replaceTrack(null);
+    for (final t in cam?.getTracks() ?? <MediaStreamTrack>[]) {
+      await t.stop();
+    }
+    await cam?.dispose();
+    call.changed();
+  }
+
+  /// Turns our camera on or off. On a voice call, turning it on asks the
+  /// peer to switch to video.
+  Future<void> setCamera(WaCall call, bool on) async {
+    if (call.ended || on == call.cameraOn) return;
+    if (on) {
+      await _cameraOn(call);
+      if (!call.peerVideo) call.upgradePending = true;
+      if (!call.speaker) await setSpeaker(call, true);
+    } else {
+      await _cameraOff(call);
+    }
+    try {
+      _send({'type': 'video', 'id': call.id, 'on': on});
+    } catch (e) {
+      Logs().w('[WaCall] camera change not sent', e);
+    }
+    call.changed();
+  }
+
+  Future<void> switchCamera(WaCall call) async {
+    final track = call.camera?.getVideoTracks().firstOrNull;
+    if (track == null) return;
+    await Helper.switchCamera(track);
+    call.frontCamera = !call.frontCamera;
+    call.changed();
+  }
+
+  /// Accepts the peer's request to switch to video (and turns our camera on).
+  Future<void> acceptVideo(WaCall call) async {
+    call.upgradeRequested = false;
+    try {
+      _send({'type': 'video_accept', 'id': call.id});
+    } catch (_) {}
+    call.peerVideo = true;
+    await setCamera(call, true);
+    call.upgradePending = false;
+    call.changed();
+  }
+
+  void declineVideo(WaCall call) {
+    call.upgradeRequested = false;
+    call.changed();
+  }
+
+  void _onVideoState(WaCall call, Map<String, dynamic> m) {
+    if (m['error'] != null) {
+      Logs().w('[WaCall] video: ${m['error']}');
+    }
+    final pv = m['peer_video'];
+    if (pv is bool) {
+      call.peerVideo = pv;
+      if (pv) call.upgradePending = false;
+    }
+    final o = m['orientation'];
+    if (o is int) call.peerOrientation = o & 3;
+    switch (m['upgrade']) {
+      case 'request':
+        if (call.cameraOn) {
+          // We already show video: just accept.
+          try {
+            _send({'type': 'video_accept', 'id': call.id});
+          } catch (_) {}
+        } else {
+          call.upgradeRequested = true;
+        }
+      case 'accepted':
+        call.upgradePending = false;
+      case 'rejected' || 'cancelled':
+        call.upgradeRequested = false;
+        if (call.upgradePending) {
+          // The peer said no: WhatsApp won't take our video, so stop the camera.
+          call.upgradePending = false;
+          unawaited(_cameraOff(call));
+        }
+    }
+    if (call.showsVideo && !call.speaker) unawaited(setSpeaker(call, true));
+    call.changed();
+  }
+
   void _end(
     WaCall call, {
     String? reason,
@@ -557,10 +753,19 @@ class WaCallService {
     }
     _sdpWaiters.remove(call.id);
     call._set(WaCallPhase.ended, reason: reason, error: error);
-    for (final t in call.local?.getTracks() ?? <MediaStreamTrack>[]) {
-      t.stop();
+    for (final s in [call.local, call.camera]) {
+      for (final t in s?.getTracks() ?? <MediaStreamTrack>[]) {
+        t.stop();
+      }
+      s?.dispose();
     }
-    call.local?.dispose();
+    call.localRenderer.srcObject = null;
+    call.remoteRenderer.srcObject = null;
+    // The call screen may still show the renderers for a moment.
+    Timer(const Duration(seconds: 3), () {
+      call.localRenderer.dispose();
+      call.remoteRenderer.dispose();
+    });
     call.pc?.close();
     if (current.value == call) current.value = null;
     _scheduleIdleClose();

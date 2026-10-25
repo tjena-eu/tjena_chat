@@ -10,7 +10,6 @@ import 'package:fluffychat/utils/fluffy_share.dart';
 import 'package:fluffychat/utils/matrix_sdk_extensions/matrix_locals.dart';
 import 'package:fluffychat/utils/media_auto_download.dart';
 import 'package:fluffychat/utils/space_child_visibility.dart';
-import 'package:fluffychat/utils/wa_matrix_bridge.dart';
 import 'package:fluffychat/widgets/avatar.dart';
 import 'package:fluffychat/widgets/chat_settings_popup_menu.dart';
 import 'package:fluffychat/widgets/layouts/max_width_body.dart';
@@ -45,7 +44,6 @@ class ChatDetailsView extends StatelessWidget {
 
     final directChatMatrixID = room.directChatMatrixID;
     final roomAvatar = room.avatar;
-    final isWaRoom = WaMatrixBridge.instance.isWaRoom(room.id);
 
     return StreamBuilder(
       stream: room.client.onRoomState.stream.where(
@@ -115,28 +113,12 @@ class ChatDetailsView extends StatelessWidget {
                                       mxContent: room.avatar,
                                       name: displayname,
                                       size: Avatar.defaultSize * 2.5,
-                                      onTap: isWaRoom || roomAvatar != null
-                                          ? () {
-                                              // Re-fetch just this chat's
-                                              // photo from WhatsApp — fixes a
-                                              // blank/black icon without the
-                                              // heavy "WA fix" (name+photo+
-                                              // history) flow.
-                                              if (isWaRoom) {
-                                                // ignore: unawaited_futures
-                                                WaMatrixBridge.instance
-                                                    .refreshRoom(room.id);
-                                              }
-                                              if (roomAvatar != null) {
-                                                showDialog(
-                                                  context: context,
-                                                  builder: (_) =>
-                                                      MxcImageViewer(
-                                                        roomAvatar,
-                                                      ),
-                                                );
-                                              }
-                                            }
+                                      onTap: roomAvatar != null
+                                          ? () => showDialog(
+                                              context: context,
+                                              builder: (_) =>
+                                                  MxcImageViewer(roomAvatar),
+                                            )
                                           : null,
                                     ),
                                   ),

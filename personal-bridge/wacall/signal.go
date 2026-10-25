@@ -39,6 +39,17 @@ type Msg struct {
 	Call       *RingInfo   `json:"call,omitempty"`
 	Calls      []RingInfo  `json:"calls,omitempty"`
 	Online     *bool       `json:"online,omitempty"`
+
+	// Video. App → phone: Video on "call"/"answer" (start with the camera
+	// on), On on "video" (camera on/off). Phone → app: Video on "sdp" (the
+	// call can carry video), and "video_state" with PeerVideo/Orientation
+	// (quarter turns clockwise) or Upgrade (the peer asks to switch to video:
+	// "request", or the answer to ours: "accepted"/"rejected"/"cancelled").
+	Video       bool   `json:"video,omitempty"`
+	On          *bool  `json:"on,omitempty"`
+	PeerVideo   *bool  `json:"peer_video,omitempty"`
+	Orientation *int   `json:"orientation,omitempty"`
+	Upgrade     string `json:"upgrade,omitempty"`
 	Status     *WAStatus   `json:"status,omitempty"`
 }
 

@@ -139,12 +139,19 @@ func (o Options) edits() ([]configEdit, error) {
 		// backwards backfill queue stays off.
 		{false, []string{"backfill", "queue", "enabled"}},
 
+		// Contact names: the name saved in your phone's contacts first. The
+		// default skips it (ghosts are shared on multi-user bridges), so a
+		// contact who hasn't written since linking showed as a phone number
+		// until their WhatsApp profile name arrived. This bridge has one owner.
+		{displaynameTemplate, []string{"network", "displayname_template"}},
 		{statusOn, []string{"network", "enable_status_broadcast"}},
 		{statusMuted, []string{"network", "mute_status_broadcast"}},
 		{statusTag, []string{"network", "status_broadcast_tag"}},
 		{true, []string{"network", "disable_status_broadcast_send"}},
 	}, nil
 }
+
+const displaynameTemplate = `{{or .FullName .BusinessName .PushName .Phone .RedactedPhone "Unknown user"}} (WA)`
 
 type configEdit struct {
 	value any

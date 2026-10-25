@@ -42,6 +42,8 @@ func (f *fakeSynapse) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case strings.HasPrefix(r.URL.Path, "/_matrix/client/v1/appservice/"):
 		f.pinged = append(f.pinged, r.URL.Path)
 		writeJSON(w, 200, map[string]any{"duration_ms": 1})
+	case r.URL.Path == "/health":
+		_, _ = w.Write([]byte("OK"))
 	case r.URL.Path == "/_matrix/client/v3/echo":
 		f.lastAuth = tok
 		writeJSON(w, 200, map[string]string{"ok": "1"})

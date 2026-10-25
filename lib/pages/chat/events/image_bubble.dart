@@ -9,7 +9,6 @@ import 'package:fluffychat/pages/chat/events/file_send_status_indicator.dart';
 import 'package:fluffychat/utils/file_description.dart';
 import 'package:fluffychat/utils/matrix_sdk_extensions/event_extension.dart';
 import 'package:fluffychat/utils/media_auto_download.dart';
-import 'package:fluffychat/utils/wa_matrix_bridge.dart';
 import 'package:fluffychat/utils/url_launcher.dart';
 import 'package:fluffychat/widgets/mxc_image.dart';
 import 'package:flutter/material.dart';
@@ -65,36 +64,9 @@ class _ImageBubbleState extends State<ImageBubble> {
   /// Set when the user taps a not-auto-loaded image, revealing just that one.
   bool _revealed = false;
 
-  /// True while a deferred WhatsApp attachment is being fetched.
-  bool _loading = false;
-
-  /// Reveal this one image. For WhatsApp the bytes may not be on the device at
-  /// all (the bridge deferred the download), so fetch them first — otherwise
-  /// revealing would just show a broken image.
+  /// Reveal this one image.
   Future<void> _reveal() async {
     final event = widget.event;
-    if (WaMatrixBridge.instance.isWaRoom(event.room.id) &&
-        !event.hasAttachment) {
-      setState(() => _loading = true);
-      final ok = await WaMatrixBridge.instance.downloadPendingEvent(
-        event.room.id,
-        event.eventId,
-      );
-      if (!mounted) return;
-      setState(() {
-        _loading = false;
-        // On success the media_ready injection replaces this event with one that
-        // has an attachment, so revealing is what makes it visible. On failure
-        // stay as a placeholder rather than showing a broken image.
-        _revealed = ok;
-      });
-      if (!ok) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(L10n.of(context).oopsSomethingWentWrong)),
-        );
-      }
-      return;
-    }
     setState(() => _revealed = true);
     // Saving is tied to the download, so a tap-to-load image still lands in the
     // gallery when the chat has auto-save on.
@@ -166,7 +138,7 @@ class _ImageBubbleState extends State<ImageBubble> {
             ),
           ),
           child: InkWell(
-            onTap: showImage ? widget.onTap : (_loading ? null : _reveal),
+            onTap: showImage ? widget.onTap : _reveal,
             borderRadius: borderRadius,
             child: Stack(
               alignment: Alignment.center,
@@ -208,8 +180,7 @@ class _ImageBubbleState extends State<ImageBubble> {
                             width: width,
                             height: height,
                             fit: fit,
-                            showDownloadHint: !_loading,
-                            loading: _loading,
+                            showDownloadHint: true,
                           ),
                   ),
                 ),
@@ -257,9 +228,6 @@ class _ImageBubblePlaceholder extends StatelessWidget {
   /// rather than as an image that is still decoding.
   final bool showDownloadHint;
 
-  /// Show a spinner instead — a deferred attachment is being fetched.
-  final bool loading;
-
   /// Assumed aspect ratio while the real dimensions are unknown, so the bubble
   /// does not start out as a square and then jump.
   static const double _fallbackAspectRatio = 4 / 3;
@@ -270,7 +238,6 @@ class _ImageBubblePlaceholder extends StatelessWidget {
     required this.height,
     required this.fit,
     this.showDownloadHint = false,
-    this.loading = false,
   });
 
   @override
@@ -291,24 +258,6 @@ class _ImageBubblePlaceholder extends StatelessWidget {
             height: height,
             fit: fit,
           ),
-          if (loading)
-            const DecoratedBox(
-              decoration: BoxDecoration(
-                color: Colors.black54,
-                shape: BoxShape.circle,
-              ),
-              child: Padding(
-                padding: EdgeInsets.all(12),
-                child: SizedBox(
-                  width: 22,
-                  height: 22,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2.5,
-                    color: Colors.white,
-                  ),
-                ),
-              ),
-            ),
           if (showDownloadHint)
             DecoratedBox(
               decoration: BoxDecoration(

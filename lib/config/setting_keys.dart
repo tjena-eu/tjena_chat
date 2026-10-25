@@ -58,17 +58,6 @@ enum AppSettings<T> {
   // Off means the viewer shows a tap-to-load placeholder instead.
   storiesAutoDownloadMedia<bool>('chat.fluffy.stories_auto_download', true),
   experimentalVoip<bool>('chat.fluffy.experimental_voip', true),
-  // The old built-in (on-device) WhatsApp/Signal bridge. Being phased out in
-  // favour of the personal bridge (tjena Bridge app), so it is an
-  // experimental opt-in. Existing users who had an account linked are opted
-  // in once by LocalBridgeControl.migrate.
-  localBridgesEnabled<bool>('eu.tjena.local_bridges_enabled', false),
-  // Whether the built-in bridge keeps a foreground service (persistent
-  // notification) to stay connected while the app is closed.
-  localBridgeBackgroundService<bool>(
-    'eu.tjena.local_bridge_background_service',
-    true,
-  ),
   shareKeysWith<String>('chat.fluffy.share_keys_with_2', 'all'),
   noEncryptionWarningShown<bool>(
     'chat.fluffy.no_encryption_warning_shown',
@@ -102,27 +91,7 @@ enum AppSettings<T> {
   hideRoomsInSpaces<bool>('chat.fluffy.hideRoomsInSpaces', false),
   spaceRoomPreview<bool>('chat.fluffy.space_room_preview', false),
   showThumbnailsInTimeline<bool>('chat.fluffy.showThumbnailsInTimeline', true),
-  debugPush<bool>('chat.fluffy.debug_push', false),
-  // Base URL of the call-provisioner backend that mints guest call links for
-  // calling WhatsApp-bridged contacts (e.g. https://call.tjena.eu).
-  callProvisionerBaseUrl<String>(
-    'chat.fluffy.call_provisioner_base_url',
-    'https://call.tjena.eu',
-  ),
-  // Whether WhatsApp web-response calls (guest call links) are enabled. When
-  // off, the call button is hidden in WhatsApp chats.
-  waCallsEnabled<bool>('chat.fluffy.wa_calls_enabled', true),
-  // Auto-reply to incoming WhatsApp calls with a "unreachable, call me via this
-  // link" message; and optionally auto-decline the WhatsApp call so it stops
-  // ringing.
-  waCallAutoReply<bool>('chat.fluffy.wa_call_auto_reply', false),
-  waCallAutoDecline<bool>('chat.fluffy.wa_call_auto_decline', false),
-  // Text sent as the call auto-reply. The call link is appended automatically.
-  waCallAutoReplyMessage<String>(
-    'chat.fluffy.wa_call_auto_reply_message',
-    "📞 I don't take WhatsApp calls for privacy reasons. To reach me, tap this "
-        'link to call:',
-  );
+  debugPush<bool>('chat.fluffy.debug_push', false);
 
   final String key;
   final T defaultValue;

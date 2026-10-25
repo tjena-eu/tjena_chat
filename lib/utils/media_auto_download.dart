@@ -2,10 +2,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 
 import 'package:matrix/matrix.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:tjena_bridge/tjena_bridge.dart';
 
 import 'package:fluffychat/config/setting_keys.dart';
 import 'package:fluffychat/utils/platform_infos.dart';
@@ -27,6 +27,9 @@ import 'package:fluffychat/utils/platform_infos.dart';
 /// both the per-chat override and the global setting.
 abstract class MediaAutoDownload {
   static const _prefix = 'auto_download_media_';
+
+  /// Handled in android/…/MainActivity.kt.
+  static const _system = MethodChannel('tjena.chat/system');
 
   /// roomId → override. Absent means "follow the global setting".
   static final Map<String, bool> _overrides = {};
@@ -60,35 +63,20 @@ abstract class MediaAutoDownload {
     await refreshDataSaver();
   }
 
-  /// Re-read the system Data Saver state and tell the bridge whether to defer
-  /// incoming attachments. Call at start and whenever the app is resumed — the
+  /// Re-read the system Data Saver state. Call at start and whenever the app is resumed — the
   /// user may have flipped it while away, or moved between metered and
   /// unmetered networks.
   static Future<void> refreshDataSaver() async {
     if (!PlatformInfos.isAndroid) return;
     try {
-      final active = await TjenaBridge.instance.isDataSaverEnabled();
+      final active =
+          await _system.invokeMethod<bool>('isDataSaverRestricted') ?? false;
       if (active != _dataSaver) {
         _dataSaver = active;
         revision.value++;
       }
     } catch (e) {
       Logs().d('[MediaAutoDownload] data saver check failed: $e');
-    }
-    await _syncBridgePolicy();
-  }
-
-  /// The bridge always defers now: an attachment is fetched when its chat is
-  /// opened, not when it arrives. Under Data Saver it waits for an explicit tap
-  /// instead. Either way the Go side must hold the media keys rather than
-  /// download eagerly, so this is unconditional — the distinction is only in
-  /// *what* triggers the fetch, which Dart decides.
-  static Future<void> _syncBridgePolicy() async {
-    if (!PlatformInfos.isAndroid) return;
-    try {
-      await TjenaBridge.instance.setDeferMedia(true);
-    } catch (e) {
-      Logs().d('[MediaAutoDownload] setDeferMedia failed: $e');
     }
   }
 

@@ -7,6 +7,9 @@ require (
 	github.com/gotranspile/g722 v0.0.0-20240123003956-384a1bb16a19
 	github.com/mattn/go-sqlite3 v1.14.52
 	github.com/pion/ice/v4 v4.4.8
+	github.com/pion/interceptor v0.1.49
+	github.com/pion/rtcp v1.2.20
+	github.com/pion/rtp v1.10.6
 	github.com/pion/webrtc/v4 v4.2.25
 	github.com/polymorfa/hypermeow v0.0.0-20260906031440-90f9e4ec2c88
 	github.com/purpshell/meowcaller v0.0.0-20260906234207-c48c3e2a243c
@@ -23,13 +26,10 @@ require (
 	github.com/petermattis/goid v0.0.0-20260713124913-97594f28f5ca // indirect
 	github.com/pion/datachannel v1.6.3 // indirect
 	github.com/pion/dtls/v3 v3.1.15 // indirect
-	github.com/pion/interceptor v0.1.49 // indirect
 	github.com/pion/logging v0.2.4 // indirect
 	github.com/pion/mdns/v2 v2.2.2 // indirect
 	github.com/pion/opus v0.1.0 // indirect
 	github.com/pion/randutil v0.1.0 // indirect
-	github.com/pion/rtcp v1.2.20 // indirect
-	github.com/pion/rtp v1.10.6 // indirect
 	github.com/pion/sctp v1.12.0 // indirect
 	github.com/pion/sdp/v3 v3.0.20 // indirect
 	github.com/pion/srtp/v3 v3.1.3 // indirect

@@ -3,7 +3,6 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import 'dart:typed_data';
 
 import 'package:async/async.dart' show Result;
 import 'package:cross_file/cross_file.dart';
@@ -14,7 +13,6 @@ import 'package:fluffychat/utils/matrix_sdk_extensions/matrix_file_extension.dar
 import 'package:fluffychat/utils/other_party_can_receive.dart';
 import 'package:fluffychat/utils/platform_infos.dart';
 import 'package:fluffychat/utils/size_string.dart';
-import 'package:fluffychat/utils/wa_matrix_bridge.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/adaptive_dialog_action.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/dialog_text_field.dart';
 import 'package:fluffychat/widgets/future_loading_dialog.dart';
@@ -63,29 +61,6 @@ class SendFileDialogState extends State<SendFileDialog> {
       title: l10n.sendingAttachment,
       futureWithProgress: (setProgress) async {
         Navigator.of(context, rootNavigator: false).pop();
-
-        // Route through WA bridge for local-bridged rooms.
-        if (WaMatrixBridge.instance.isWaRoom(widget.room.id)) {
-          final label = _labelTextController.text.trim();
-          for (final xfile in widget.files) {
-            final bytes = await xfile.readAsBytes();
-            final mimeType = xfile.mimeType ?? lookupMimeType(xfile.path) ?? 'application/octet-stream';
-            Uint8List? thumb;
-            if (PlatformInfos.isMobile && mimeType.startsWith('video')) {
-              thumb = (await xfile.getVideoThumbnail())?.bytes;
-            }
-            await WaMatrixBridge.instance.sendFile(
-              widget.room.id,
-              bytes,
-              mimeType,
-              xfile.name,
-              caption: label,
-              compress: compress,
-              thumbnail: thumb,
-            );
-          }
-          return;
-        }
 
         if (!widget.room.otherPartyCanReceiveMessages) {
           throw OtherPartyCanNotReceiveMessages();

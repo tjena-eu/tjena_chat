@@ -5,6 +5,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:matrix/matrix.dart';
 
 import '../../utils/platform_infos.dart';
@@ -39,6 +40,8 @@ class WaCallPage extends StatefulWidget {
 class _WaCallPageState extends State<WaCallPage> {
   Timer? _tick;
   bool _closing = false;
+  bool _proximity = false;
+  Offset? _previewPos;
 
   WaCall get call => widget.call;
 
@@ -49,13 +52,25 @@ class _WaCallPageState extends State<WaCallPage> {
     _tick = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted && call.phase == WaCallPhase.active) setState(() {});
     });
-    if (PlatformInfos.isAndroid) {
-      _callManager.invokeMethod('acquireProximityWakeLock').ignore();
-    }
+    _syncProximity();
+  }
+
+  /// Screen off near the ear, but not while video is shown.
+  void _syncProximity() {
+    if (!PlatformInfos.isAndroid) return;
+    final want = !call.ended && !call.showsVideo;
+    if (want == _proximity) return;
+    _proximity = want;
+    _callManager
+        .invokeMethod(
+          want ? 'acquireProximityWakeLock' : 'releaseProximityWakeLock',
+        )
+        .ignore();
   }
 
   void _changed() {
     if (!mounted) return;
+    _syncProximity();
     setState(() {});
     if (call.ended && !_closing) {
       _closing = true;
@@ -69,7 +84,7 @@ class _WaCallPageState extends State<WaCallPage> {
   void dispose() {
     _tick?.cancel();
     call.removeListener(_changed);
-    if (PlatformInfos.isAndroid) {
+    if (_proximity) {
       _callManager.invokeMethod('releaseProximityWakeLock').ignore();
     }
     // Leaving the screen ends the call.
@@ -98,10 +113,213 @@ class _WaCallPageState extends State<WaCallPage> {
     }
   }
 
+  List<Widget> _buttons({required bool onVideo}) => [
+    _RoundButton(
+      icon: call.muted ? Icons.mic_off : Icons.mic_none,
+      label: call.muted ? 'Unmute' : 'Mute',
+      active: call.muted,
+      onVideo: onVideo,
+      onTap: call.ended
+          ? null
+          : () => widget.service.setMuted(call, !call.muted),
+    ),
+    if (call.videoPossible)
+      _RoundButton(
+        icon: call.cameraOn ? Icons.videocam : Icons.videocam_off_outlined,
+        label: call.cameraOn ? 'Camera' : 'Camera off',
+        active: call.cameraOn,
+        onVideo: onVideo,
+        onTap: call.ended
+            ? null
+            : () => widget.service.setCamera(call, !call.cameraOn),
+      ),
+    _RoundButton(
+      icon: Icons.call_end,
+      label: 'End',
+      color: Colors.red,
+      onVideo: onVideo,
+      onTap: call.ended
+          ? () => Navigator.of(context).maybePop()
+          : () => widget.service.hangup(call),
+    ),
+    if (call.cameraOn)
+      _RoundButton(
+        icon: Icons.cameraswitch_outlined,
+        label: 'Flip',
+        onVideo: onVideo,
+        onTap: () => widget.service.switchCamera(call),
+      )
+    else
+      _RoundButton(
+        icon: call.speaker ? Icons.volume_up : Icons.volume_down,
+        label: 'Speaker',
+        active: call.speaker,
+        onVideo: onVideo,
+        onTap: call.ended
+            ? null
+            : () => widget.service.setSpeaker(call, !call.speaker),
+      ),
+  ];
+
+  /// "X wants to switch to video".
+  Widget _upgradeBanner(ThemeData theme) => Card(
+    margin: const EdgeInsets.all(16),
+    child: Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 8, 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '${call.title} wants to switch to video',
+            style: theme.textTheme.titleSmall,
+          ),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              TextButton(
+                onPressed: () => widget.service.declineVideo(call),
+                child: const Text('Not now'),
+              ),
+              FilledButton.icon(
+                onPressed: () => widget.service.acceptVideo(call),
+                icon: const Icon(Icons.videocam),
+                label: const Text('Switch'),
+              ),
+            ],
+          ),
+        ],
+      ),
+    ),
+  );
+
+  Widget _videoBody(ThemeData theme) {
+    final size = MediaQuery.sizeOf(context);
+    const pw = 110.0, ph = 160.0;
+    final pos =
+        _previewPos ??
+        Offset(size.width - pw - 16, MediaQuery.paddingOf(context).top + 16);
+    return Stack(
+      children: [
+        Positioned.fill(
+          child: call.peerVideo
+              ? RotatedBox(
+                  quarterTurns: call.peerOrientation,
+                  child: RTCVideoView(
+                    call.remoteRenderer,
+                    objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+                  ),
+                )
+              : Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Avatar(
+                        mxContent: call.room?.avatar,
+                        name: call.title,
+                        size: 96,
+                        client: call.room?.client,
+                      ),
+                      const SizedBox(height: 12),
+                      Text(
+                        call.upgradePending
+                            ? 'Waiting for ${call.title} to accept video…'
+                            : '${call.title}\'s camera is off',
+                        style: const TextStyle(color: Colors.white70),
+                      ),
+                    ],
+                  ),
+                ),
+        ),
+        // Name and time
+        Positioned(
+          left: 16,
+          right: 140,
+          top: MediaQuery.paddingOf(context).top + 16,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                call.title,
+                style: theme.textTheme.titleLarge?.copyWith(
+                  color: Colors.white,
+                  shadows: const [Shadow(blurRadius: 4)],
+                ),
+              ),
+              Text(
+                _status,
+                style: const TextStyle(
+                  color: Colors.white,
+                  shadows: [Shadow(blurRadius: 4)],
+                ),
+              ),
+            ],
+          ),
+        ),
+        if (call.cameraOn)
+          Positioned(
+            left: pos.dx,
+            top: pos.dy,
+            child: GestureDetector(
+              onPanUpdate: (d) => setState(() {
+                final p = (_previewPos ?? pos) + d.delta;
+                _previewPos = Offset(
+                  p.dx.clamp(0, size.width - pw),
+                  p.dy.clamp(0, size.height - ph),
+                );
+              }),
+              onTap: () => widget.service.switchCamera(call),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(12),
+                child: SizedBox(
+                  width: pw,
+                  height: ph,
+                  child: RTCVideoView(
+                    call.localRenderer,
+                    mirror: call.frontCamera,
+                    objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        Positioned(
+          left: 0,
+          right: 0,
+          bottom: 0,
+          child: SafeArea(
+            top: false,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (call.upgradeRequested) _upgradeBanner(theme),
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 32, top: 8),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                    children: _buttons(onVideo: true),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final room = call.room;
+    if (call.showsVideo && !call.ended) {
+      return PopScope(
+        canPop: false,
+        onPopInvokedWithResult: (didPop, _) {
+          if (!didPop) widget.service.hangup(call);
+        },
+        child: Scaffold(backgroundColor: Colors.black, body: _videoBody(theme)),
+      );
+    }
     return PopScope(
       canPop: call.ended,
       onPopInvokedWithResult: (didPop, _) {
@@ -144,34 +362,10 @@ class _WaCallPageState extends State<WaCallPage> {
                 style: theme.textTheme.bodySmall,
               ),
               const Spacer(),
+              if (call.upgradeRequested && !call.ended) _upgradeBanner(theme),
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                children: [
-                  _RoundButton(
-                    icon: call.muted ? Icons.mic_off : Icons.mic_none,
-                    label: call.muted ? 'Unmute' : 'Mute',
-                    active: call.muted,
-                    onTap: call.ended
-                        ? null
-                        : () => widget.service.setMuted(call, !call.muted),
-                  ),
-                  _RoundButton(
-                    icon: Icons.call_end,
-                    label: 'End',
-                    color: Colors.red,
-                    onTap: call.ended
-                        ? () => Navigator.of(context).maybePop()
-                        : () => widget.service.hangup(call),
-                  ),
-                  _RoundButton(
-                    icon: call.speaker ? Icons.volume_up : Icons.volume_down,
-                    label: 'Speaker',
-                    active: call.speaker,
-                    onTap: call.ended
-                        ? null
-                        : () => widget.service.setSpeaker(call, !call.speaker),
-                  ),
-                ],
+                children: _buttons(onVideo: false),
               ),
               const SizedBox(height: 48),
             ],
@@ -188,12 +382,16 @@ class _RoundButton extends StatelessWidget {
   final VoidCallback? onTap;
   final Color? color;
   final bool active;
+
+  /// Drawn over video: translucent, white text.
+  final bool onVideo;
   const _RoundButton({
     required this.icon,
     required this.label,
     this.onTap,
     this.color,
     this.active = false,
+    this.onVideo = false,
   });
 
   @override
@@ -201,9 +399,13 @@ class _RoundButton extends StatelessWidget {
     final theme = Theme.of(context);
     final bg =
         color ??
-        (active ? theme.colorScheme.primary : theme.colorScheme.surface);
+        (onVideo
+            ? (active ? Colors.white : Colors.black45)
+            : (active ? theme.colorScheme.primary : theme.colorScheme.surface));
     final fg = color != null
         ? Colors.white
+        : onVideo
+        ? (active ? Colors.black : Colors.white)
         : (active ? theme.colorScheme.onPrimary : theme.colorScheme.onSurface);
     return Column(
       mainAxisSize: MainAxisSize.min,
@@ -221,7 +423,12 @@ class _RoundButton extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 8),
-        Text(label, style: theme.textTheme.labelMedium),
+        Text(
+          label,
+          style: theme.textTheme.labelMedium?.copyWith(
+            color: onVideo ? Colors.white : null,
+          ),
+        ),
       ],
     );
   }
@@ -269,7 +476,7 @@ class _WaIncomingCallPageState extends State<WaIncomingCallPage> {
     if (!still && !_busy && mounted) Navigator.of(context).maybePop();
   }
 
-  Future<void> _answer() async {
+  Future<void> _answer({bool video = false}) async {
     setState(() {
       _busy = true;
       _error = null;
@@ -280,6 +487,7 @@ class _WaIncomingCallPageState extends State<WaIncomingCallPage> {
         widget.ring,
         title: widget.title,
         room: widget.room,
+        video: video,
       );
       // Show the call screen right away; it follows the call's state.
       final call = widget.service.current.value;
@@ -330,7 +538,7 @@ class _WaIncomingCallPageState extends State<WaIncomingCallPage> {
             Text(
               [
                 widget.ring.video
-                    ? 'Incoming WhatsApp video call (answers with audio only)'
+                    ? 'Incoming WhatsApp video call'
                     : 'Incoming WhatsApp call',
                 if (widget.service.accountLabel(widget.ring.account) != null)
                   'to your account ${widget.service.accountLabel(widget.ring.account)}',
@@ -357,11 +565,18 @@ class _WaIncomingCallPageState extends State<WaIncomingCallPage> {
                   color: Colors.red,
                   onTap: _busy ? null : _decline,
                 ),
+                if (widget.ring.video)
+                  _RoundButton(
+                    icon: Icons.call,
+                    label: 'Audio only',
+                    color: Colors.green,
+                    onTap: _busy ? null : _answer,
+                  ),
                 _RoundButton(
-                  icon: Icons.call,
-                  label: 'Answer',
+                  icon: widget.ring.video ? Icons.videocam : Icons.call,
+                  label: widget.ring.video ? 'Video' : 'Answer',
                   color: Colors.green,
-                  onTap: _busy ? null : _answer,
+                  onTap: _busy ? null : () => _answer(video: widget.ring.video),
                 ),
               ],
             ),
@@ -374,11 +589,15 @@ class _WaIncomingCallPageState extends State<WaIncomingCallPage> {
 }
 
 /// Starts a WhatsApp call to [room]'s contact and shows the call screen.
-Future<void> startWaCall(BuildContext context, Room room) async {
+Future<void> startWaCall(
+  BuildContext context,
+  Room room, {
+  bool video = false,
+}) async {
   final service = WaCallService.start(room.client);
   final nav = Navigator.of(context, rootNavigator: true);
   final messenger = ScaffoldMessenger.of(context);
-  final future = service.dial(room);
+  final future = service.dial(room, video: video);
   final call = service.current.value;
   if (call != null) {
     unawaited(

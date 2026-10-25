@@ -19,13 +19,10 @@ extension ClientDownloadContentExtension on Client {
     ThumbnailMethod? thumbnailMethod,
     bool rounded = false,
   }) async {
-    // Local bridge media (WA and Signal) is pre-stored in the database under
-    // the plain mxc URI — no homeserver thumbnail transform needed.
+    // Built-in Signal bridge media is pre-stored in the database under the
+    // plain mxc URI — no homeserver thumbnail transform needed.
     if (mxc.scheme == 'mxc' &&
-        (mxc.host == 'wa-local' ||
-            mxc.host == 'wa-media' ||
-            mxc.host == 'sig-local' ||
-            mxc.host == 'sig-media')) {
+        (mxc.host == 'sig-local' || mxc.host == 'sig-media')) {
       return await database.getFile(mxc) ?? Uint8List(0);
     }
 

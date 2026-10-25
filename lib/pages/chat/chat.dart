@@ -52,9 +52,6 @@ import 'package:universal_html/universal_html.dart' as web;
 
 import '../../utils/account_bundles.dart';
 import '../../utils/localized_exception_extension.dart';
-import '../../utils/signal_matrix_bridge.dart';
-import '../../utils/wa_call_link.dart';
-import '../../utils/wa_matrix_bridge.dart';
 import 'send_file_dialog.dart';
 import 'send_live_location_dialog.dart';
 import 'send_location_dialog.dart';
@@ -436,13 +433,6 @@ class ChatController extends State<ChatPageWithRoom>
     if (!mounted) return;
     if (!MediaAutoDownload.enabledFor(room.id)) return;
 
-    if (WaMatrixBridge.instance.isWaRoom(room.id)) {
-      // WhatsApp: the bytes aren't on the device at all — ask the bridge to
-      // fetch what it deferred. Auto-save then happens in its media-ready path.
-      await WaMatrixBridge.instance.downloadPendingForRoom(room.id);
-      return;
-    }
-
     // Matrix: the SDK downloads lazily as bubbles build, so opening the chat
     // already pulls what is on screen. Auto-save is the part that no longer
     // happens on arrival, so run it here for the recent attachments. It is
@@ -526,7 +516,6 @@ class ChatController extends State<ChatPageWithRoom>
 
       // Mark room as read on first visit if requirements are fulfilled
       setReadMarker();
-      _markWaRoomRead();
 
       if (!mounted) return;
     } catch (e, s) {
@@ -605,31 +594,8 @@ class ChatController extends State<ChatPageWithRoom>
 
   Future<void>? _setReadMarkerFuture;
 
-  /// Clears the unread state of a WhatsApp room and sends the WA read receipt.
-  /// A no-op when there is nothing new since the last time.
-  void _markWaRoomRead() {
-    if (!WaMatrixBridge.instance.isWaRoom(room.id)) return;
-    // ignore: unawaited_futures
-    WaMatrixBridge.instance.markRoomRead(sendingClient, room.id);
-  }
-
   void setReadMarker({String? eventId}) {
     if (eventId?.isValidMatrixId == false) return;
-    // Virtual bridge rooms (WhatsApp/Signal) have no homeserver; calling the
-    // read-marker API throws "Could not find event ... in room". Route read
-    // state through the bridge instead and skip the Matrix API entirely.
-    if (WaMatrixBridge.instance.isWaRoom(room.id) ||
-        SignalMatrixBridge.instance.isSigRoom(room.id)) {
-      // Being in the chat = the messages are seen: clear its notification.
-      WaMatrixBridge.instance.clearNotification(room.id);
-      // ...and keep clearing the unread state as messages arrive, not only
-      // when the room was opened — otherwise a message that lands while the
-      // user is typing leaves the chat unread when they leave it.
-      if (WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed) {
-        _markWaRoomRead();
-      }
-      return;
-    }
     if (_setReadMarkerFuture != null) return;
     if (_scrolledUp) return;
     if (scrollUpBannerEventId != null) return;
@@ -664,17 +630,12 @@ class ChatController extends State<ChatPageWithRoom>
   void dispose() {
     // Leaving the chat: mark whatever arrived last as read too, so a message
     // that landed while the user was typing does not leave the chat unread.
-    _markWaRoomRead();
     timeline?.cancelSubscriptions();
     timeline = null;
     inputFocus.removeListener(_inputFocusListener);
     web.window.removeEventListener('paste', _handleClipboardFilePasteWeb);
     if (currentlyTyping) {
-      if (WaMatrixBridge.instance.isWaRoom(room.id)) {
-        WaMatrixBridge.instance.notifyTyping(room.id, false);
-      } else {
-        room.setTyping(false);
-      }
+      room.setTyping(false);
     }
     super.dispose();
   }
@@ -687,11 +648,7 @@ class ChatController extends State<ChatPageWithRoom>
       // no need to have the setting typing to false be blocking
       typingCoolDown?.cancel();
       typingCoolDown = null;
-      if (WaMatrixBridge.instance.isWaRoom(room.id)) {
-        WaMatrixBridge.instance.notifyTyping(room.id, false);
-      } else {
-        room.setTyping(false);
-      }
+      room.setTyping(false);
       currentlyTyping = false;
     }
     // then cancel the old timeline
@@ -733,33 +690,6 @@ class ChatController extends State<ChatPageWithRoom>
       );
       if (dialogResult == OkCancelResult.cancel) return;
       parseCommands = false;
-    }
-
-    // Route to on-device WhatsApp bridge instead of the homeserver.
-    final waId = WaMatrixBridge.instance.waRoomId(room.id);
-    if (waId != null) {
-      if (editEvent != null) {
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Editing not supported for WhatsApp messages'),
-          ),
-        );
-        return;
-      }
-      // ignore: unawaited_futures
-      WaMatrixBridge.instance.sendText(room.id, sendController.text);
-      sendController.value = TextEditingValue(
-        text: pendingText,
-        selection: const TextSelection.collapsed(offset: 0),
-      );
-      setState(() {
-        sendController.text = pendingText;
-        _inputTextIsEmpty = pendingText.isEmpty;
-        replyEvent = null;
-        pendingText = '';
-      });
-      return;
     }
 
     // ignore: unawaited_futures
@@ -1133,12 +1063,7 @@ class ChatController extends State<ChatPageWithRoom>
         for (final (i, event) in selectedEvents.indexed) {
           onProgress(i / count);
           if (event.status.isSent) {
-            if (WaMatrixBridge.instance.isWaRoom(room.id)) {
-              await WaMatrixBridge.instance.redactMessage(
-                room.id,
-                event.eventId,
-              );
-            } else if (event.canRedact) {
+            if (event.canRedact) {
               await event.redactEvent(reason: reason);
             } else {
               final client = currentRoomBundle.firstWhere(
@@ -1595,11 +1520,7 @@ class ChatController extends State<ChatPageWithRoom>
         if (!mounted) return;
         typingCoolDown = null;
         currentlyTyping = false;
-        if (WaMatrixBridge.instance.isWaRoom(room.id)) {
-          WaMatrixBridge.instance.notifyTyping(room.id, false);
-        } else {
-          room.setTyping(false);
-        }
+        room.setTyping(false);
       });
       typingTimeout ??= Timer(const Duration(seconds: 30), () {
         typingTimeout = null;
@@ -1607,14 +1528,10 @@ class ChatController extends State<ChatPageWithRoom>
       });
       if (!currentlyTyping) {
         currentlyTyping = true;
-        if (WaMatrixBridge.instance.isWaRoom(room.id)) {
-          WaMatrixBridge.instance.notifyTyping(room.id, true);
-        } else {
-          room.setTyping(
-            true,
-            timeout: const Duration(seconds: 30).inMilliseconds,
-          );
-        }
+        room.setTyping(
+          true,
+          timeout: const Duration(seconds: 30).inMilliseconds,
+        );
       }
     }
   }
@@ -1629,9 +1546,27 @@ class ChatController extends State<ChatPageWithRoom>
 
   Future<void> onPhoneButtonTap() async {
     // WhatsApp chat of the user's own bridge: a real WhatsApp call through
-    // the calls device on the bridge phone (voice only).
+    // the calls device on the bridge phone.
     if (WaCallService.callTarget(room) != null) {
-      await startWaCall(context, room);
+      final type = await showModalActionPopup<CallType>(
+        context: context,
+        title: 'WhatsApp call',
+        cancelLabel: L10n.of(context).cancel,
+        actions: [
+          AdaptiveModalAction(
+            label: L10n.of(context).voiceCall,
+            icon: const Icon(Icons.phone_outlined),
+            value: CallType.kVoice,
+          ),
+          AdaptiveModalAction(
+            label: L10n.of(context).videoCall,
+            icon: const Icon(Icons.video_call_outlined),
+            value: CallType.kVideo,
+          ),
+        ],
+      );
+      if (type == null || !mounted) return;
+      await startWaCall(context, room, video: type == CallType.kVideo);
       return;
     }
     // VoIP required Android SDK 21
@@ -1670,15 +1605,6 @@ class ChatController extends State<ChatPageWithRoom>
     if (callType == null) return;
     if (!mounted) return;
 
-    // WhatsApp-bridged chat: there's no native WA call path. Mint a guest call
-    // link and send it into the WhatsApp chat; the contact joins from the web
-    // and places the call (voice or video per our choice), which rings our
-    // existing legacy-VoIP UI.
-    if (WaMatrixBridge.instance.isWaRoom(room.id)) {
-      await _startWhatsAppCall(callType);
-      return;
-    }
-
     final voipPlugin = Matrix.of(context).voipPlugin;
     try {
       await voipPlugin!.voip.inviteToCall(room, callType);
@@ -1688,62 +1614,6 @@ class ChatController extends State<ChatPageWithRoom>
         context,
       ).showSnackBar(SnackBar(content: Text(e.toLocalizedString(context))));
     }
-  }
-
-  /// Place a "call" to a WhatsApp contact: provision a guest call link and send
-  /// it (plus a couple of notification buzzes) into the WhatsApp chat. The host
-  /// is force-joined into the temp call room, so the existing incoming-call UI
-  /// rings automatically once the contact opens the link and joins.
-  Future<void> _startWhatsAppCall(CallType callType) async {
-    final scaffold = ScaffoldMessenger.of(context);
-    final client = Matrix.of(context).client;
-    final result = await showFutureLoadingDialog(
-      context: context,
-      future: () => requestCallLink(client),
-    );
-    final callLink = result.result;
-    if (callLink == null || !mounted) return; // error already surfaced
-
-    // The recipient's web page places the call; tell it whether to place a voice
-    // or video call via a fragment param so it matches our choice (and our side
-    // gets a voice call → proximity/screen-off kicks in for audio).
-    final mode = callType == CallType.kVoice ? 'audio' : 'video';
-    final link = '${callLink.link}&mode=$mode';
-
-    // 1) Send ONE message containing the link to the WhatsApp recipient. (Two
-    //    rapid messages could race and drop one.)
-    try {
-      await WaMatrixBridge.instance.sendText(
-        room.id,
-        '📞 Incoming tjena ${mode == 'audio' ? 'voice' : 'video'} call — '
-        'tap the link to join:\n$link\n\n'
-        'ℹ️ This person has disabled WhatsApp calls for privacy reasons and '
-        'uses tjena to make calls instead.',
-      );
-    } catch (e) {
-      if (!mounted) return;
-      scaffold.showSnackBar(SnackBar(content: Text('Could not send link: $e')));
-      return;
-    }
-    // 2) Join the temporary call room ourselves (we were invited). We must be
-    //    *joined* and syncing so that when the recipient opens the link and
-    //    places the call, our native incoming-call UI rings — the same proven
-    //    path as a Matrix↔Matrix call.
-    try {
-      await client.joinRoom(callLink.callRoomId);
-    } catch (e) {
-      Logs().d('[WA-Call] joinRoom: $e');
-    }
-    // Keep this client alive/syncing — it already is. The VoIP plugin will show
-    // the incoming-call overlay when the guest places the call.
-    if (!mounted) return;
-    scaffold.showSnackBar(
-      const SnackBar(
-        content: Text(
-          'Call link sent — your phone will ring when they join the call.',
-        ),
-      ),
-    );
   }
 
   void cancelReplyEventAction() => setState(() {

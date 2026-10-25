@@ -8,7 +8,6 @@ import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/pages/chat_list/unread_bubble.dart';
 import 'package:fluffychat/utils/matrix_sdk_extensions/matrix_locals.dart';
 import 'package:fluffychat/utils/room_status_extension.dart';
-import 'package:fluffychat/utils/wa_matrix_bridge.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.dart';
 import 'package:fluffychat/widgets/future_loading_dialog.dart';
 import 'package:fluffychat/widgets/hover_builder.dart';
@@ -49,11 +48,6 @@ class ChatListItem extends StatelessWidget {
     final ownMessage = lastEvent?.senderId == room.client.userID;
     final directChatMatrixId = room.directChatMatrixID;
     final isDirectChat = directChatMatrixId != null;
-    // A WhatsApp 1:1 chat is effectively a direct chat even though the SDK
-    // doesn't flag virtual rooms as such — so we don't prefix the preview with
-    // the sender name (which for these rooms can be a raw id/number).
-    final isBridgeDm = WaMatrixBridge.instance.isWaRoom(room.id) &&
-        !WaMatrixBridge.instance.isWaGroup(room.id);
     final hasNotifications = room.notificationCount > 0;
     final backgroundColor = activeChat
         ? theme.colorScheme.secondaryContainer
@@ -326,10 +320,10 @@ class ChatListItem extends StatelessWidget {
                                     hideEdit: true,
                                     plaintextBody: true,
                                     removeMarkdown: true,
-                                    withSenderNamePrefix: !isBridgeDm &&
-                                        (!isDirectChat ||
+                                    withSenderNamePrefix:
+                                        !isDirectChat ||
                                         directChatMatrixId !=
-                                            room.lastEvent?.senderId),
+                                            room.lastEvent?.senderId,
                                   )
                                 : null,
                             initialData: lastEvent?.calcLocalizedBodyFallback(
@@ -338,10 +332,10 @@ class ChatListItem extends StatelessWidget {
                               hideEdit: true,
                               plaintextBody: true,
                               removeMarkdown: true,
-                              withSenderNamePrefix: !isBridgeDm &&
-                                  (!isDirectChat ||
+                              withSenderNamePrefix:
+                                  !isDirectChat ||
                                   directChatMatrixId !=
-                                      room.lastEvent?.senderId),
+                                      room.lastEvent?.senderId,
                             ),
                             builder: (context, snapshot) => Text(
                               room.membership == Membership.invite

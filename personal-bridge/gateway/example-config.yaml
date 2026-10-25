@@ -34,3 +34,13 @@ transaction_timeout_seconds: 60
 keepalive_interval_seconds: 30
 # Optional bearer token for GET /_tjena/status on the internal listener.
 status_token: ""
+
+# Public status page data: GET https://wap.tjena.eu/status/v1 (no auth).
+# Synapse is always checked. Add other services by a URL that answers 2xx
+# when up; mautrix bridges answer on /_matrix/mau/live (their appservice
+# address from the registration file).
+status_checks:
+  - name: whatsapp_bridge
+    url: http://mautrix-whatsapp:29318/_matrix/mau/live
+# Log a warning and set "low": true when fewer free slots remain.
+low_slots_warning: 5

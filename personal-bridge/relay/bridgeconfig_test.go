@@ -123,6 +123,7 @@ func TestBridgeConfigOptions(t *testing.T) {
 		"network.history_sync.dispatch_wait":               "5m",
 		"network.enable_status_broadcast":                  false,
 		"network.disable_status_broadcast_send":            true,
+		"network.displayname_template":                     displaynameTemplate,
 		"backfill.queue.enabled":                           false,
 		"bridge.cleanup_on_logout.enabled":                 true,
 		"bridge.cleanup_on_logout.manual.private":          "delete",

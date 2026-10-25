@@ -1,9 +1,11 @@
 package main
 
 // One bridged call = a WebRTC peer connection to the tjena app plus a
-// meowcaller call to WhatsApp, with audio copied between them:
+// meowcaller call to WhatsApp, with audio and video copied between them:
 //
-//	tjena app ──WebRTC (G.722, DTLS-SRTP)──► this phone ──meowcaller──► WhatsApp
+//	tjena app ──WebRTC (G.722 + H.264, DTLS-SRTP)──► this phone ──meowcaller──► WhatsApp
+//
+// Audio is transcoded (see audio.go); video passes through (see video.go).
 //
 // Signalling (offer/answer, call state) goes through the gateway; see
 // signal.go. The app always sends the WebRTC offer, with all ICE candidates
@@ -18,6 +20,7 @@ import (
 	"time"
 
 	"github.com/pion/ice/v4"
+	"github.com/pion/interceptor"
 	"github.com/pion/webrtc/v4"
 	"github.com/pion/webrtc/v4/pkg/media"
 	"github.com/polymorfa/hypermeow/types"
@@ -47,12 +50,19 @@ type session struct {
 	peer  string
 	pc    *webrtc.PeerConnection
 	track *webrtc.TrackLocalStaticSample
-	codec codecKind
+	// vtrack carries the WhatsApp peer's video to the app; nil when the app
+	// offered no H.264.
+	vtrack *webrtc.TrackLocalStaticSample
+	v      videoState
+	codec  codecKind
 	src   *liveSource
 	call  *meowcaller.Call
 
 	mu      sync.Mutex
 	ended   bool
+	// sendVideo passes the app's camera frames to WhatsApp (set once the
+	// WhatsApp call exists).
+	sendVideo func(au []byte, d time.Duration) error
 	state   string
 	started time.Time
 }
@@ -115,10 +125,19 @@ func newAPI() (*webrtc.API, error) {
 			return nil, err
 		}
 	}
+	if err := registerVideo(me); err != nil {
+		return nil, err
+	}
+	// NACK, RTCP reports and bandwidth feedback, so the app's encoder can
+	// adapt its video bitrate.
+	ir := &interceptor.Registry{}
+	if err := webrtc.RegisterDefaultInterceptors(me, ir); err != nil {
+		return nil, err
+	}
 	se := webrtc.SettingEngine{}
 	se.SetICEMulticastDNSMode(ice.MulticastDNSModeDisabled)
 	se.SetNetworkTypes([]webrtc.NetworkType{webrtc.NetworkTypeUDP4, webrtc.NetworkTypeUDP6, webrtc.NetworkTypeTCP4})
-	return webrtc.NewAPI(webrtc.WithMediaEngine(me), webrtc.WithSettingEngine(se)), nil
+	return webrtc.NewAPI(webrtc.WithMediaEngine(me), webrtc.WithSettingEngine(se), webrtc.WithInterceptorRegistry(ir)), nil
 }
 
 // answerOffer sets up the peer connection for the app's offer and returns
@@ -169,7 +188,27 @@ func (m *Manager) answerOffer(ctx context.Context, id, app, offer string, server
 			}
 		}
 	}()
+	if offersH264(offer) {
+		vt, err := webrtc.NewTrackLocalStaticSample(webrtc.RTPCodecCapability{
+			MimeType:    webrtc.MimeTypeH264,
+			ClockRate:   90000,
+			SDPFmtpLine: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f",
+		}, "video", "whatsapp")
+		if err != nil {
+			return fail(err)
+		}
+		vs, err := pc.AddTrack(vt)
+		if err != nil {
+			return fail(err)
+		}
+		s.vtrack = vt
+		go drainVideoRTCP(vs)
+	}
 	pc.OnTrack(func(tr *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
+		if tr.Kind() == webrtc.RTPCodecTypeVideo {
+			m.readAppVideo(s, tr)
+			return
+		}
 		if tr.Kind() != webrtc.RTPCodecTypeAudio {
 			return
 		}
@@ -231,8 +270,12 @@ func (s *session) toApp() func([]float32) {
 // attach connects the WhatsApp call to the session's audio.
 func (m *Manager) attach(s *session, c *meowcaller.Call) {
 	s.call = c
+	s.mu.Lock()
+	s.sendVideo = c.SendVideoWithDuration
+	s.mu.Unlock()
 	c.Receive(meowcaller.SinkFunc(s.toApp()))
 	c.Play(s.src)
+	m.watchVideo(s, c)
 	c.OnStateChange(func(p meowcaller.CallPhase) {
 		var st string
 		switch p {
@@ -370,9 +413,10 @@ func (m *Manager) Dial(ctx context.Context, req Msg) {
 	}
 	s.peer = target
 	m.store(s)
-	m.send(Msg{Type: "sdp", To: req.From, ID: req.ID, SDP: answer})
+	m.send(Msg{Type: "sdp", To: req.From, ID: req.ID, SDP: answer, Video: s.vtrack != nil})
 
-	c, err := mc.CallWithOptions(ctx, target, meowcaller.CallOptions{})
+	video := req.Video && s.vtrack != nil
+	c, err := mc.CallWithOptions(ctx, target, meowcaller.CallOptions{Video: video})
 	if err != nil {
 		m.end(s, "error")
 		m.send(Msg{Type: "state", To: req.From, ID: req.ID, State: "ended", Reason: "error", Error: "WhatsApp: " + err.Error()})
@@ -414,13 +458,22 @@ func (m *Manager) Answer(ctx context.Context, req Msg) {
 	}
 	s.peer = r.info.Peer
 	m.store(s)
-	m.send(Msg{Type: "sdp", To: req.From, ID: req.ID, SDP: answer})
+	m.send(Msg{Type: "sdp", To: req.From, ID: req.ID, SDP: answer, Video: s.vtrack != nil})
 	m.attach(s, r.call)
 	if err = r.call.Answer(); err != nil {
 		m.end(s, "error")
 		return
 	}
 	m.setState(s, "connecting", "")
+	if r.info.Video {
+		// A video call starts with both cameras on; answering with the camera
+		// off (or without H.264) turns ours off on the WhatsApp side.
+		if req.Video && s.vtrack != nil {
+			s.askAppKeyframeSoon()
+		} else if err := r.call.SetVideoEnabled(false); err != nil {
+			m.log.Debug().Err(err).Msg("camera off on answer")
+		}
+	}
 }
 
 func (m *Manager) Reject(req Msg) {
@@ -432,6 +485,21 @@ func (m *Manager) Reject(req Msg) {
 		_ = r.call.Reject()
 		m.send(Msg{Type: "incoming_gone", WACallID: req.WACallID, Reason: "rejected"})
 	}
+}
+
+// session returns the call [id] if it belongs to the app [app].
+func (m *Manager) session(id, app string) *session {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s := m.sessions[id]
+	if s == nil || s.app != app {
+		return nil
+	}
+	return s
+}
+
+func containsFold(s, sub string) bool {
+	return strings.Contains(strings.ToUpper(s), strings.ToUpper(sub))
 }
 
 func (m *Manager) Hangup(req Msg) {

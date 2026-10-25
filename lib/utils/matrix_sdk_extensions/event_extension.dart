@@ -67,14 +67,8 @@ extension LocalizedBody on Event {
       final file = await downloadAndDecryptAttachment();
       // Name the saved file "<chatType>_<full timestamp>.<ext>" so the gallery
       // shows where it came from and when.
-      final roomId = room.id;
-      final chatType = roomId.startsWith('!wa_')
-          ? 'wa'
-          : roomId.startsWith('!sig_')
-              ? 'signal'
-              : 'matrix';
       final fileName = MatrixFileExtension.galleryName(
-        chatType,
+        'matrix',
         mimeType: attachmentMimetype,
         originalName: file.name,
         video: messageType == MessageTypes.Video,

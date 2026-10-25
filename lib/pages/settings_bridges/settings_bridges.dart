@@ -4,9 +4,7 @@
 import 'package:collection/collection.dart';
 import 'package:flutter/material.dart';
 import 'package:matrix/matrix.dart';
-import 'package:tjena_bridge/tjena_bridge.dart';
 
-import '../../utils/local_bridge_control.dart';
 import '../../utils/personal_bridge.dart';
 import '../../widgets/matrix.dart';
 import 'bridge_definition.dart';
@@ -30,20 +28,6 @@ class BridgeEntry {
   });
 }
 
-/// What the built-in (in-app) bridge currently has linked.
-class LocalBridgeSummary {
-  final int waLinked;
-  final int waConnected;
-  final bool signalLinked;
-  final bool signalConnected;
-  const LocalBridgeSummary({
-    this.waLinked = 0,
-    this.waConnected = 0,
-    this.signalLinked = false,
-    this.signalConnected = false,
-  });
-}
-
 class SettingsBridges extends StatefulWidget {
   const SettingsBridges({super.key});
 
@@ -51,9 +35,9 @@ class SettingsBridges extends StatefulWidget {
   SettingsBridgesController createState() => SettingsBridgesController();
 }
 
-/// Settings → Messaging Bridges. Shows the three ways WhatsApp can reach
-/// tjena side by side: the tjena server bridge, the user's own bridge (tjena
-/// Bridge app at home) and the experimental built-in bridge in this app.
+/// Settings → Messaging Bridges. Shows the two ways WhatsApp can reach tjena
+/// side by side: the tjena server bridge and the user's own bridge (tjena
+/// Bridge app at home); plus the Signal server bridge.
 class SettingsBridgesController extends State<SettingsBridges> {
   /// Server bridges (always the shared server bots).
   List<BridgeEntry> entries = [];
@@ -62,8 +46,6 @@ class SettingsBridgesController extends State<SettingsBridges> {
   OwnBridgeStatus? ownStatus;
   bool ownLoading = true;
   String? ownError;
-
-  LocalBridgeSummary? local;
 
   Client get client => Matrix.of(context).client;
   WhatsAppBridgeConfig get waConfig => WhatsAppBridgeConfig.of(client);
@@ -78,7 +60,7 @@ class SettingsBridgesController extends State<SettingsBridges> {
   }
 
   Future<void> refresh() async {
-    await Future.wait([_detectBridges(), _loadOwn(), _loadLocal()]);
+    await Future.wait([_detectBridges(), _loadOwn()]);
   }
 
   Future<void> _detectBridges() async {
@@ -111,58 +93,6 @@ class SettingsBridgesController extends State<SettingsBridges> {
       ownError = e.toString();
     }
     if (mounted) setState(() => ownLoading = false);
-  }
-
-  Future<void> _loadLocal() async {
-    if (!LocalBridgeControl.enabled) {
-      if (mounted) setState(() => local = null);
-      return;
-    }
-    try {
-      final accounts = await TjenaBridge.instance.listAccounts();
-      final sig = await TjenaBridge.instance.getSignalState();
-      local = LocalBridgeSummary(
-        waLinked: accounts.where((a) => a['linked'] == true).length,
-        waConnected: accounts.where((a) => a['connected'] == true).length,
-        signalLinked: sig.linked,
-        signalConnected: sig.connected,
-      );
-    } catch (e) {
-      Logs().w('[Bridges] local bridge state failed: $e');
-      local = const LocalBridgeSummary();
-    }
-    if (mounted) setState(() {});
-  }
-
-  Future<void> setLocalEnabled(bool on) async {
-    if (!on && ((local?.waLinked ?? 0) > 0 || (local?.signalLinked ?? false))) {
-      final ok = await showDialog<bool>(
-        context: context,
-        builder: (ctx) => AlertDialog.adaptive(
-          title: const Text('Turn off built-in bridges?'),
-          content: const Text(
-            'Your WhatsApp/Signal accounts in the built-in bridge stay linked, '
-            'but stop receiving messages until you turn this on again. '
-            'Existing chats stay readable.\n\n'
-            'To move for good, set up your own bridge or use the tjena server '
-            'bridge, then remove the accounts here.',
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('Turn off'),
-            ),
-          ],
-        ),
-      );
-      if (ok != true) return;
-    }
-    await LocalBridgeControl.setEnabled(on);
-    await _loadLocal();
   }
 
   @override

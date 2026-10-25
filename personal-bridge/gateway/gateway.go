@@ -40,7 +40,8 @@ type Gateway struct {
 	authMu  sync.Mutex
 	authC   map[string]authCacheEntry
 
-	calls *callHub
+	calls  *callHub
+	status statusCache
 }
 
 type authCacheEntry struct {
@@ -357,6 +358,7 @@ func (g *Gateway) handleAppAPI(w http.ResponseWriter, r *http.Request) {
 func (g *Gateway) activationLoop(ctx context.Context) {
 	for {
 		g.checkActivation(ctx)
+		g.warnLowSlots()
 		select {
 		case <-ctx.Done():
 			return
@@ -483,6 +485,7 @@ func (g *Gateway) publicRoutes() http.Handler {
 	mux.HandleFunc("GET /provision/v1/bridge", g.handleBridgeStatus)
 	mux.HandleFunc("DELETE /provision/v1/bridge", g.handleRevoke)
 	mux.HandleFunc("GET /provision/v1/info", g.handleInfo)
+	mux.HandleFunc("GET /status/v1", g.handlePublicStatus)
 	mux.HandleFunc("GET /_tjena/call/v1/phone", g.handleCallPhone)
 	mux.HandleFunc("GET /_tjena/call/v1/app", g.handleCallApp)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -494,7 +497,7 @@ func (g *Gateway) publicRoutes() http.Handler {
 // withCORS allows the provisioner to be called from tjena web too.
 func withCORS(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/provision/") {
+		if strings.HasPrefix(r.URL.Path, "/provision/") || strings.HasPrefix(r.URL.Path, "/status/") {
 			w.Header().Set("Access-Control-Allow-Origin", "*")
 			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")

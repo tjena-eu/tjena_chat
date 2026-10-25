@@ -128,6 +128,10 @@ func (d *Daemon) onMessage(m Msg) {
 		d.mgr.Reject(m)
 	case "hangup":
 		d.mgr.Hangup(m)
+	case "video":
+		d.mgr.Video(m)
+	case "video_accept":
+		d.mgr.VideoAccept(m)
 	case "app_gone":
 		d.mgr.AppGone(m.From)
 	case "phone":

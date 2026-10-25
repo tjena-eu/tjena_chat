@@ -10,7 +10,6 @@ import 'package:fluffychat/utils/matrix_sdk_extensions/matrix_locals.dart';
 import 'package:fluffychat/utils/sync_status_localization.dart';
 import 'package:fluffychat/widgets/avatar.dart';
 import 'package:fluffychat/widgets/presence_builder.dart';
-import 'package:fluffychat/widgets/wa_connection_indicator.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:matrix/matrix.dart';
@@ -68,9 +67,6 @@ class ChatAppBarTitle extends StatelessWidget {
                         style: const TextStyle(fontSize: 16),
                       ),
                     ),
-                    // WhatsApp link health — renders nothing for normal rooms.
-                    const SizedBox(width: 8),
-                    WaConnectionIndicator(roomId: room.id),
                   ],
                 ),
                 StreamBuilder(

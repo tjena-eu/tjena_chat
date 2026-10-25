@@ -3,8 +3,6 @@
 
 import 'dart:async';
 
-import 'package:fluffychat/utils/local_bridge_control.dart';
-import 'package:fluffychat/utils/wa_matrix_bridge.dart';
 import 'package:fluffychat/widgets/matrix.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
@@ -31,29 +29,17 @@ class _SettingsDebugState extends State<SettingsDebug> {
   }
 
   Future<void> _deleteOne(Client client, Room room) async {
-    if (WaMatrixBridge.instance.isWaRoom(room.id)) {
-      await WaMatrixBridge.instance.removeRoom(client, room.id);
-    } else {
-      try {
-        if (room.membership == Membership.join) await room.leave();
-      } catch (_) {}
-      try {
-        await room.forget();
-      } catch (_) {}
-    }
+    try {
+      if (room.membership == Membership.join) await room.leave();
+    } catch (_) {}
+    try {
+      await room.forget();
+    } catch (_) {}
   }
 
   Future<void> _deleteAllDMs() async {
     final client = Matrix.of(context).client;
-    final dms = client.rooms.where((r) => !r.isSpace && r.isDirectChat).toList()
-      ..addAll(
-        client.rooms.where((r) => WaMatrixBridge.instance.isWaRoom(r.id)).where(
-          (r) {
-            final state = r.getState('org.tjena.bridge.local');
-            return state?.content['is_dm'] as bool? ?? false;
-          },
-        ),
-      );
+    final dms = client.rooms.where((r) => !r.isSpace && r.isDirectChat).toList();
     final unique = {for (final r in dms) r.id: r}.values.toList();
     final confirmed = await _confirm(
       'Delete all direct chats (${unique.length})?',
@@ -91,54 +77,6 @@ class _SettingsDebugState extends State<SettingsDebug> {
     );
     if (!confirmed) return;
     await _deleteRooms(selected);
-  }
-
-  Future<void> _repairWhatsApp() async {
-    final bridgeOn = LocalBridgeControl.enabled;
-    final confirmed = await _confirm(
-      'Clean up WhatsApp chats?',
-      bridgeOn
-          ? 'Removes WhatsApp chats and spaces that keep coming back after you '
-                'deleted them, and those of accounts you removed. Chats of linked '
-                'accounts stay.'
-          : 'The built-in bridge is off, so this removes all built-in WhatsApp '
-                'chats and spaces from this device.',
-      action: 'Clean up',
-    );
-    if (!confirmed || !mounted) return;
-    final client = Matrix.of(context).client;
-    setState(() => _busy = true);
-    Map<String, int>? r;
-    Object? error;
-    try {
-      r = await WaMatrixBridge.instance.repairRooms(
-        client,
-        bridgeEnabled: bridgeOn,
-      );
-    } catch (e) {
-      error = e;
-    }
-    if (!mounted) return;
-    setState(() => _busy = false);
-    await showDialog<void>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('WhatsApp cleanup'),
-        content: Text(
-          error != null
-              ? 'Failed: $error'
-              : 'Removed ${r!['chats']} chats and ${r['spaces']} spaces.\n'
-                    'Fixed ${r['mappings']} stale room links and '
-                    '${r['space_entries']} space entries.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('OK'),
-          ),
-        ],
-      ),
-    );
   }
 
   Future<bool> _confirm(
@@ -225,22 +163,6 @@ class _SettingsDebugState extends State<SettingsDebug> {
                   ),
                 ),
                 const SizedBox(height: 24),
-                _sectionLabel(theme, 'WHATSAPP (BUILT-IN BRIDGE)'),
-                const SizedBox(height: 8),
-                Card(
-                  margin: EdgeInsets.zero,
-                  child: ListTile(
-                    leading: const Icon(Icons.cleaning_services_outlined),
-                    title: const Text('Fix chats that keep coming back'),
-                    subtitle: const Text(
-                      'Removes deleted WhatsApp chats and spaces that reappear, '
-                      'and leftovers of removed accounts',
-                    ),
-                    trailing: const Icon(Icons.chevron_right),
-                    onTap: _repairWhatsApp,
-                  ),
-                ),
-                const SizedBox(height: 24),
                 _sectionLabel(theme, 'ENCRYPTION / KEY BACKUP'),
                 const SizedBox(height: 8),
                 Card(
@@ -318,9 +240,8 @@ class _RoomPickerDialogState extends State<_RoomPickerDialog> {
 
   String _label(Room room) {
     final n = room.getLocalizedDisplayname();
-    final tag = WaMatrixBridge.instance.isWaRoom(room.id) ? ' [WA]' : '';
     final type = room.isDirectChat ? ' (DM)' : ' (group)';
-    return '$n$tag$type';
+    return '$n$type';
   }
 
   @override
