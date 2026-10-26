@@ -1,0 +1,22 @@
+# MatrixRTC (LiveKit) token service for tjena calls.
+#
+# Add this service to the tjena Portainer stack (same network as Synapse).
+# It hands out LiveKit tokens to tjena users; the media itself goes to
+# LiveKit Cloud (or a later self-hosted LiveKit), never through this box.
+#
+# Public URL: https://matrixrtc.tjena.eu  (Cloudflare tunnel ->
+# http://tjena-lk-jwt:8080). See README.md in this folder.
+
+services:
+  tjena-lk-jwt:
+    image: ghcr.io/element-hq/lk-jwt-service:0.9.0
+    container_name: tjena-lk-jwt
+    restart: unless-stopped
+    env_file: ./lk-jwt.env
+    networks:
+      - docker_local_net
+    # The image has its own HEALTHCHECK (/lk-jwt-service-healthcheck).
+
+networks:
+  docker_local_net:
+    external: true

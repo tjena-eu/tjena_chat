@@ -1,0 +1,9 @@
+android-binary/.work/
+android-binary/out/
+spike-exec-app/.gradle/
+spike-exec-app/app/build/
+spike-exec-app/build/
+spike-exec-app/local.properties
+spike-exec-app/app/src/main/jniLibs/
+bridge_app/android/app/src/main/jniLibs/
+itest/.work/
