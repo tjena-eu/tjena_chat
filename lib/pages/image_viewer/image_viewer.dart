@@ -33,6 +33,8 @@ class ImageViewer extends StatefulWidget {
 class ImageViewerController extends State<ImageViewer> {
   final FocusNode focusNode = FocusNode();
 
+  bool backgroundVisible = false;
+
   @override
   void initState() {
     super.initState();
@@ -54,6 +56,10 @@ class ImageViewerController extends State<ImageViewer> {
     );
     if (index < 0) index = 0;
     pageController = PageController(initialPage: index);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      currentEvent.autoSaveToDevice(widget.outerContext);
+      if (mounted) setState(() => backgroundVisible = true);
+    });
   }
 
   late final PageController pageController;
@@ -78,6 +84,7 @@ class ImageViewerController extends State<ImageViewer> {
     );
     if (!mounted) return;
     setState(() {});
+    currentEvent.autoSaveToDevice(context);
   }
 
   Future<void> nextImage() async {
@@ -87,6 +94,58 @@ class ImageViewerController extends State<ImageViewer> {
     );
     if (!mounted) return;
     setState(() {});
+    currentEvent.autoSaveToDevice(context);
+  }
+
+  /// Whether the currently visible image is zoomed in.
+  ///
+  /// While zoomed, the [PageView] must not scroll: dragging has to pan
+  /// the image instead of flicking to the next one.
+  final ValueNotifier<bool> isZoomed = ValueNotifier(false);
+
+  final Set<Object> _zoomedPages = {};
+  final Set<VoidCallback> _resetZoomCallbacks = {};
+
+  void setZoomed(Object page, bool zoomed) {
+    zoomed ? _zoomedPages.add(page) : _zoomedPages.remove(page);
+    isZoomed.value = _zoomedPages.isNotEmpty;
+  }
+
+  /// Same as [setZoomed] with `false`, but safe to call from `dispose()`: the
+  /// widget tree is locked there, so the notifier is only updated once the
+  /// current frame is finished.
+  void forgetZoomed(Object page) {
+    _zoomedPages.remove(page);
+    if (isZoomed.value == _zoomedPages.isNotEmpty) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      isZoomed.value = _zoomedPages.isNotEmpty;
+    });
+  }
+
+  void registerZoomReset(VoidCallback callback) =>
+      _resetZoomCallbacks.add(callback);
+
+  void unregisterZoomReset(VoidCallback callback) =>
+      _resetZoomCallbacks.remove(callback);
+
+  /// Swiping to another image: drop any zoom so every image starts fitted, and
+  /// refresh the previous/next buttons.
+  void onPageChanged(int _) {
+    for (final reset in _resetZoomCallbacks.toList()) {
+      reset();
+    }
+    if (!mounted) return;
+    setState(() {});
+    currentEvent.autoSaveToDevice(context);
+  }
+
+  @override
+  void dispose() {
+    isZoomed.dispose();
+    focusNode.dispose();
+    pageController.dispose();
+    super.dispose();
   }
 
   int get _index => pageController.page?.toInt() ?? 0;
@@ -120,13 +179,6 @@ class ImageViewerController extends State<ImageViewer> {
         Navigator.of(context, rootNavigator: false).pop();
       }
     }
-  }
-
-  @override
-  void dispose() {
-    focusNode.dispose();
-    pageController.dispose();
-    super.dispose();
   }
 
   @override

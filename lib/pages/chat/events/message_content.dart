@@ -6,6 +6,7 @@
 import 'dart:math';
 
 import 'package:fluffychat/config/setting_keys.dart';
+import 'package:fluffychat/config/themes.dart';
 import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/pages/chat/events/poll.dart';
 import 'package:fluffychat/pages/chat/events/video_player.dart';
@@ -23,6 +24,44 @@ import 'html_message.dart';
 import 'image_bubble.dart';
 import 'map_bubble.dart';
 import 'message_download_content.dart';
+
+/// Timeline media is sized to the message bubble rather than to the media's own
+/// resolution, so a photo or video never leaves the message narrower than the
+/// bubble around it.
+const double _maxMediaWidth = 320.0;
+
+/// Stickers keep their old behaviour: small, and sized to the sticker itself.
+const double _maxStickerSize = 128.0;
+
+/// The media width to use for a bubble laid out with [constraints].
+double mediaWidth(BoxConstraints constraints) => min(
+  constraints.maxWidth.isFinite
+      ? constraints.maxWidth
+      : FluffyThemes.columnWidth * 1.5,
+  _maxMediaWidth,
+);
+
+/// The height for media of [w] x [h] pixels rendered at [width].
+///
+/// Extreme aspect ratios are clamped (and cropped via `BoxFit.cover`) so that
+/// neither a panorama nor a portrait photo distorts the bubble. Returns `null`
+/// when the sender did not report any dimensions — the media then lays itself
+/// out at its own aspect ratio once decoded.
+double? mediaHeight(double width, int? w, int? h) {
+  if (w == null || h == null || w <= 0 || h <= 0) return null;
+  return (width * h / w).clamp(width * 0.5, width * 1.4);
+}
+
+/// Sticker box for a sticker of [w] x [h] pixels: the longer side capped at
+/// [_maxStickerSize], aspect ratio preserved.
+Size stickerSize(int? w, int? h) {
+  if (w == null || h == null || w <= 0 || h <= 0) {
+    return const Size(_maxStickerSize, _maxStickerSize);
+  }
+  return w > h
+      ? Size(_maxStickerSize, max(32, _maxStickerSize * (h / w)))
+      : Size(max(32, _maxStickerSize * (w / h)), _maxStickerSize);
+}
 
 class MessageContent extends StatelessWidget {
   final Event event;
@@ -58,46 +97,50 @@ class MessageContent extends StatelessWidget {
           case MessageTypes.Image:
           case MessageTypes.Sticker:
             if (event.redacted) continue textmessage;
-            final maxSize = event.messageType == MessageTypes.Sticker
-                ? 128.0
-                : 256.0;
-            final w = event.content
-                .tryGetMap<String, Object?>('info')
-                ?.tryGet<int>('w');
-            final h = event.content
-                .tryGetMap<String, Object?>('info')
-                ?.tryGet<int>('h');
-            var width = maxSize;
-            var height = maxSize;
-            var fit = event.messageType == MessageTypes.Sticker
-                ? BoxFit.contain
-                : BoxFit.cover;
-            if (w != null && h != null) {
-              fit = BoxFit.contain;
-              if (w > h) {
-                width = maxSize;
-                height = max(32, maxSize * (h / w));
-              } else {
-                height = maxSize;
-                width = max(32, maxSize * (w / h));
-              }
-            }
-            return ImageBubble(
-              event,
-              width: width,
-              height: height,
-              fit: fit,
-              borderRadius: borderRadius,
-              timeline: timeline,
-              textColor: textColor,
-              onTap: () => showDialog(
-                context: context,
-                builder: (_) => ImageViewer(
+            final isSticker = event.messageType == MessageTypes.Sticker;
+            final info = event.content.tryGetMap<String, Object?>('info');
+            final w = info?.tryGet<int>('w');
+            final h = info?.tryGet<int>('h');
+            // Fill the bubble instead of sizing the bubble to the image: a
+            // portrait photo used to shrink the whole message to a thin
+            // sliver.
+            return LayoutBuilder(
+              builder: (context, constraints) {
+                final double width;
+                final double? height;
+                if (isSticker) {
+                  final size = stickerSize(w, h);
+                  width = size.width;
+                  height = size.height;
+                } else {
+                  width = mediaWidth(constraints);
+                  height = mediaHeight(width, w, h);
+                }
+                return ImageBubble(
                   event,
+                  width: width,
+                  height: height,
+                  fit: isSticker ? BoxFit.contain : BoxFit.cover,
+                  borderRadius: borderRadius,
                   timeline: timeline,
-                  outerContext: context,
-                ),
-              ),
+                  textColor: textColor,
+                  onTap: () => Navigator.of(context).push(
+                    PageRouteBuilder(
+                      opaque: false,
+                      barrierColor: Colors.transparent,
+                      pageBuilder: (_, _, _) => ImageViewer(
+                        event,
+                        timeline: timeline,
+                        outerContext: context,
+                      ),
+                      // No FadeTransition: Hero already provides a smooth
+                      // animation from bubble to fullscreen. A fade on top
+                      // of Hero causes the "double-open flash".
+                      transitionsBuilder: (_, _, _, child) => child,
+                    ),
+                  ),
+                );
+              },
             );
           case CuteEventContent.eventType:
             return CuteContent(event);
@@ -119,11 +162,14 @@ class MessageContent extends StatelessWidget {
               linkColor: linkColor,
             );
           case MessageTypes.Video:
-            return EventVideoPlayer(
-              event,
-              textColor: textColor,
-              linkColor: linkColor,
-              timeline: timeline,
+            return LayoutBuilder(
+              builder: (context, constraints) => EventVideoPlayer(
+                event,
+                textColor: textColor,
+                linkColor: linkColor,
+                timeline: timeline,
+                maxWidth: mediaWidth(constraints),
+              ),
             );
           case MessageTypes.File:
             return MessageDownloadContent(

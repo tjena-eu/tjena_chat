@@ -14,11 +14,17 @@ import 'package:fluffychat/config/themes.dart';
 import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/pages/chat_list/chat_list_view.dart';
 import 'package:fluffychat/utils/error_reporter.dart';
+import 'package:fluffychat/utils/hidden_rooms.dart';
 import 'package:fluffychat/utils/localized_exception_extension.dart';
+import 'package:fluffychat/utils/matrix_sdk_extensions/client_stories_extension.dart';
 import 'package:fluffychat/utils/matrix_sdk_extensions/matrix_locals.dart';
+import 'package:fluffychat/utils/personal_bridge.dart';
 import 'package:fluffychat/utils/platform_infos.dart';
 import 'package:fluffychat/utils/show_scaffold_dialog.dart';
 import 'package:fluffychat/utils/show_update_snackbar.dart';
+import 'package:fluffychat/utils/space_child_visibility.dart';
+import 'package:fluffychat/utils/stream_extension.dart';
+import 'package:fluffychat/utils/wa_call/wa_call_service.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/show_modal_action_popup.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/show_text_input_dialog.dart';
@@ -165,9 +171,13 @@ class ChatListController extends State<ChatList>
     }
   }
 
-  List<Room> get filteredRooms => Matrix.of(
-    context,
-  ).client.rooms.where(getRoomFilterByActiveFilter(activeFilter)).toList();
+  List<Room> get filteredRooms => Matrix.of(context).client.rooms
+      // Hidden rooms stay out of the list even when new messages arrive.
+      .where((room) => !HiddenRooms.instance.isHidden(room.id))
+      // Story rooms are shown as normal chats (hiding them caused rooms to get
+      // stuck invisible). They can still be browsed in the Stories space too.
+      .where(getRoomFilterByActiveFilter(activeFilter))
+      .toList();
 
   bool isSearchMode = false;
   Future<QueryPublicRoomsResponse>? publicRoomsResponse;
@@ -412,8 +422,21 @@ class ChatListController extends State<ChatList>
   void initState() {
     _initReceiveSharingIntent();
 
+    // Hidden rooms: load the set and rebuild the list whenever it changes.
+    HiddenRooms.instance.ensureLoaded().then((_) {
+      if (mounted) setState(() {});
+    });
+    HiddenRooms.instance.notifier.addListener(_onHiddenRoomsChanged);
+    // Per-space "show chats in main list" toggle.
+    SpaceChildVisibility.instance.ensureLoaded().then((_) {
+      if (mounted) setState(() {});
+    });
+    SpaceChildVisibility.instance.notifier.addListener(_onHiddenRoomsChanged);
+
     scrollController.addListener(_onScroll);
     _waitForFirstSync();
+    _applyStoriesReceivePolicy();
+    Matrix.of(context).voipPlugin?.context = context;
     if (PlatformInfos.isMobile) {
       _callEventSubscription = FlutterCallkitIncoming.onEvent.listen(
         _onCallEvent,
@@ -438,6 +461,10 @@ class ChatListController extends State<ChatList>
           context,
         ).store.getString(_serverStoreNamespace);
         Matrix.of(context).backgroundPush?.setupPush(context);
+        // Notify when the user's own WhatsApp bridge (at home) is offline.
+        PersonalBridgeMonitor.start(Matrix.of(context).client);
+        // WhatsApp calls through the own bridge (incoming call notices).
+        WaCallService.start(Matrix.of(context).client);
         UpdateNotifier.showUpdateDialog(context);
         UpdateNotifier.showUpdateAvailableBanner(context);
       }
@@ -479,12 +506,32 @@ class ChatListController extends State<ChatList>
     super.initState();
   }
 
+  StreamSubscription? _storyPolicySub;
+
+  /// Accept/reject pending story-room invites per the receive-scope setting
+  /// (and federation rule) once rooms are available, and keep doing so as new
+  /// invites arrive via sync.
+  Future<void> _applyStoriesReceivePolicy() async {
+    final client = Matrix.of(context).client;
+    await client.roomsLoading;
+    if (!mounted) return;
+    await client.applyStoriesReceivePolicy();
+    _storyPolicySub ??= client.onSync.stream
+        .rateLimit(const Duration(seconds: 3))
+        .listen((_) => client.applyStoriesReceivePolicy());
+  }
+
   @override
   void dispose() {
+    _storyPolicySub?.cancel();
     _intentDataStreamSubscription?.cancel();
     _intentFileStreamSubscription?.cancel();
     _callEventSubscription?.cancel();
     _onRoomTagUpdate?.cancel();
+    HiddenRooms.instance.notifier.removeListener(_onHiddenRoomsChanged);
+    SpaceChildVisibility.instance.notifier.removeListener(
+      _onHiddenRoomsChanged,
+    );
     scrollController.removeListener(_onScroll);
     searchController.dispose();
     searchFocusNode.dispose();
@@ -492,6 +539,10 @@ class ChatListController extends State<ChatList>
     scrolledToTop.dispose();
     _clientStream.close();
     super.dispose();
+  }
+
+  void _onHiddenRoomsChanged() {
+    if (mounted) setState(() {});
   }
 
   void _processPushHelperCrashReport() {
@@ -733,6 +784,25 @@ class ChatListController extends State<ChatList>
                 ],
               ),
             ),
+          PopupMenuItem(
+            value: ChatContextAction.hide,
+            child: Row(
+              mainAxisSize: .min,
+              children: [
+                Icon(
+                  HiddenRooms.instance.isHidden(room.id)
+                      ? Icons.visibility_outlined
+                      : Icons.visibility_off_outlined,
+                ),
+                const SizedBox(width: 12),
+                Text(
+                  HiddenRooms.instance.isHidden(room.id)
+                      ? 'Unhide chat'
+                      : 'Hide chat',
+                ),
+              ],
+            ),
+          ),
         ],
       );
     }
@@ -755,6 +825,13 @@ class ChatListController extends State<ChatList>
           context: context,
           future: () => room.markUnread(!room.markedUnread),
         );
+        return;
+      case ChatContextAction.hide:
+        if (HiddenRooms.instance.isHidden(room.id)) {
+          await HiddenRooms.instance.unhide(room.id);
+        } else {
+          await HiddenRooms.instance.hide(room.id);
+        }
         return;
       case ChatContextAction.mute:
         await showFutureLoadingDialog(
@@ -877,6 +954,20 @@ class ChatListController extends State<ChatList>
         activeFilter = ActiveFilter.allChats;
       }
     });
+  }
+
+  Future<void> dismissStatusList() async {
+    final result = await showOkCancelAlertDialog(
+      title: 'Hide status list',
+      message:
+          'Hide the status list at the top of your chats? '
+          'You can re-enable it in Settings → Chats.',
+      context: context,
+    );
+    if (result == OkCancelResult.ok) {
+      await AppSettings.showPresences.setItem(false);
+      if (mounted) setState(() {});
+    }
   }
 
   Future<void> setStatus() async {
@@ -1089,5 +1180,6 @@ enum ChatContextAction {
   leave,
   addToSpace,
   block,
+  hide,
   showMore,
 }

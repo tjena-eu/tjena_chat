@@ -45,15 +45,30 @@ enum AppSettings<T> {
   swipeRightToLeftToReply<bool>('chat.fluffy.swipeRightToLeftToReply', true),
   sendOnEnter<bool>('chat.fluffy.send_on_enter', false),
   displayNavigationRail<bool>('chat.fluffy.display_navigation_rail', false),
+  showPresences<bool>('chat.fluffy.show_presences', true),
+  // Stories: who receives my stories ('none' | 'all' | 'selected') and whether
+  // I receive others' stories ('all' | 'none').
+  // Master switch for the stories feature (sets up the space + story room and
+  // auto-joins applicable rooms when turned on).
+  storiesEnabled<bool>('chat.fluffy.stories_enabled', false),
+  storiesSendScope<String>('chat.fluffy.stories_send_scope', 'all'),
+  storiesReceiveScope<String>('chat.fluffy.stories_receive_scope', 'all'),
+  // How long a story stays visible before it's considered expired (hours).
+  storiesRetentionHours<int>('chat.fluffy.stories_retention_hours', 24),
+  // Whether a story's photo/video downloads as soon as the story is opened.
+  // Off means the viewer shows a tap-to-load placeholder instead.
+  storiesAutoDownloadMedia<bool>('chat.fluffy.stories_auto_download', true),
+  experimentalVoip<bool>('chat.fluffy.experimental_voip', true),
   shareKeysWith<String>('chat.fluffy.share_keys_with_2', 'all'),
   noEncryptionWarningShown<bool>(
     'chat.fluffy.no_encryption_warning_shown',
     false,
   ),
   displayChatDetailsColumn('chat.fluffy.display_chat_details_column', false),
+  autoSaveMedia<bool>('chat.fluffy.auto_save_media', false),
   // AppConfig-mirrored settings
-  applicationName<String>('chat.fluffy.application_name', 'FluffyChat'),
-  defaultHomeserver<String>('chat.fluffy.default_homeserver', 'matrix.org'),
+  applicationName<String>('chat.fluffy.application_name', 'tjena'),
+  defaultHomeserver<String>('chat.fluffy.default_homeserver', 'tjena.eu'),
   // colorSchemeSeed stored as ARGB int
   colorSchemeSeedInt<int>('chat.fluffy.color_scheme_seed', 0xFF5625BA),
   emojiSuggestionLocale<String>('emoji_suggestion_locale', ''),
@@ -61,20 +76,21 @@ enum AppSettings<T> {
   enableMatrixNativeOIDC<bool>('chat.fluffy.enable_matrix_native_oidc', true),
   presetHomeserver<String>('chat.fluffy.preset_homeserver', ''),
   welcomeText<String>('chat.fluffy.welcome_text', ''),
-  website<String>('chat.fluffy.website_url', 'https://fluffychat.im'),
+  website<String>('chat.fluffy.website_url', 'https://tjena.eu'),
   logoUrl<String>(
     'chat.fluffy.logo_url',
-    'https://fluffychat.im/assets/favicon.png',
+    'https://tjena.eu/assets/favicon.png',
   ),
   privacyPolicy<String>(
     'chat.fluffy.privacy_policy_url',
-    'https://fluffychat.im/privacy',
+    'https://tjena.eu/privacy',
   ),
-  tos<String>('chat.fluffy.tos_url', 'https://fluffychat.im/tos'),
+  tos<String>('chat.fluffy.tos_url', 'https://tjena.eu/tos'),
   sendTimelineEventTimeout<int>('chat.fluffy.send_timeline_event_timeout', 15),
   webNotificationSound<bool>('chat.fluffy.web_notification_sound', true),
   chatFilter<String>('chat.fluffy.chat_filter', 'allChats'),
   hideRoomsInSpaces<bool>('chat.fluffy.hideRoomsInSpaces', false),
+  spaceRoomPreview<bool>('chat.fluffy.space_room_preview', false),
   showThumbnailsInTimeline<bool>('chat.fluffy.showThumbnailsInTimeline', true),
   doubleTapToReact<bool>('chat.fluffy.double_tap_to_react', false),
   doubleTapReaction<String>('chat.fluffy.double_tap_reaction', '❤️'),

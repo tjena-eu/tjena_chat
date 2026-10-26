@@ -8,6 +8,8 @@ import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/pages/chat_details/chat_details.dart';
 import 'package:fluffychat/pages/chat_details/participant_list_item.dart';
 import 'package:fluffychat/utils/matrix_sdk_extensions/matrix_locals.dart';
+import 'package:fluffychat/utils/media_auto_download.dart';
+import 'package:fluffychat/utils/space_child_visibility.dart';
 import 'package:fluffychat/utils/verified_room_extension.dart';
 import 'package:fluffychat/widgets/avatar.dart';
 import 'package:fluffychat/widgets/chat_settings_popup_menu.dart';
@@ -292,6 +294,32 @@ class ChatDetailsView extends StatelessWidget {
                           ),
                           const SizedBox(height: 16),
                         ],
+                        Divider(color: theme.dividerColor),
+                        ListTile(
+                          leading: CircleAvatar(
+                            backgroundColor: theme.colorScheme.surfaceContainer,
+                            foregroundColor: iconColor,
+                            child: const Icon(Icons.photo_library_outlined),
+                          ),
+                          title: const Text('Media'),
+                          trailing: const Icon(Icons.chevron_right_outlined),
+                          onTap: () =>
+                              context.go('/rooms/${room.id}/search?tab=1'),
+                        ),
+                        // Per-chat media auto-download. Lives here (not in the
+                        // three-dot menu) so it sits next to the other
+                        // per-chat settings.
+                        Divider(color: theme.dividerColor),
+                        _AutoDownloadTile(room: room, iconColor: iconColor),
+                        // Spaces only: whether this space's chats also show up
+                        // in the main chat list.
+                        if (room.isSpace) ...[
+                          Divider(color: theme.dividerColor),
+                          _SpaceShowOutsideTile(
+                            room: room,
+                            iconColor: iconColor,
+                          ),
+                        ],
                         if (!room.isDirectChat) ...[
                           Divider(color: theme.dividerColor),
                           ListTile(
@@ -368,6 +396,94 @@ class ChatDetailsView extends StatelessWidget {
           ),
         );
       },
+    );
+  }
+}
+
+/// Per-chat switch for automatically downloading images and videos. Overrides
+/// the global "Show thumbnails" setting for this one chat.
+class _AutoDownloadTile extends StatefulWidget {
+  final Room room;
+  final Color? iconColor;
+
+  const _AutoDownloadTile({required this.room, required this.iconColor});
+
+  @override
+  State<_AutoDownloadTile> createState() => _AutoDownloadTileState();
+}
+
+class _AutoDownloadTileState extends State<_AutoDownloadTile> {
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final enabled = MediaAutoDownload.enabledFor(widget.room.id);
+    return SwitchListTile.adaptive(
+      value: enabled,
+      onChanged: (value) async {
+        await MediaAutoDownload.setOverride(widget.room.id, value);
+        if (mounted) setState(() {});
+      },
+      secondary: CircleAvatar(
+        backgroundColor: theme.colorScheme.surfaceContainer,
+        foregroundColor: widget.iconColor,
+        child: Icon(
+          enabled ? Icons.download_outlined : Icons.file_download_off_outlined,
+        ),
+      ),
+      title: const Text('Auto-download media'),
+      subtitle: Text(
+        enabled
+            ? 'Photos and videos load automatically in this chat.'
+            : 'Photos and videos load only when you tap them.',
+      ),
+    );
+  }
+}
+
+/// Spaces only: whether this space's chats also appear in the main chat list.
+class _SpaceShowOutsideTile extends StatefulWidget {
+  final Room room;
+  final Color? iconColor;
+
+  const _SpaceShowOutsideTile({required this.room, required this.iconColor});
+
+  @override
+  State<_SpaceShowOutsideTile> createState() => _SpaceShowOutsideTileState();
+}
+
+class _SpaceShowOutsideTileState extends State<_SpaceShowOutsideTile> {
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    // The stored flag is "hidden outside"; the switch reads better as the
+    // positive "show in main list".
+    final showOutside = !SpaceChildVisibility.instance.isHiddenOutside(
+      widget.room.id,
+    );
+    return SwitchListTile.adaptive(
+      value: showOutside,
+      onChanged: (value) async {
+        await SpaceChildVisibility.instance.setHiddenOutside(
+          widget.room.id,
+          !value,
+        );
+        if (mounted) setState(() {});
+      },
+      secondary: CircleAvatar(
+        backgroundColor: theme.colorScheme.surfaceContainer,
+        foregroundColor: widget.iconColor,
+        child: Icon(
+          showOutside
+              ? Icons.visibility_outlined
+              : Icons.visibility_off_outlined,
+        ),
+      ),
+      title: const Text('Show chats in main list'),
+      subtitle: Text(
+        showOutside
+            ? 'This space\'s chats also appear in your normal chat list.'
+            : 'This space\'s chats only appear inside the space.',
+      ),
     );
   }
 }

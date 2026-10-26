@@ -19,6 +19,13 @@ extension ClientDownloadContentExtension on Client {
     ThumbnailMethod? thumbnailMethod,
     bool rounded = false,
   }) async {
+    // Built-in Signal bridge media is pre-stored in the database under the
+    // plain mxc URI — no homeserver thumbnail transform needed.
+    if (mxc.scheme == 'mxc' &&
+        (mxc.host == 'sig-local' || mxc.host == 'sig-media')) {
+      return await database.getFile(mxc) ?? Uint8List(0);
+    }
+
     // To stay compatible with previous storeKeys:
     final cacheKey = isThumbnail
         // ignore: deprecated_member_use

@@ -185,7 +185,6 @@ Future<void> notificationTap(
               'Selected notification with reply action but without input',
             );
           }
-
           await room.sendTextEvent(
             input,
             parseCommands: false,

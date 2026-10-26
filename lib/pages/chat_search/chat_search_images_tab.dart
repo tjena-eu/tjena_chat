@@ -101,9 +101,14 @@ class ChatSearchImagesTab extends StatelessWidget {
                   );
                 }
                 return InkWell(
-                  onTap: () => showDialog(
-                    context: context,
-                    builder: (_) => ImageViewer(event, outerContext: context),
+                  onTap: () => Navigator.of(context).push(
+                    PageRouteBuilder(
+                      opaque: false,
+                      barrierColor: Colors.transparent,
+                      pageBuilder: (_, _, _) =>
+                          ImageViewer(event, outerContext: context),
+                      transitionsBuilder: (_, _, _, child) => child,
+                    ),
                   ),
                   borderRadius: borderRadius,
                   child: Material(

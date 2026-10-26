@@ -99,18 +99,23 @@ class _IntroPagePresenterState extends State<IntroPagePresenter> {
   }
 
   void _login() {
+    // Go straight to our own homeserver's login instead of the server picker.
     final presetHomeserver = AppSettings.presetHomeserver.value;
-    if (presetHomeserver.isEmpty) {
-      context.go('${GoRouterState.of(context).uri.path}/sign_in');
-      return;
-    }
+    final homeserver = presetHomeserver.isNotEmpty
+        ? presetHomeserver
+        : AppSettings.defaultHomeserver.value;
 
     connectToHomeserverFlow(
-      PublicHomeserverData(name: presetHomeserver),
+      PublicHomeserverData(name: homeserver),
       context,
       (snapshot) {},
       false,
     );
+  }
+
+  /// Opens the homeserver picker for users who want a different server.
+  void _changeServer() {
+    context.go('${GoRouterState.of(context).uri.path}/sign_in');
   }
 
   @override
@@ -123,6 +128,7 @@ class _IntroPagePresenterState extends State<IntroPagePresenter> {
           ? null
           : AppSettings.welcomeText.value,
       login: _login,
+      changeServer: _changeServer,
     );
   }
 }

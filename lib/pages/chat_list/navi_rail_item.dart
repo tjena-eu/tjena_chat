@@ -16,6 +16,7 @@ class NaviRailItem extends StatelessWidget {
   final String toolTip;
   final bool isSelected;
   final void Function() onTap;
+  final void Function()? onLongPress;
   final Widget icon;
   final Widget? selectedIcon;
   final bool Function(Room)? unreadBadgeFilter;
@@ -24,6 +25,7 @@ class NaviRailItem extends StatelessWidget {
     required this.toolTip,
     required this.isSelected,
     required this.onTap,
+    this.onLongPress,
     required this.icon,
     this.selectedIcon,
     this.unreadBadgeFilter,
@@ -79,6 +81,7 @@ class NaviRailItem extends StatelessWidget {
                       child: InkWell(
                         borderRadius: borderRadius,
                         onTap: onTap,
+                        onLongPress: onLongPress,
                         child: unreadBadgeFilter == null
                             ? icon
                             : UnreadRoomsBadge(

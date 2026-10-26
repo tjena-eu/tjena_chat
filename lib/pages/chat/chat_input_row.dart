@@ -162,6 +162,21 @@ class ChatInputRow extends StatelessWidget {
                               contentPadding: const EdgeInsets.all(0),
                             ),
                           ),
+                        if (PlatformInfos.isMobile)
+                          PopupMenuItem(
+                            value: AddPopupMenuActions.liveLocation,
+                            child: ListTile(
+                              leading: CircleAvatar(
+                                backgroundColor:
+                                    theme.colorScheme.onPrimaryContainer,
+                                foregroundColor:
+                                    theme.colorScheme.primaryContainer,
+                                child: const Icon(Icons.location_on),
+                              ),
+                              title: const Text('Share live location'),
+                              contentPadding: const EdgeInsets.all(0),
+                            ),
+                          ),
                         PopupMenuItem(
                           value: AddPopupMenuActions.poll,
                           child: ListTile(

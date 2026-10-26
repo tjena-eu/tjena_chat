@@ -10,11 +10,14 @@ import 'package:collection/collection.dart';
 import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/utils/client_manager.dart';
 import 'package:fluffychat/utils/init_with_restore.dart';
+import 'package:fluffychat/utils/local_backup_service.dart';
 import 'package:fluffychat/utils/matrix_sdk_extensions/matrix_file_extension.dart';
+import 'package:fluffychat/utils/media_auto_download.dart';
 import 'package:fluffychat/utils/notification_background_handler.dart';
 import 'package:fluffychat/utils/platform_infos.dart';
 import 'package:fluffychat/utils/push_helper.dart';
 import 'package:fluffychat/utils/uia_request_manager.dart';
+import 'package:fluffychat/utils/voip_plugin.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.dart';
 import 'package:fluffychat/widgets/fluffy_chat_app.dart';
 import 'package:fluffychat/widgets/future_loading_dialog.dart';
@@ -80,6 +83,9 @@ class MatrixState extends State<Matrix> {
     return widget.clients[_activeClient];
   }
 
+  /// Legacy 1:1 calls (fallback while the server has no LiveKit service).
+  VoipPlugin? voipPlugin;
+
   bool get isMultiAccount => widget.clients.length > 1;
 
   int getClientIndexByMatrixId(String matrixId) =>
@@ -89,6 +95,8 @@ class MatrixState extends State<Matrix> {
     final i = widget.clients.indexWhere((c) => c == cl);
     if (i != -1) {
       _activeClient = i;
+      // TODO: Multi-client VoiP support
+      createVoipPlugin();
     } else {
       Logs().w('Tried to set an unknown client ${cl!.userID} as active');
     }
@@ -372,6 +380,17 @@ class MatrixState extends State<Matrix> {
     for (final c in widget.clients) {
       _registerSubs(c.clientName);
     }
+    createVoipPlugin();
+  }
+
+  Future<void> createVoipPlugin() async {
+    if (!AppSettings.experimentalVoip.value) {
+      Logs().i('[VOIP] createVoipPlugin: disabled by setting');
+      voipPlugin = null;
+      return;
+    }
+    Logs().i('[VOIP] createVoipPlugin: creating plugin');
+    voipPlugin = VoipPlugin(this);
   }
 
   void didChangeAppLifecycleState(AppLifecycleState state) {
@@ -390,6 +409,13 @@ class MatrixState extends State<Matrix> {
         client.requestHistoryOnLimitedTimeline = !foreground;
         Logs().v('Set background sync to', foreground);
       }
+    }
+    if (state == AppLifecycleState.resumed && widget.clients.isNotEmpty) {
+      LocalBackupService.runIfDue(widget.clients.first);
+      // Data Saver may have been switched on while we were away, or the device
+      // may have moved from Wi-Fi onto metered data.
+      // ignore: unawaited_futures
+      MediaAutoDownload.refreshDataSaver();
     }
   }
 

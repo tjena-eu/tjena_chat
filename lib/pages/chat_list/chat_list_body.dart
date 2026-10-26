@@ -11,6 +11,8 @@ import 'package:fluffychat/pages/chat_list/chat_list_item.dart';
 import 'package:fluffychat/pages/chat_list/dummy_chat_list_item.dart';
 import 'package:fluffychat/pages/chat_list/search_title.dart';
 import 'package:fluffychat/pages/chat_list/space_view.dart';
+import 'package:fluffychat/pages/chat_list/status_msg_list.dart';
+import 'package:fluffychat/utils/space_child_visibility.dart';
 import 'package:fluffychat/utils/stream_extension.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/public_room_dialog.dart';
 import 'package:fluffychat/widgets/avatar.dart';
@@ -67,13 +69,14 @@ class ChatListViewBody extends StatelessWidget {
           .where((s) => s.hasRoomUpdate)
           .rateLimit(const Duration(seconds: 1)),
       builder: (context, _) {
-        final rooms = controller.filteredRooms
-            .where(
-              (room) =>
-                  !AppSettings.hideRoomsInSpaces.value ||
-                  spaceDelegateCandidates[room.id] == null,
-            )
-            .toList();
+        final rooms = controller.filteredRooms.where((room) {
+          final space = spaceDelegateCandidates[room.id];
+          if (space == null) return true; // not in a space → always show
+          // In a space: hide from the main list if the global setting is
+          // on, or this specific space is set to hide its chats.
+          if (AppSettings.hideRoomsInSpaces.value) return false;
+          return !SpaceChildVisibility.instance.isHiddenOutside(space.id);
+        }).toList();
 
         return CustomScrollView(
           controller: controller.scrollController,
@@ -128,6 +131,13 @@ class ChatListViewBody extends StatelessWidget {
                           ),
                   ),
                 ],
+                if (!controller.isSearchMode && AppSettings.showPresences.value)
+                  GestureDetector(
+                    onLongPress: controller.dismissStatusList,
+                    child: StatusMessageList(
+                      onStatusEdit: controller.setStatus,
+                    ),
+                  ),
                 if (client.rooms.isNotEmpty && !controller.isSearchMode)
                   Container(
                     height: 36 + 8 + 8,

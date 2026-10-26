@@ -10,7 +10,12 @@ import 'package:matrix/matrix.dart';
 
 class ChatSearchPage extends StatefulWidget {
   final String roomId;
-  const ChatSearchPage({required this.roomId, super.key});
+  final int initialTabIndex;
+  const ChatSearchPage({
+    required this.roomId,
+    this.initialTabIndex = 0,
+    super.key,
+  });
 
   @override
   ChatSearchController createState() => ChatSearchController();
@@ -126,8 +131,15 @@ class ChatSearchController extends State<ChatSearchPage>
   @override
   void initState() {
     super.initState();
-    tabController = TabController(initialIndex: 0, length: 3, vsync: this);
+    tabController = TabController(
+      initialIndex: widget.initialTabIndex.clamp(0, 2),
+      length: 3,
+      vsync: this,
+    );
     tabController.addListener(_onTabChanged);
+    if (widget.initialTabIndex != 0) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => startSearch());
+    }
   }
 
   @override

@@ -6,15 +6,22 @@
 import 'dart:async';
 
 import 'package:fluffychat/l10n/l10n.dart';
+import 'package:fluffychat/utils/hidden_rooms.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.dart';
 import 'package:fluffychat/widgets/future_loading_dialog.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
-
 import 'matrix.dart';
 
-enum ChatPopupMenuActions { details, encryption, leave, search }
+enum ChatPopupMenuActions {
+  details,
+  encryption,
+  leave,
+  search,
+  media,
+  toggleHidden,
+}
 
 class ChatSettingsPopupMenu extends StatefulWidget {
   final Room room;
@@ -82,8 +89,14 @@ class ChatSettingsPopupMenuState extends State<ChatSettingsPopupMenu> {
               case ChatPopupMenuActions.search:
                 context.go('/rooms/${widget.room.id}/search');
                 break;
+              case ChatPopupMenuActions.media:
+                context.go('/rooms/${widget.room.id}/search?tab=1');
+                break;
               case ChatPopupMenuActions.encryption:
                 context.go('/rooms/${widget.room.id}/encryption');
+                break;
+              case ChatPopupMenuActions.toggleHidden:
+                await _toggleHidden();
                 break;
             }
           },
@@ -122,6 +135,34 @@ class ChatSettingsPopupMenuState extends State<ChatSettingsPopupMenu> {
                 ),
               ),
             PopupMenuItem<ChatPopupMenuActions>(
+              value: ChatPopupMenuActions.media,
+              child: const Row(
+                children: [
+                  Icon(Icons.photo_library_outlined),
+                  SizedBox(width: 12),
+                  Text('Media'),
+                ],
+              ),
+            ),
+            PopupMenuItem<ChatPopupMenuActions>(
+              value: ChatPopupMenuActions.toggleHidden,
+              child: Row(
+                children: [
+                  Icon(
+                    HiddenRooms.instance.isHidden(widget.room.id)
+                        ? Icons.visibility_outlined
+                        : Icons.visibility_off_outlined,
+                  ),
+                  const SizedBox(width: 12),
+                  Text(
+                    HiddenRooms.instance.isHidden(widget.room.id)
+                        ? 'Unhide chat'
+                        : 'Hide chat',
+                  ),
+                ],
+              ),
+            ),
+            PopupMenuItem<ChatPopupMenuActions>(
               value: ChatPopupMenuActions.leave,
               child: Row(
                 children: [
@@ -135,6 +176,26 @@ class ChatSettingsPopupMenuState extends State<ChatSettingsPopupMenu> {
         ),
       ],
     );
+  }
+
+  Future<void> _toggleHidden() async {
+    final wasHidden = HiddenRooms.instance.isHidden(widget.room.id);
+    if (wasHidden) {
+      await HiddenRooms.instance.unhide(widget.room.id);
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Chat unhidden.')));
+    } else {
+      await HiddenRooms.instance.hide(widget.room.id);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Chat hidden — find it under Hidden chats.'),
+        ),
+      );
+      context.go('/rooms');
+    }
   }
 
   void _showChatDetails() {

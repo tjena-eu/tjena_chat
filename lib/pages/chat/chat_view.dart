@@ -246,11 +246,11 @@ class ChatView extends StatelessWidget {
                           ),
                         ),
                       )
-                    else if (controller.room.hasPermissionForMatrixRtcCall &&
-                        controller.supportLiveKitCalls)
+                    else if (controller.showCallButton)
                       IconButton(
-                        icon: Icon(Icons.call_outlined),
-                        onPressed: controller.startOrJoinVideoCall,
+                        icon: const Icon(Icons.call_outlined),
+                        tooltip: L10n.of(context).startCall,
+                        onPressed: controller.onPhoneButtonTap,
                       ),
                     ChatSettingsPopupMenu(controller.room, true),
                   ],

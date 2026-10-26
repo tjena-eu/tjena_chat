@@ -10,9 +10,11 @@ import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
 import 'package:fluffychat/config/setting_keys.dart';
 import 'package:fluffychat/config/themes.dart';
 import 'package:fluffychat/l10n/l10n.dart';
+import 'package:fluffychat/pages/chat/events/live_location_bubble.dart';
 import 'package:fluffychat/utils/adaptive_bottom_sheet.dart';
 import 'package:fluffychat/utils/date_time_extension.dart';
 import 'package:fluffychat/utils/file_description.dart';
+import 'package:fluffychat/utils/live_location/live_location_constants.dart';
 import 'package:fluffychat/utils/matrix_sdk_extensions/matrix_locals.dart';
 import 'package:fluffychat/utils/string_color.dart';
 import 'package:fluffychat/widgets/avatar.dart';
@@ -23,6 +25,7 @@ import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 
 import '../../../config/app_config.dart';
+import 'media_grid_bubble.dart';
 import '../sticker_picker_dialog.dart';
 import 'message_content.dart';
 import 'message_reactions.dart';
@@ -34,6 +37,11 @@ class Message extends StatelessWidget {
   final Event event;
   final Event? nextEvent;
   final Event? previousEvent;
+
+  /// When this event anchors a run of consecutive same-sender images (see
+  /// `MediaGroup`), the full run (oldest first, this event included) — shown
+  /// as a small grid instead of [MessageContent]'s single image bubble.
+  final List<Event>? mediaGroup;
   final bool displayReadMarker;
   final void Function(Event) onSelect;
   final void Function(Event) onInfoTab;
@@ -59,6 +67,7 @@ class Message extends StatelessWidget {
     this.event, {
     this.nextEvent,
     this.previousEvent,
+    this.mediaGroup,
     this.displayReadMarker = false,
     this.longPressSelect = false,
     required this.bigEmojis,
@@ -85,6 +94,14 @@ class Message extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+
+    // Live location share (m.beacon_info state event) gets its own map tile.
+    if (LiveLocationKeys.isBeaconInfo(event.type)) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+        child: LiveLocationBubble(event: event, timeline: timeline),
+      );
+    }
 
     if (!{
       EventTypes.Message,
@@ -527,16 +544,22 @@ class Message extends StatelessWidget {
                                                   );
                                                 },
                                               ),
-                                            MessageContent(
-                                              displayEvent,
-                                              textColor: textColor,
-                                              linkColor: linkColor,
-                                              onInfoTab: onInfoTab,
-                                              borderRadius: borderRadius,
-                                              timeline: timeline,
-                                              selected: selected,
-                                              bigEmojis: bigEmojis,
-                                            ),
+                                            (mediaGroup?.length ?? 0) > 1
+                                                ? MediaGridBubble(
+                                                    mediaGroup!,
+                                                    timeline: timeline,
+                                                    borderRadius: borderRadius,
+                                                  )
+                                                : MessageContent(
+                                                    displayEvent,
+                                                    textColor: textColor,
+                                                    linkColor: linkColor,
+                                                    onInfoTab: onInfoTab,
+                                                    borderRadius: borderRadius,
+                                                    timeline: timeline,
+                                                    selected: selected,
+                                                    bigEmojis: bigEmojis,
+                                                  ),
                                           ],
                                         ),
                                       ),

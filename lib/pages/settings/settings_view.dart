@@ -182,6 +182,44 @@ class SettingsView extends StatelessWidget {
                   ? theme.colorScheme.surfaceContainerHigh
                   : null,
             ),
+            ListTile(
+              leading: const Icon(Icons.manage_accounts_outlined),
+              title: const Text('Identity Server'),
+              subtitle: const Text('Publish email & phone number'),
+              onTap: () => context.go('/rooms/settings/identity-server'),
+              tileColor:
+                  activeRoute.startsWith('/rooms/settings/identity-server')
+                  ? theme.colorScheme.surfaceContainerHigh
+                  : null,
+            ),
+            Divider(color: theme.dividerColor),
+            ListTile(
+              leading: const Icon(Icons.swap_horiz_outlined),
+              title: const Text('Messaging Bridges'),
+              subtitle: const Text('WhatsApp and Signal in tjena'),
+              onTap: () => context.go('/rooms/settings/bridges'),
+              tileColor: activeRoute.startsWith('/rooms/settings/bridges')
+                  ? theme.colorScheme.surfaceContainerHigh
+                  : null,
+            ),
+            ListTile(
+              leading: const Icon(Icons.archive_outlined),
+              title: const Text('Local Backup'),
+              subtitle: const Text('Export chats to a ZIP file'),
+              onTap: () => context.go('/rooms/settings/local-backup'),
+              tileColor: activeRoute.startsWith('/rooms/settings/local-backup')
+                  ? theme.colorScheme.surfaceContainerHigh
+                  : null,
+            ),
+            ListTile(
+              leading: const Icon(Icons.bug_report_outlined),
+              title: const Text('Debug Tools'),
+              subtitle: const Text('Bulk delete rooms, multi-select'),
+              onTap: () => context.go('/rooms/settings/debug'),
+              tileColor: activeRoute.startsWith('/rooms/settings/debug')
+                  ? theme.colorScheme.surfaceContainerHigh
+                  : null,
+            ),
             Divider(color: theme.dividerColor),
             ListTile(
               leading: const Icon(Icons.dns_outlined),
@@ -203,6 +241,10 @@ class SettingsView extends StatelessWidget {
             ListTile(
               leading: const Icon(Icons.info_outline_rounded),
               title: Text(L10n.of(context).about),
+              subtitle: FutureBuilder<String>(
+                future: controller.versionFuture,
+                builder: (_, snapshot) => Text(snapshot.data ?? '...'),
+              ),
               onTap: () => PlatformInfos.showDialog(context),
             ),
             Divider(color: theme.dividerColor),

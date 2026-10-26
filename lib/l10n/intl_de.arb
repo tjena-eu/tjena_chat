@@ -2871,5 +2871,13 @@
                 "type": "String"
             }
         }
-    }
+    },
+    "loginUsernameHelper": "Du kannst auch nur deinen Benutzernamen eingeben.",
+    "tapToDownload": "Zum Herunterladen tippen",
+    "waConnected": "WhatsApp verbunden",
+    "waConnecting": "WhatsApp verbindet erneut…",
+    "waDisconnected": "WhatsApp offline — Nachrichten werden nicht gesendet",
+    "foregroundServiceRunning": "Diese Benachrichtigung wird angezeigt, wenn der Vordergrunddienst ausgeführt wird.",
+    "screenSharingTitle": "Bildschirm teilen",
+    "screenSharingDetail": "Du teilst deinen Bildschirm in FuffyChat"
 }

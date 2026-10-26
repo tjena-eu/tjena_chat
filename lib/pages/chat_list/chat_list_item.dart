@@ -89,10 +89,37 @@ class ChatListItem extends StatelessWidget {
                     height: Avatar.defaultSize,
                     child: Stack(
                       children: [
+                        // Main room icon at full size.
+                        Avatar(
+                          shapeBorder: room.isSpace
+                              ? RoundedSuperellipseBorder(
+                                  side: BorderSide(
+                                    width: 1,
+                                    color: theme.dividerColor,
+                                  ),
+                                  borderRadius: BorderRadius.circular(
+                                    AppConfig.spaceBorderRadius,
+                                  ),
+                                )
+                              : null,
+                          borderRadius: room.isSpace
+                              ? BorderRadius.circular(
+                                  AppConfig.spaceBorderRadius,
+                                )
+                              : null,
+                          mxContent: room.avatar,
+                          size: Avatar.defaultSize,
+                          name: displayname,
+                          presenceUserId: directChatMatrixId,
+                          presenceBackgroundColor: backgroundColor,
+                          onTap: () => onLongPress?.call(context),
+                        ),
+                        // Space icon as a small badge in the bottom-right corner
+                        // (also indicates the bridge, e.g. the WhatsApp space).
                         if (space != null)
                           Positioned(
-                            top: 0,
-                            left: 0,
+                            bottom: 0,
+                            right: 0,
                             child: Avatar(
                               shapeBorder: RoundedSuperellipseBorder(
                                 side: BorderSide(
@@ -102,60 +129,18 @@ class ChatListItem extends StatelessWidget {
                                       theme.colorScheme.surface,
                                 ),
                                 borderRadius: BorderRadius.circular(
-                                  AppConfig.spaceBorderRadius * 0.75,
+                                  AppConfig.spaceBorderRadius * 0.5,
                                 ),
                               ),
                               borderRadius: BorderRadius.circular(
-                                AppConfig.spaceBorderRadius * 0.75,
+                                AppConfig.spaceBorderRadius * 0.5,
                               ),
                               mxContent: space.avatar,
-                              size: Avatar.defaultSize * 0.75,
+                              size: Avatar.defaultSize * 0.45,
                               name: space.getLocalizedDisplayname(),
                               onTap: () => onLongPress?.call(context),
                             ),
                           ),
-                        Positioned(
-                          bottom: 0,
-                          right: 0,
-                          child: Avatar(
-                            shapeBorder: space == null
-                                ? room.isSpace
-                                      ? RoundedSuperellipseBorder(
-                                          side: BorderSide(
-                                            width: 1,
-                                            color: theme.dividerColor,
-                                          ),
-                                          borderRadius: BorderRadius.circular(
-                                            AppConfig.spaceBorderRadius,
-                                          ),
-                                        )
-                                      : null
-                                : RoundedRectangleBorder(
-                                    side: BorderSide(
-                                      width: 2,
-                                      color:
-                                          backgroundColor ??
-                                          theme.colorScheme.surface,
-                                    ),
-                                    borderRadius: BorderRadius.circular(
-                                      Avatar.defaultSize,
-                                    ),
-                                  ),
-                            borderRadius: room.isSpace
-                                ? BorderRadius.circular(
-                                    AppConfig.spaceBorderRadius,
-                                  )
-                                : null,
-                            mxContent: room.avatar,
-                            size: space != null
-                                ? Avatar.defaultSize * 0.75
-                                : Avatar.defaultSize,
-                            name: displayname,
-                            presenceUserId: directChatMatrixId,
-                            presenceBackgroundColor: backgroundColor,
-                            onTap: () => onLongPress?.call(context),
-                          ),
-                        ),
                         Positioned(
                           top: 0,
                           right: 0,
@@ -189,6 +174,7 @@ class ChatListItem extends StatelessWidget {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       softWrap: false,
+                      style: const TextStyle(fontWeight: FontWeight.bold),
                     ),
                   ),
                   if (isMuted)
@@ -314,8 +300,18 @@ class ChatListItem extends StatelessWidget {
                             softWrap: false,
                           )
                         : FutureBuilder(
+                            // Re-key on the sender's currently known displayname too, not
+                            // just the event identity. WA/bridge (and slow-to-profile
+                            // federated) senders often get their displayname resolved
+                            // *after* their message already synced in — without this, the
+                            // FutureBuilder's `initialData` (computed fresh every build) is
+                            // silently ignored on rebuild because Flutter only re-applies
+                            // `initialData` when the widget is freshly created, and here the
+                            // key would otherwise stay identical, leaving the preview stuck
+                            // showing the raw sender id/number forever.
                             key: ValueKey(
-                              '${lastEvent?.eventId}_${lastEvent?.type}_${lastEvent?.redacted}',
+                              '${lastEvent?.eventId}_${lastEvent?.type}_${lastEvent?.redacted}_'
+                              '${lastEvent != null ? room.getState(EventTypes.RoomMember, lastEvent.senderId)?.content.tryGet<String>('displayname') : null}',
                             ),
                             future: needLastEventSender
                                 ? lastEvent.calcLocalizedBody(
@@ -325,9 +321,9 @@ class ChatListItem extends StatelessWidget {
                                     plaintextBody: true,
                                     removeMarkdown: true,
                                     withSenderNamePrefix:
-                                        (!isDirectChat ||
+                                        !isDirectChat ||
                                         directChatMatrixId !=
-                                            room.lastEvent?.senderId),
+                                            room.lastEvent?.senderId,
                                   )
                                 : null,
                             initialData: lastEvent?.calcLocalizedBodyFallback(
@@ -337,9 +333,9 @@ class ChatListItem extends StatelessWidget {
                               plaintextBody: true,
                               removeMarkdown: true,
                               withSenderNamePrefix:
-                                  (!isDirectChat ||
+                                  !isDirectChat ||
                                   directChatMatrixId !=
-                                      room.lastEvent?.senderId),
+                                      room.lastEvent?.senderId,
                             ),
                             builder: (context, snapshot) => Text(
                               room.membership == Membership.invite
@@ -362,6 +358,7 @@ class ChatListItem extends StatelessWidget {
                               maxLines: room.notificationCount >= 1 ? 2 : 1,
                               overflow: TextOverflow.ellipsis,
                               style: TextStyle(
+                                color: theme.colorScheme.onSurfaceVariant,
                                 decoration: room.lastEvent?.redacted == true
                                     ? TextDecoration.lineThrough
                                     : null,

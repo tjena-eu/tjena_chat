@@ -8,6 +8,7 @@ import 'package:fluffychat/config/themes.dart';
 import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/pages/new_private_chat/new_private_chat.dart';
 import 'package:fluffychat/utils/localized_exception_extension.dart';
+import 'package:fluffychat/utils/personal_bridge.dart';
 import 'package:fluffychat/utils/platform_infos.dart';
 import 'package:fluffychat/widgets/avatar.dart';
 import 'package:fluffychat/widgets/layouts/max_width_body.dart';
@@ -18,6 +19,7 @@ import 'package:matrix/matrix.dart';
 import 'package:pretty_qr_code/pretty_qr_code.dart';
 
 import '../../widgets/qr_code_viewer.dart';
+import 'local_contacts_page.dart';
 
 class NewPrivateChatView extends StatelessWidget {
   final NewPrivateChatController controller;
@@ -154,6 +156,25 @@ class NewPrivateChatView extends StatelessWidget {
                                     theme.colorScheme.primaryContainer,
                                 foregroundColor:
                                     theme.colorScheme.onPrimaryContainer,
+                                child: const Icon(Icons.contacts_outlined),
+                              ),
+                              title: const Text('Search local contacts'),
+                              subtitle: const Text(
+                                'Find your contacts on Matrix',
+                              ),
+                              onTap: () => Navigator.of(context).push(
+                                MaterialPageRoute(
+                                  builder: (_) => const LocalContactsPage(),
+                                ),
+                              ),
+                            ),
+                          if (PlatformInfos.isMobile)
+                            ListTile(
+                              leading: CircleAvatar(
+                                backgroundColor:
+                                    theme.colorScheme.primaryContainer,
+                                foregroundColor:
+                                    theme.colorScheme.onPrimaryContainer,
                                 child: const Icon(
                                   Icons.qr_code_scanner_outlined,
                                 ),
@@ -161,6 +182,7 @@ class NewPrivateChatView extends StatelessWidget {
                               title: Text(L10n.of(context).scanQrCode),
                               onTap: controller.openScannerAction,
                             ),
+                          ..._bridgeTiles(context, controller),
                           Center(
                             child: Padding(
                               padding: const EdgeInsets.symmetric(
@@ -287,4 +309,73 @@ class NewPrivateChatView extends StatelessWidget {
       ),
     );
   }
+}
+
+List<Widget> _bridgeTiles(
+  BuildContext context,
+  NewPrivateChatController controller,
+) {
+  final theme = Theme.of(context);
+  final tiles = <Widget>[];
+
+  // ── Your own WhatsApp bridge (at home) ────────────────────────────────
+  final ownBot = WhatsAppBridgeConfig.of(Matrix.of(context).client).ownBot;
+  if (ownBot != null) {
+    tiles.add(
+      ListTile(
+        leading: const CircleAvatar(
+          backgroundColor: Color(0xFF25D366),
+          foregroundColor: Colors.white,
+          child: Icon(Icons.home_outlined),
+        ),
+        title: const Text('WhatsApp chat'),
+        subtitle: const Text('Your chats and contacts, via your own bridge'),
+        onTap: () => controller.openOwnBridgeChat(ownBot),
+      ),
+    );
+  }
+
+  // ── Homeserver Bridges ────────────────────────────────────────────────
+  final available = controller.availableBridges();
+  if (available.isNotEmpty) {
+    tiles.add(
+      Padding(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 2),
+        child: Row(
+          children: [
+            Icon(
+              Icons.cloud_outlined,
+              size: 14,
+              color: theme.colorScheme.secondary,
+            ),
+            const SizedBox(width: 6),
+            Text(
+              'Homeserver Bridges',
+              style: theme.textTheme.labelMedium?.copyWith(
+                color: theme.colorScheme.secondary,
+                fontWeight: FontWeight.w600,
+                letterSpacing: 0.5,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+    for (final def in available) {
+      tiles.add(
+        ListTile(
+          leading: CircleAvatar(
+            backgroundColor: def.color,
+            foregroundColor: Colors.white,
+            child: const Icon(Icons.chat_outlined),
+          ),
+          title: Text('New ${def.name} chat'),
+          subtitle: const Text('Start a chat via phone number'),
+          onTap: () => controller.openBridgeNewChat(def),
+        ),
+      );
+    }
+  }
+
+  return tiles;
 }

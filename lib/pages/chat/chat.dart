@@ -8,6 +8,7 @@ import 'dart:io';
 
 import 'package:collection/collection.dart';
 import 'package:desktop_drop/desktop_drop.dart';
+import 'package:device_info_plus/device_info_plus.dart';
 import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:fluffychat/config/setting_keys.dart';
@@ -19,16 +20,21 @@ import 'package:fluffychat/pages/chat/start_poll_bottom_sheet.dart';
 import 'package:fluffychat/pages/chat/trust_user_key_dialog.dart';
 import 'package:fluffychat/pages/chat/utils/web_file_to_x_file.dart';
 import 'package:fluffychat/pages/chat_details/chat_details.dart';
+import 'package:fluffychat/pages/wa_call/wa_call_page.dart';
 import 'package:fluffychat/utils/adaptive_bottom_sheet.dart';
 import 'package:fluffychat/utils/error_reporter.dart';
 import 'package:fluffychat/utils/file_selector.dart';
+import 'package:fluffychat/utils/live_location/live_location_manager.dart';
 import 'package:fluffychat/utils/matrix_live_kit_calls/matrix_live_kit_call.dart';
 import 'package:fluffychat/utils/matrix_sdk_extensions/event_extension.dart';
 import 'package:fluffychat/utils/matrix_sdk_extensions/filtered_timeline_extension.dart';
 import 'package:fluffychat/utils/matrix_sdk_extensions/matrix_locals.dart';
+import 'package:fluffychat/utils/media_auto_download.dart';
 import 'package:fluffychat/utils/other_party_can_receive.dart';
 import 'package:fluffychat/utils/platform_infos.dart';
 import 'package:fluffychat/utils/show_scaffold_dialog.dart';
+import 'package:fluffychat/utils/wa_call/wa_call_service.dart';
+import 'package:fluffychat/widgets/adaptive_dialogs/show_modal_action_popup.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/show_text_input_dialog.dart';
 import 'package:fluffychat/widgets/future_loading_dialog.dart';
@@ -49,6 +55,7 @@ import 'package:universal_html/universal_html.dart' as web;
 import '../../utils/account_bundles.dart';
 import '../../utils/localized_exception_extension.dart';
 import 'send_file_dialog.dart';
+import 'send_live_location_dialog.dart';
 import 'send_location_dialog.dart';
 
 class ChatPage extends StatelessWidget {
@@ -445,7 +452,11 @@ class ChatController extends State<ChatPageWithRoom>
       }
     });
     web.window.addEventListener('paste', _handleClipboardFilePasteWeb);
-
+    // Resume an interrupted live-location share (e.g. after an app restart).
+    // Use widget.room (sendingClient isn't assigned until later in initState).
+    LiveLocationManager.instance.restoreIfActive(widget.room.client);
+    // Opened from an "Incoming call" notification of the own WhatsApp bridge.
+    WaCallService.start(widget.room.client).checkRoom(widget.room);
     super.initState();
     _displayChatDetailsColumn = ValueNotifier(
       AppSettings.displayChatDetailsColumn.value,
@@ -468,8 +479,38 @@ class ChatController extends State<ChatPageWithRoom>
         ? lastEventThreadId ?? room.fullyRead
         : '';
     WidgetsBinding.instance.addObserver(this);
-    _tryLoadTimeline();
+    _tryLoadTimeline().then((_) => _onChatOpenedMedia());
   }
+
+  /// Media is downloaded when its chat is opened, not when it arrives. This is
+  /// that trigger, for both WhatsApp and regular Matrix rooms.
+  ///
+  /// Skipped entirely when auto-download is off for this chat (or Android's Data
+  /// Saver is restricting us) — then each image waits for a tap instead.
+  Future<void> _onChatOpenedMedia() async {
+    if (!mounted) return;
+    if (!MediaAutoDownload.enabledFor(room.id)) return;
+
+    // Matrix: the SDK downloads lazily as bubbles build, so opening the chat
+    // already pulls what is on screen. Auto-save is the part that no longer
+    // happens on arrival, so run it here for the recent attachments. It is
+    // de-duplicated per event id, so re-opening a chat costs nothing.
+    if (!AppSettings.autoSaveMedia.value) return;
+    final events = timeline?.events;
+    if (events == null) return;
+    for (final event in events.take(_autoSaveOnOpenLimit)) {
+      if (event.messageType != MessageTypes.Image &&
+          event.messageType != MessageTypes.Video) {
+        continue;
+      }
+      // ignore: unawaited_futures
+      event.autoSaveBackground();
+    }
+  }
+
+  /// How far back to auto-save when a chat is opened. Bounded so opening a chat
+  /// with years of history doesn't start hundreds of downloads.
+  static const _autoSaveOnOpenLimit = 30;
 
   Future<void> _checkMatrixRtcCallSupport() async {
     try {
@@ -571,6 +612,9 @@ class ChatController extends State<ChatPageWithRoom>
     final firstEvent = timeline?.events.firstOrNull;
     final eventId = firstEvent?.transactionId ?? firstEvent?.eventId;
     animateInEventId = eventId;
+    if (firstEvent != null && mounted) {
+      firstEvent.autoSaveToDevice(context);
+    }
     await Future.delayed(FluffyThemes.animationDuration);
     if (animateInEventId == eventId) animateInEventId = null;
   }
@@ -707,6 +751,8 @@ class ChatController extends State<ChatPageWithRoom>
 
   @override
   void dispose() {
+    // Leaving the chat: mark whatever arrived last as read too, so a message
+    // that landed while the user was typing does not leave the chat unread.
     timeline?.cancelSubscriptions();
     timeline = null;
     _storeInputTimeoutTimer?.cancel();
@@ -1059,6 +1105,13 @@ class ChatController extends State<ChatPageWithRoom>
     );
   }
 
+  Future<void> sendLiveLocationAction() async {
+    await showAdaptiveDialog(
+      context: context,
+      builder: (c) => SendLiveLocationDialog(room: room),
+    );
+  }
+
   String _getSelectedEventString() {
     var copyString = '';
     if (selectedEvents.length == 1) {
@@ -1165,10 +1218,10 @@ class ChatController extends State<ChatPageWithRoom>
               if (client == null) {
                 return;
               }
-              final room = client.getRoomById(roomId)!;
+              final altRoom = client.getRoomById(roomId)!;
               await Event.fromJson(
                 event.toJson(),
-                room,
+                altRoom,
               ).redactEvent(reason: reason);
             }
           } else {
@@ -1534,6 +1587,9 @@ class ChatController extends State<ChatPageWithRoom>
       case AddPopupMenuActions.location:
         sendLocationAction();
         return;
+      case AddPopupMenuActions.liveLocation:
+        sendLiveLocationAction();
+        return;
     }
   }
 
@@ -1648,6 +1704,95 @@ class ChatController extends State<ChatPageWithRoom>
   void showEventInfo([Event? event]) =>
       (event ?? selectedEvents.single).showInfoDialog(context);
 
+  /// Call button in the app bar: WhatsApp calls in chats of the own bridge,
+  /// MatrixRTC calls when the server has a LiveKit service (and the user may
+  /// start one here), and legacy 1:1 calls in direct chats otherwise.
+  bool get showCallButton =>
+      WaCallService.callTarget(room) != null ||
+      _canStartMatrixRtcCall ||
+      (AppSettings.experimentalVoip.value && room.isDirectChat);
+
+  bool get _canStartMatrixRtcCall =>
+      supportLiveKitCalls && room.hasPermissionForMatrixRtcCall;
+
+  Future<void> onPhoneButtonTap() async {
+    // WhatsApp chat of the user's own bridge: a real WhatsApp call through
+    // the calls device on the bridge phone.
+    if (WaCallService.callTarget(room) != null) {
+      final type = await showModalActionPopup<CallType>(
+        context: context,
+        title: 'WhatsApp call',
+        cancelLabel: L10n.of(context).cancel,
+        actions: [
+          AdaptiveModalAction(
+            label: L10n.of(context).voiceCall,
+            icon: const Icon(Icons.phone_outlined),
+            value: CallType.kVoice,
+          ),
+          AdaptiveModalAction(
+            label: L10n.of(context).videoCall,
+            icon: const Icon(Icons.video_call_outlined),
+            value: CallType.kVideo,
+          ),
+        ],
+      );
+      if (type == null || !mounted) return;
+      await startWaCall(context, room, video: type == CallType.kVideo);
+      return;
+    }
+    // The server offers MatrixRTC (LiveKit): group-capable calls. Without it
+    // the legacy 1:1 calls below stay the fallback.
+    if (_canStartMatrixRtcCall) {
+      startOrJoinVideoCall();
+      return;
+    }
+    // VoIP required Android SDK 21
+    if (PlatformInfos.isAndroid) {
+      final androidInfo = await DeviceInfoPlugin().androidInfo;
+      if (!mounted) return;
+      if (androidInfo.version.sdkInt < 21) {
+        Navigator.pop(context);
+        await showOkAlertDialog(
+          context: context,
+          title: L10n.of(context).unsupportedAndroidVersion,
+          message: L10n.of(context).unsupportedAndroidVersionLong,
+          okLabel: L10n.of(context).close,
+        );
+        return;
+      }
+    }
+    final callType = await showModalActionPopup<CallType>(
+      context: context,
+      title: L10n.of(context).warning,
+      message: L10n.of(context).videoCallsBetaWarning,
+      cancelLabel: L10n.of(context).cancel,
+      actions: [
+        AdaptiveModalAction(
+          label: L10n.of(context).voiceCall,
+          icon: const Icon(Icons.phone_outlined),
+          value: CallType.kVoice,
+        ),
+        AdaptiveModalAction(
+          label: L10n.of(context).videoCall,
+          icon: const Icon(Icons.video_call_outlined),
+          value: CallType.kVideo,
+        ),
+      ],
+    );
+    if (callType == null) return;
+    if (!mounted) return;
+
+    final voipPlugin = Matrix.of(context).voipPlugin;
+    try {
+      await voipPlugin!.voip.inviteToCall(room, callType);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(e.toLocalizedString(context))));
+    }
+  }
+
   void cancelReplyEventAction() => setState(() {
     if (editEvent != null) {
       sendController.text = pendingText;
@@ -1748,4 +1893,5 @@ enum AddPopupMenuActions {
   photoCamera,
   videoCamera,
   location,
+  liveLocation,
 }

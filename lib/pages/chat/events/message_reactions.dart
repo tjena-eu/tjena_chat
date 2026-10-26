@@ -3,10 +3,8 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import 'package:collection/collection.dart' show IterableExtension;
 import 'package:fluffychat/config/app_config.dart';
 import 'package:fluffychat/widgets/avatar.dart';
-import 'package:fluffychat/widgets/future_loading_dialog.dart';
 import 'package:fluffychat/widgets/matrix.dart';
 import 'package:fluffychat/widgets/mxc_image.dart';
 import 'package:material_ui/material_ui.dart';
@@ -59,23 +57,13 @@ class MessageReactions extends StatelessWidget {
             reactionKey: r.key,
             count: r.count,
             reacted: r.reacted,
-            onTap: () {
-              if (r.reacted) {
-                final evt = allReactionEvents.firstWhereOrNull(
-                  (e) =>
-                      e.senderId == e.room.client.userID &&
-                      e.content.tryGetMap('m.relates_to')?['key'] == r.key,
-                );
-                if (evt != null) {
-                  showFutureLoadingDialog(
-                    context: context,
-                    future: evt.redactEvent,
-                  );
-                }
-              } else {
-                event.room.sendReaction(event.eventId, r.key);
-              }
-            },
+            // Tapping a reaction shows who reacted with what — it never adds or
+            // removes a reaction of our own. Use the message's reaction picker
+            // (long-press the message) to react.
+            onTap: () async => await _AdaptableReactorsDialog(
+              client: client,
+              reactionEntry: r,
+            ).show(context),
             onLongPress: () async => await _AdaptableReactorsDialog(
               client: client,
               reactionEntry: r,

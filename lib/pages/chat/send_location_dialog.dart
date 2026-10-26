@@ -78,10 +78,11 @@ class SendLocationDialogState extends State<SendLocationDialog> {
 
   Future<void> sendAction() async {
     setState(() => isSending = true);
+    final lat = position!.latitude;
+    final lon = position!.longitude;
     final body =
-        'https://www.openstreetmap.org/?mlat=${position!.latitude}&mlon=${position!.longitude}#map=16/${position!.latitude}/${position!.longitude}';
-    final uri =
-        'geo:${position!.latitude},${position!.longitude};u=${position!.accuracy}';
+        'https://www.openstreetmap.org/?mlat=$lat&mlon=$lon#map=16/$lat/$lon';
+    final uri = 'geo:$lat,$lon;u=${position!.accuracy}';
     await showFutureLoadingDialog(
       context: context,
       future: () => widget.room.sendLocation(body, uri),

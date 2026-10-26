@@ -1,6 +1,9 @@
 # +++++++++ Flutter Defaults +++++++++
 # From https://github.com/flutter/flutter/blob/master/.gitignore
 
+# My
+docs/
+
 # Miscellaneous
 *.class
 *.lock
@@ -197,6 +200,12 @@ android/app/google-services.json
 # iOS
 ios/Runner.ipa
 ios/Runner/GoogleServices-Info.plist
+android/tjena-dev.keystore
+
+android/app/libs/*.aar
+android/app/libs/*.jar
+
+# Call-stack deployment secrets
 
 # livekit
 web/e2ee.worker.dart.js

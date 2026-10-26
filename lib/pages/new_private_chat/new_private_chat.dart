@@ -5,16 +5,21 @@
 
 import 'dart:async';
 
+import 'package:collection/collection.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/pages/new_private_chat/new_private_chat_view.dart';
 import 'package:fluffychat/pages/new_private_chat/qr_scanner_modal.dart';
+import 'package:fluffychat/pages/settings_bridges/bridge_definition.dart';
+import 'package:fluffychat/pages/new_private_chat/wa_bridge_chat_picker.dart';
 import 'package:fluffychat/utils/adaptive_bottom_sheet.dart';
 import 'package:fluffychat/utils/fluffy_share.dart';
+import 'package:fluffychat/utils/identity_server_lookup.dart';
 import 'package:fluffychat/utils/platform_infos.dart';
 import 'package:fluffychat/utils/url_launcher.dart';
 import 'package:fluffychat/widgets/matrix.dart';
 import 'package:flutter/services.dart';
+import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 
@@ -69,9 +74,8 @@ class NewPrivateChatController extends State<NewPrivateChat> {
   }
 
   Future<List<Profile>> _searchUser(String searchTerm) async {
-    final result = await Matrix.of(
-      context,
-    ).client.searchUserDirectory(searchTerm);
+    final client = Matrix.of(context).client;
+    final result = await client.searchUserDirectory(searchTerm);
     final profiles = result.results;
 
     if (searchTerm.isValidMatrixIdStrict() &&
@@ -80,7 +84,23 @@ class NewPrivateChatController extends State<NewPrivateChat> {
       profiles.add(Profile(userId: searchTerm));
     }
 
+    // If the term looks like an email, also query the identity server
+    if (_looksLikeEmail(searchTerm)) {
+      try {
+        final found = await lookupAddressesOnIS(client, [searchTerm], []);
+        final mxid = found[searchTerm.toLowerCase()];
+        if (mxid != null && !profiles.any((p) => p.userId == mxid)) {
+          profiles.insert(0, Profile(userId: mxid, displayName: searchTerm));
+        }
+      } catch (_) {}
+    }
+
     return profiles;
+  }
+
+  static bool _looksLikeEmail(String s) {
+    final at = s.indexOf('@');
+    return at > 0 && s.contains('.', at);
   }
 
   void inviteAction() => FluffyShare.shareInviteLink(context);
@@ -121,6 +141,79 @@ class NewPrivateChatController extends State<NewPrivateChat> {
 
   void openUserModal(Profile profile) =>
       UserDialog.show(context: context, profile: profile);
+
+  List<BridgeDef> availableBridges() {
+    final client = Matrix.of(context).client;
+    final domain = client.userID?.domain ?? '';
+    return kBridges.where((def) {
+      final botId = def.botUserId(domain);
+      return client.rooms.any(
+        (r) => r.isDirectChat && r.directChatMatrixID == botId,
+      );
+    }).toList();
+  }
+
+  /// WhatsApp via your own bridge: existing chats + contact search.
+  void openOwnBridgeChat(String bot) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) =>
+            WaBridgeChatPicker(client: Matrix.of(context).client, bot: bot),
+      ),
+    );
+  }
+
+  Future<void> openBridgeNewChat(BridgeDef def) async {
+    final phone = await _showPhoneDialog('New ${def.name} chat');
+    if (phone == null || phone.isEmpty || !mounted) return;
+
+    final client = Matrix.of(context).client;
+    final domain = client.userID?.domain ?? '';
+    final botId = def.botUserId(domain);
+
+    var dmRoom = client.rooms.firstWhereOrNull(
+      (r) => r.isDirectChat && r.directChatMatrixID == botId,
+    );
+    dmRoom ??= client.getRoomById(await client.startDirectChat(botId));
+
+    if (dmRoom == null || !mounted) return;
+    await dmRoom.sendTextEvent('${def.pmCommand} $phone');
+
+    if (!mounted) return;
+    context.go(
+      '/rooms/${dmRoom.id}',
+    ); // ignore: use_build_context_synchronously
+  }
+
+  Future<String?> _showPhoneDialog(String title) async {
+    final ctrl = TextEditingController();
+    return showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog.adaptive(
+        title: Text(title),
+        content: TextField(
+          controller: ctrl,
+          keyboardType: TextInputType.phone,
+          autofocus: true,
+          decoration: const InputDecoration(
+            hintText: '+1234567890',
+            labelText: 'Phone number with country code',
+          ),
+          onSubmitted: (v) => Navigator.of(ctx).pop(v.trim()),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(null),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(ctrl.text.trim()),
+            child: const Text('Start chat'),
+          ),
+        ],
+      ),
+    );
+  }
 
   @override
   void dispose() {

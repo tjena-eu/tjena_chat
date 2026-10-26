@@ -7,6 +7,7 @@ import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
 import 'package:fluffychat/config/setting_keys.dart';
 import 'package:fluffychat/config/themes.dart';
 import 'package:fluffychat/l10n/l10n.dart';
+import 'package:fluffychat/pages/settings_stories/settings_stories.dart';
 import 'package:fluffychat/utils/adaptive_bottom_sheet.dart';
 import 'package:fluffychat/utils/platform_infos.dart';
 import 'package:fluffychat/widgets/layouts/max_width_body.dart';
@@ -41,6 +42,25 @@ class SettingsChatView extends StatelessWidget {
                 setting: AppSettings.renderHtml,
               ),
               SettingsSwitchListTile.adaptive(
+                title: 'Show status list',
+                subtitle:
+                    'Show contacts’ status and presence at the top of your chats.',
+                setting: AppSettings.showPresences,
+              ),
+              ListTile(
+                leading: const Icon(Icons.auto_stories_outlined),
+                title: const Text('Stories'),
+                subtitle: const Text(
+                  'Choose who can see your stories and whose you receive.',
+                ),
+                trailing: const Icon(Icons.chevron_right_outlined),
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => const StoriesSettingsPage(),
+                  ),
+                ),
+              ),
+              SettingsSwitchListTile.adaptive(
                 title: L10n.of(context).hideRedactedMessages,
                 subtitle: L10n.of(context).hideRedactedMessagesBody,
                 setting: AppSettings.hideRedactedEvents,
@@ -50,6 +70,12 @@ class SettingsChatView extends StatelessWidget {
                 setting: AppSettings.hideRoomsInSpaces,
               ),
               SettingsSwitchListTile.adaptive(
+                title: 'Show message preview in spaces',
+                subtitle:
+                    'Show the last message below room names in space room lists.',
+                setting: AppSettings.spaceRoomPreview,
+              ),
+              SettingsSwitchListTile.adaptive(
                 title: L10n.of(context).hideInvalidOrUnknownMessageFormats,
                 setting: AppSettings.hideUnknownEvents,
               ),
@@ -57,6 +83,12 @@ class SettingsChatView extends StatelessWidget {
                 SettingsSwitchListTile.adaptive(
                   title: L10n.of(context).autoplayImages,
                   setting: AppSettings.autoplayImages,
+                ),
+              if (PlatformInfos.isMobile)
+                SettingsSwitchListTile.adaptive(
+                  title: L10n.of(context).autoSaveMedia,
+                  subtitle: L10n.of(context).autoSaveMediaDescription,
+                  setting: AppSettings.autoSaveMedia,
                 ),
               SettingsSwitchListTile.adaptive(
                 title: L10n.of(context).sendOnEnter,

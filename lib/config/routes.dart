@@ -8,6 +8,7 @@ import 'dart:async';
 import 'package:fluffychat/config/themes.dart';
 import 'package:fluffychat/pages/archive/archive.dart';
 import 'package:fluffychat/pages/bootstrap/bootstrap_page.dart';
+import 'package:fluffychat/pages/hidden_rooms/hidden_rooms_view.dart';
 import 'package:fluffychat/pages/chat/chat.dart';
 import 'package:fluffychat/pages/chat_access_settings/chat_access_settings_controller.dart';
 import 'package:fluffychat/pages/chat_details/chat_details.dart';
@@ -24,10 +25,16 @@ import 'package:fluffychat/pages/new_group/new_group.dart';
 import 'package:fluffychat/pages/new_private_chat/new_private_chat.dart';
 import 'package:fluffychat/pages/settings/settings.dart';
 import 'package:fluffychat/pages/settings_3pid/settings_3pid.dart';
+import 'package:fluffychat/pages/settings_bridges/bridge_detail_page.dart';
+import 'package:fluffychat/pages/settings_bridges/own_bridge_page.dart';
+import 'package:fluffychat/pages/settings_bridges/settings_bridges.dart';
 import 'package:fluffychat/pages/settings_chat/settings_chat.dart';
 import 'package:fluffychat/pages/settings_emotes/settings_emotes.dart';
 import 'package:fluffychat/pages/settings_homeserver/settings_homeserver.dart';
+import 'package:fluffychat/pages/settings_identity_server/settings_identity_server_page.dart';
 import 'package:fluffychat/pages/settings_ignore_list/settings_ignore_list.dart';
+import 'package:fluffychat/pages/settings_debug/settings_debug.dart';
+import 'package:fluffychat/pages/settings_local_backup/local_backup_page.dart';
 import 'package:fluffychat/pages/settings_notifications/settings_notifications.dart';
 import 'package:fluffychat/pages/settings_password/settings_password.dart';
 import 'package:fluffychat/pages/settings_security/settings_security.dart';
@@ -151,6 +158,12 @@ abstract class AppRoutes {
                   ),
           ),
           routes: [
+            GoRoute(
+              path: 'hidden',
+              pageBuilder: (context, state) =>
+                  defaultPageBuilder(context, state, const HiddenRoomsView()),
+              redirect: loggedOutRedirect,
+            ),
             GoRoute(
               path: 'archive',
               pageBuilder: (context, state) =>
@@ -328,6 +341,15 @@ abstract class AppRoutes {
                       redirect: loggedOutRedirect,
                     ),
                     GoRoute(
+                      path: 'identity-server',
+                      redirect: loggedOutRedirect,
+                      pageBuilder: (context, state) => defaultPageBuilder(
+                        context,
+                        state,
+                        const SettingsIdentityServerPage(),
+                      ),
+                    ),
+                    GoRoute(
                       path: 'security',
                       redirect: loggedOutRedirect,
                       pageBuilder: (context, state) => defaultPageBuilder(
@@ -371,6 +393,63 @@ abstract class AppRoutes {
                         ),
                       ],
                     ),
+                    GoRoute(
+                      path: 'local-backup',
+                      redirect: loggedOutRedirect,
+                      pageBuilder: (context, state) => defaultPageBuilder(
+                        context,
+                        state,
+                        const LocalBackupPage(),
+                      ),
+                    ),
+                    GoRoute(
+                      path: 'debug',
+                      redirect: loggedOutRedirect,
+                      pageBuilder: (context, state) => defaultPageBuilder(
+                        context,
+                        state,
+                        const SettingsDebug(),
+                      ),
+                    ),
+                    GoRoute(
+                      path: 'bridges',
+                      redirect: loggedOutRedirect,
+                      pageBuilder: (context, state) => defaultPageBuilder(
+                        context,
+                        state,
+                        const SettingsBridges(),
+                      ),
+                      routes: [
+                        GoRoute(
+                          path: 'own-whatsapp',
+                          redirect: loggedOutRedirect,
+                          pageBuilder: (context, state) => defaultPageBuilder(
+                            context,
+                            state,
+                            const OwnBridgePage(),
+                          ),
+                        ),
+                        GoRoute(
+                          path: ':bridgeid',
+                          redirect: loggedOutRedirect,
+                          pageBuilder: (context, state) {
+                            final entry = state.extra as BridgeEntry?;
+                            if (entry == null) {
+                              return defaultPageBuilder(
+                                context,
+                                state,
+                                const SettingsBridges(),
+                              );
+                            }
+                            return defaultPageBuilder(
+                              context,
+                              state,
+                              BridgeDetailPage(entry: entry),
+                            );
+                          },
+                        ),
+                      ],
+                    ),
                   ],
                   redirect: loggedOutRedirect,
                 ),
@@ -406,7 +485,14 @@ abstract class AppRoutes {
                   pageBuilder: (context, state) => defaultPageBuilder(
                     context,
                     state,
-                    ChatSearchPage(roomId: state.pathParameters['roomid']!),
+                    ChatSearchPage(
+                      roomId: state.pathParameters['roomid']!,
+                      initialTabIndex:
+                          int.tryParse(
+                            state.uri.queryParameters['tab'] ?? '',
+                          ) ??
+                          0,
+                    ),
                   ),
                   redirect: loggedOutRedirect,
                 ),

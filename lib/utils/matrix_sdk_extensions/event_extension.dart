@@ -4,6 +4,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import 'package:async/async.dart' as async;
+import 'package:fluffychat/config/setting_keys.dart';
+import 'package:fluffychat/utils/platform_infos.dart';
 import 'package:fluffychat/utils/size_string.dart';
 import 'package:fluffychat/widgets/future_loading_dialog.dart';
 import 'package:flutter/foundation.dart';
@@ -32,7 +34,51 @@ extension LocalizedBody on Event {
     final matrixFile = await _getFile(context);
     if (!context.mounted) return;
 
-    matrixFile.result?.save(context);
+    final file = matrixFile.result;
+    if (file == null) return;
+    final autoSave =
+        !kIsWeb &&
+        PlatformInfos.isMobile &&
+        AppSettings.autoSaveMedia.value &&
+        (file is MatrixImageFile || file is MatrixVideoFile);
+    if (autoSave) {
+      file.saveToDevice(context);
+    } else {
+      file.save(context);
+    }
+  }
+
+  Future<void> autoSaveToDevice(BuildContext context) async =>
+      autoSaveBackground();
+
+  /// Auto-save image/video to gallery without requiring a BuildContext.
+  Future<void> autoSaveBackground() async {
+    if (kIsWeb || !PlatformInfos.isMobile) return;
+    if (!AppSettings.autoSaveMedia.value) return;
+    if (messageType != MessageTypes.Image &&
+        messageType != MessageTypes.Video) {
+      return;
+    }
+
+    final savedKey = 'auto_saved_$eventId';
+    if (AppSettings.store.getBool(savedKey) == true) return;
+    await AppSettings.store.setBool(savedKey, true);
+
+    try {
+      final file = await downloadAndDecryptAttachment();
+      // Name the saved file "<chatType>_<full timestamp>.<ext>" so the gallery
+      // shows where it came from and when.
+      final fileName = MatrixFileExtension.galleryName(
+        'matrix',
+        mimeType: attachmentMimetype,
+        originalName: file.name,
+        video: messageType == MessageTypes.Video,
+      );
+      final saved = await file.saveToGallery(fileName: fileName);
+      if (!saved) await AppSettings.store.remove(savedKey);
+    } catch (_) {
+      await AppSettings.store.remove(savedKey);
+    }
   }
 
   Future<void> shareFile(BuildContext context) async {

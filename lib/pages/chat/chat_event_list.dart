@@ -15,6 +15,7 @@ import 'package:fluffychat/pages/chat/seen_by_row.dart';
 import 'package:fluffychat/pages/chat/typing_indicators.dart';
 import 'package:fluffychat/utils/account_config.dart';
 import 'package:fluffychat/utils/matrix_sdk_extensions/filtered_timeline_extension.dart';
+import 'package:fluffychat/utils/media_group.dart';
 import 'package:fluffychat/utils/platform_infos.dart';
 import 'package:fluffychat/widgets/avatar.dart';
 import 'package:fluffychat/widgets/mxc_image_viewer.dart';
@@ -103,6 +104,13 @@ class ChatEventList extends StatelessWidget {
     final events = timeline.events.filterByVisibleInGui(
       threadId: controller.activeThreadId,
     );
+
+    // Runs of consecutive same-sender images collapse into one grid bubble —
+    // skipped while selecting messages so every image stays individually
+    // selectable.
+    final mediaGroups = controller.selectedEvents.isEmpty
+        ? MediaGroup.build(events, timeline)
+        : MediaGroup.empty;
 
     // create a map of eventId --> index to greatly improve performance of
     // ListView's findChildIndexCallback
@@ -196,6 +204,13 @@ class ChatEventList extends StatelessWidget {
 
               // The message at this index:
               final event = events[i];
+
+              // Non-anchor member of a media group: its content is already
+              // shown inside the anchor's grid bubble, render nothing here.
+              if (mediaGroups.hiddenEventIds.contains(event.eventId)) {
+                return const SizedBox.shrink();
+              }
+
               final animateIn =
                   (event.transactionId ?? event.eventId) ==
                   controller.animateInEventId;
@@ -281,6 +296,7 @@ class ChatEventList extends StatelessWidget {
                           controller.readMarkerEventId == event.eventId,
                       nextEvent: nextEvent,
                       previousEvent: previousEvent,
+                      mediaGroup: mediaGroups.groupsByAnchor[event.eventId],
                       wallpaperMode: hasWallpaper,
                       scrollController: controller.scrollController,
                       colors: colors,
