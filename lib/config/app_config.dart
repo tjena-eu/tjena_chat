@@ -6,7 +6,7 @@
 import 'dart:ui';
 
 abstract class AppConfig {
-  static const Color primaryColor = Color(0xFF261386);
+  static const Color primaryColor = Color(0xFF295d9f);
 
   static const Color chatColor = primaryColor;
   static const double messageFontSize = 16.0;
@@ -43,7 +43,7 @@ abstract class AppConfig {
   static const String latestReleaseApiUrl =
       'https://api.github.com/repos/tjena-eu/tjena_chat/releases/latest';
   static const String helpUrl =
-      'https://ko-fi.com/post/How-can-I-support-FluffyChat-J2G325WE6I';
+      'https://tjena.eu/support';
 
   static const Set<String> defaultReactions = {'👍', '❤️', '😂', '😮', '😢'};
 

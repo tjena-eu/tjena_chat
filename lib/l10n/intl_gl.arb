@@ -814,7 +814,7 @@
         "type": "String",
         "placeholders": {}
     },
-    "inviteText": "{username} convidoute a FluffyChat.\n1. Visita fluffychat.im e instala a app\n2. Crea unha conta ou Accede\n3. Abre a ligazón do convite: \n {link}",
+    "inviteText": "{username} convidoute a tjena.\n1. Visita tjena.eu e instala a app\n2. Crea unha conta ou Accede\n3. Abre a ligazón do convite: \n {link}",
     "@inviteText": {
         "type": "String",
         "placeholders": {
@@ -971,7 +971,7 @@
         "type": "String",
         "placeholders": {}
     },
-    "newMessageInFluffyChat": "💬 Nova mensaxe en FluffyChat",
+    "newMessageInFluffyChat": "💬 Nova mensaxe en tjena",
     "@newMessageInFluffyChat": {
         "type": "String",
         "placeholders": {}
@@ -2471,7 +2471,7 @@
     "advancedConfigurations": "Configuracións avanzadas",
     "signIn": "Acceder",
     "createNewAccount": "Crear nova conta",
-    "signUpGreeting": "FluffyChat é descentralizada! Elixe un servidor para crear a conta e xa podes utilizar a app!",
+    "signUpGreeting": "tjena é descentralizada! Elixe un servidor para crear a conta e xa podes utilizar a app!",
     "signInGreeting": "Xa tes unha conta en Matrix? Benvida! Selecciona o teu servidor de orixe e accede.",
     "theProcessWasCanceled": "Desbotouse o proceso.",
     "join": "Unirse",
@@ -2491,7 +2491,7 @@
     },
     "createNewChat": "Crear nova conversa",
     "reset": "Restablecer",
-    "supportFluffyChat": "Apoia a FluffyChat",
+    "supportFluffyChat": "Apoia a tjena",
     "support": "Axuda",
     "setLowPriority": "Establecer prioridade baixa",
     "unsetLowPriority": "Non establecer prioridade baixa",
@@ -2508,7 +2508,7 @@
     "showMore": "Mostrar máis",
     "showLess": "Mostrar menos",
     "hideRoomsInSpaces": "Ocultar salas que están nun espazo",
-    "possibleByYou": "Esta versión foi posible grazas ao teu apoio. FluffyChat segue sendo libre, de código aberto e dirixida pola comunidade.",
+    "possibleByYou": "Esta versión foi posible grazas ao teu apoio. tjena segue sendo libre, de código aberto e dirixida pola comunidade.",
     "showThumbnailsInTimeline": "Mostrar miniaturas das imaxes e vídeos",
     "appSubtitle": "Comunicación Segura en [matrix]",
     "appDescription": "Comunícate de xeito cifrado na rede descentralizada [matrix], dunha forma doada e accesible para todas as persoas.",
@@ -2592,7 +2592,7 @@
         "type": "String",
         "placeholders": {}
     },
-    "newPassphraseDescription": "FluffyChat utiliza cifraxe de extremo a extremo. Para non perder as mensaxes elixe unha frase de paso forte para protexer a túa identidade criptográfica e a túa copia de apoio de mensaxes cifradas.",
+    "newPassphraseDescription": "tjena utiliza cifraxe de extremo a extremo. Para non perder as mensaxes elixe unha frase de paso forte para protexer a túa identidade criptográfica e a túa copia de apoio de mensaxes cifradas.",
     "@newPassphraseDescription": {
         "type": "String",
         "placeholders": {}

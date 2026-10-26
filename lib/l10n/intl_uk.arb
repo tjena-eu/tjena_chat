@@ -534,7 +534,7 @@
         "type": "String",
         "placeholders": {}
     },
-    "inviteText": "{username} запрошує вас у FluffyChat. \n1. Перейдіть на fluffychat.im й установіть застосунок \n2. Зареєструйтесь або ввійдіть \n3. Відкрийте запрошувальне посилання:\n {link}",
+    "inviteText": "{username} запрошує вас у tjena. \n1. Перейдіть на tjena.eu й установіть застосунок \n2. Зареєструйтесь або ввійдіть \n3. Відкрийте запрошувальне посилання:\n {link}",
     "@inviteText": {
         "type": "String",
         "placeholders": {
@@ -661,7 +661,7 @@
         "type": "String",
         "placeholders": {}
     },
-    "newMessageInFluffyChat": "💬 Нове повідомлення у FluffyChat",
+    "newMessageInFluffyChat": "💬 Нове повідомлення у tjena",
     "@newMessageInFluffyChat": {
         "type": "String",
         "placeholders": {}
@@ -2471,7 +2471,7 @@
     "baseUrl": "Основний URL",
     "signIn": "Увійти",
     "createNewAccount": "Створити новий обліковий запис",
-    "signUpGreeting": "FluffyChat децентралізований! Виберіть сервер, на якому ви хочете створити свій обліковий запис, і почнімо!",
+    "signUpGreeting": "tjena децентралізований! Виберіть сервер, на якому ви хочете створити свій обліковий запис, і почнімо!",
     "signInGreeting": "Ви вже маєте обліковий запис у Matrix? Ласкаво просимо! Виберіть свій домашній сервер і ввійдіть.",
     "theProcessWasCanceled": "Процес скасовано.",
     "join": "Приєднатись",
@@ -2491,7 +2491,7 @@
     },
     "createNewChat": "Створити новий чат",
     "reset": "Скинути",
-    "supportFluffyChat": "Підтримати FluffyChat",
+    "supportFluffyChat": "Підтримати tjena",
     "support": "Підтримка",
     "setLowPriority": "Встановити низький пріоритет",
     "unsetLowPriority": "Скинути низький пріоритет",
@@ -2506,7 +2506,7 @@
         "placeholders": {}
     },
     "hideRoomsInSpaces": "Приховати чати, що належать просторам",
-    "possibleByYou": "Цей реліз став можливим лише завдяки вашій підтримці. FluffyChat залишається безкоштовним, з відкритим джерельним кодом й цілком підтримуваний спільнотою.",
+    "possibleByYou": "Цей реліз став можливим лише завдяки вашій підтримці. tjena залишається безкоштовним, з відкритим джерельним кодом й цілком підтримуваний спільнотою.",
     "showThumbnailsInTimeline": "Показувати мініатюри зображень та відео",
     "appSubtitle": "Безпечні чати [matrix]",
     "appDescription": "Спілкуйтеся зашифровано через децентралізовану мережу [matrix] простим та доступним кожному способом.",

@@ -589,7 +589,11 @@ class WaCallService {
     try {
       final t = await client.getTurnServer();
       return [
-        {'urls': t.uris, 'username': t.username, 'credential': t.password},
+        {
+          'urls': t.uris.map((u) => u.toString()).toList(),
+          'username': t.username,
+          'credential': t.password,
+        },
       ];
     } catch (e) {
       Logs().w('[WaCall] no TURN server: $e');

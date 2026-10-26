@@ -333,3 +333,7 @@ macos/FluffyChat.app/Contents/Resources/wakelock_plus_wakelock_plus.bundle/Conte
 macos/FluffyChat.app/Contents/_CodeSignature/CodeResources
 macos/FluffyChat.app.dSYM.zip
 macos/FluffyChat.pkg
+
+# Local secrets and prebuilt native libs (never commit)
+lk-jwt.env
+**/jniLibs/**/*.so

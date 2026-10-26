@@ -20,7 +20,7 @@ abstract class UpdateNotifier {
   static const String versionStoreKey = 'last_known_version';
   static const String dismissedUpdateStoreKey = 'dismissed_update_version';
   static const String _windowsInstallerAssetName =
-      'fluffychat-windows-x64-setup.exe';
+      'tjena-windows-x64-setup.exe';
 
   /// Checks GitHub for a newer release with a Windows installer and
   /// displays a banner with a download link. Only for Windows, as all other
@@ -101,11 +101,14 @@ abstract class UpdateNotifier {
           barrierDismissible: true,
           context: context,
           builder: (context) => AlertDialog(
-            title: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 256),
+            title: Center(
               child: ClipRRect(
-                borderRadius: BorderRadius.circular(AppConfig.borderRadius / 2),
-                child: Image.asset('assets/logo/mini/banner.png'),
+                borderRadius: BorderRadius.circular(AppConfig.borderRadius),
+                child: Image.asset(
+                  'assets/logo/mini/logo_mini.png',
+                  width: 96,
+                  height: 96,
+                ),
               ),
             ),
             content: ConstrainedBox(

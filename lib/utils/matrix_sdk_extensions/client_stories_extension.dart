@@ -176,7 +176,7 @@ extension ClientStoriesExtension on Client {
       powerLevelContentOverride: {'events_default': 100},
       name: 'Stories from ${userID!.localpart}',
       topic:
-          'Story sharing room (MSC3588). Best viewed in FluffyChat / tjena!chat.',
+          'Story sharing room (MSC3588). Best viewed in tjena!chat.',
       initialState: [
         StateEvent(
           type: EventTypes.Encryption,

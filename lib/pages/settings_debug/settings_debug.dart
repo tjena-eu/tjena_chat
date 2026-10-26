@@ -3,9 +3,11 @@
 
 import 'dart:async';
 
+import 'package:fluffychat/config/setting_keys.dart';
+import 'package:fluffychat/utils/matrix_live_kit_calls/matrix_live_kit_call.dart';
 import 'package:fluffychat/widgets/matrix.dart';
-import 'package:material_ui/material_ui.dart';
 import 'package:go_router/go_router.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 
 class SettingsDebug extends StatefulWidget {
@@ -15,8 +17,131 @@ class SettingsDebug extends StatefulWidget {
   State<SettingsDebug> createState() => _SettingsDebugState();
 }
 
+class _CallInfo {
+  final List<String> liveKitUrls;
+  final Map<String, bool> reachable;
+  final String? error;
+  const _CallInfo(this.liveKitUrls, this.reachable, [this.error]);
+}
+
 class _SettingsDebugState extends State<SettingsDebug> {
   bool _busy = false;
+  Future<_CallInfo>? _callInfo;
+
+  @override
+  void initState() {
+    super.initState();
+    _callInfo = _loadCallInfo();
+  }
+
+  /// Which call system the chat call button uses. [refresh] re-reads the
+  /// server's .well-known now and updates the app's cached copy.
+  Future<_CallInfo> _loadCallInfo({bool refresh = false}) async {
+    final client = Matrix.of(context).client;
+    try {
+      final urls = refresh
+          ? await client.getLiveKitServiceUrls(
+              wellKnownCacheLifetime: const Duration(seconds: 1),
+            )
+          : await client.getLiveKitServiceUrls();
+      final reachable = <String, bool>{};
+      for (final url in urls) {
+        try {
+          final resp = await client.httpClient
+              .get(Uri.parse('${url.replaceAll(RegExp(r'/+$'), '')}/healthz'))
+              .timeout(const Duration(seconds: 5));
+          reachable[url] = resp.statusCode == 200;
+        } catch (_) {
+          reachable[url] = false;
+        }
+      }
+      return _CallInfo(urls, reachable);
+    } catch (e) {
+      return _CallInfo(const [], const {}, e.toString());
+    }
+  }
+
+  Widget _callsCard(ThemeData theme) => FutureBuilder<_CallInfo>(
+    future: _callInfo,
+    builder: (context, snap) {
+      final info = snap.data;
+      final legacyOn = AppSettings.experimentalVoip.value;
+      final String mode;
+      final IconData icon;
+      if (info == null) {
+        mode = 'Checking…';
+        icon = Icons.hourglass_empty;
+      } else if (info.liveKitUrls.isNotEmpty) {
+        mode = 'LiveKit (MatrixRTC)';
+        icon = Icons.groups_outlined;
+      } else if (legacyOn) {
+        mode = 'Old 1:1 calls';
+        icon = Icons.call_outlined;
+      } else {
+        mode = 'Off (no LiveKit, old calls disabled)';
+        icon = Icons.phone_disabled_outlined;
+      }
+      final lkText = info == null
+          ? '…'
+          : info.error != null
+          ? 'Check failed: ${info.error}'
+          : info.liveKitUrls.isEmpty
+          ? 'Not advertised by the server'
+          : info.liveKitUrls
+                .map(
+                  (u) =>
+                      '$u (${info.reachable[u] == true ? 'reachable' : 'NOT reachable'})',
+                )
+                .join('\n');
+      return Card(
+        margin: EdgeInsets.zero,
+        child: Column(
+          children: [
+            ListTile(
+              leading: Icon(icon),
+              title: Text('Call button uses: $mode'),
+              subtitle: const Text(
+                'Matrix chats. Decided by the server (.well-known), '
+                're-read every hour.',
+              ),
+            ),
+            const Divider(height: 1),
+            ListTile(
+              leading: const Icon(Icons.dns_outlined),
+              title: const Text('LiveKit service'),
+              subtitle: Text(lkText),
+            ),
+            const Divider(height: 1),
+            ListTile(
+              leading: const Icon(Icons.call_received_outlined),
+              title: Text('Old 1:1 calls: ${legacyOn ? 'on' : 'off'}'),
+              subtitle: const Text(
+                'Incoming old-style calls from older tjena versions '
+                'still ring.',
+              ),
+            ),
+            const Divider(height: 1),
+            const ListTile(
+              leading: Icon(Icons.chat_outlined),
+              title: Text('WhatsApp calls: through your own bridge'),
+              subtitle: Text('Not affected by the LiveKit switch.'),
+            ),
+            const Divider(height: 1),
+            ListTile(
+              leading: const Icon(Icons.refresh),
+              title: const Text('Check again now'),
+              subtitle: const Text(
+                'Re-reads the server setting (applies to chats opened '
+                'afterwards).',
+              ),
+              onTap: () =>
+                  setState(() => _callInfo = _loadCallInfo(refresh: true)),
+            ),
+          ],
+        ),
+      );
+    },
+  );
 
   Future<void> _deleteRooms(List<Room> rooms) async {
     if (rooms.isEmpty) return;
@@ -121,6 +246,10 @@ class _SettingsDebugState extends State<SettingsDebug> {
           : ListView(
               padding: const EdgeInsets.all(16),
               children: [
+                _sectionLabel(theme, 'CALLS'),
+                const SizedBox(height: 8),
+                _callsCard(theme),
+                const SizedBox(height: 24),
                 _sectionLabel(theme, 'BULK DELETE'),
                 const SizedBox(height: 8),
                 Card(

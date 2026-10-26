@@ -14,8 +14,12 @@ import 'package:fluffychat/utils/matrix_live_kit_calls/matrix_live_kit_call_memb
 import 'package:matrix/matrix.dart' hide Result;
 
 extension MatrixRtcClientExtension on Client {
-  Future<List<String>> getLiveKitServiceUrls() async {
-    final wellKnown = await getWellknown();
+  // tjena: LiveKit is switched on/off via .well-known, so re-read it hourly
+  // instead of the SDK's 3-day cache.
+  Future<List<String>> getLiveKitServiceUrls({
+    Duration wellKnownCacheLifetime = const Duration(hours: 1),
+  }) async {
+    final wellKnown = await getWellknown(cacheLifetime: wellKnownCacheLifetime);
 
     final rtcTransportsResult = await Result.capture(
       request(

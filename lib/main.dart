@@ -27,6 +27,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'utils/matrix_sdk_extensions/event_extension.dart';
 import 'utils/legacy_bridge_cleanup.dart';
+import 'utils/webrtc_init.dart';
 import 'package:universal_html/universal_html.dart' as web;
 
 import 'config/setting_keys.dart';
@@ -81,6 +82,8 @@ void main(List<String> args) => runZonedGuarded(() async {
   // Per-chat media auto-download overrides, read synchronously on every
   // timeline bubble build — must be in memory before the first frame.
   await MediaAutoDownload.init();
+  // Before any call: software VP8 encoder on Android (see webrtc_init.dart).
+  unawaited(initWebRtc());
   Logs().i('Welcome to ${AppSettings.applicationName.value} <3');
 
   kEnableMatrixSdkBenchmarks = AppSettings.benchmarksInLogs.value;
