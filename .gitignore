@@ -337,3 +337,9 @@ macos/FluffyChat.pkg
 # Local secrets and prebuilt native libs (never commit)
 lk-jwt.env
 **/jniLibs/**/*.so
+
+# fastlane / bundler
+android/.bundle/
+android/vendor/
+android/fastlane/report.xml
+android/fastlane/test_output/

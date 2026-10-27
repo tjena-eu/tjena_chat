@@ -79,7 +79,7 @@ class EventVideoPlayer extends StatelessWidget {
         : Duration(milliseconds: durationInt);
 
     final Widget preview;
-    if (!MediaAutoDownload.enabledFor(event.room.id)) {
+    if (!MediaAutoDownload.enabledFor(event.room.id, video: true)) {
       preview = BlurHash(
         blurhash: blurHash,
         width: width,

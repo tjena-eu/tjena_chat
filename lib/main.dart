@@ -191,7 +191,12 @@ void _subscribeAutoSave(Client client) {
       // is opened. So only save now if this chat auto-downloads anyway;
       // otherwise the save happens on first display (see MxcImage), once the
       // bytes exist locally.
-      if (!MediaAutoDownload.enabledFor(roomId)) return;
+      if (!MediaAutoDownload.enabledFor(
+        roomId,
+        video: event.messageType == MessageTypes.Video,
+      )) {
+        return;
+      }
       event.autoSaveBackground();
     } catch (_) {}
   });

@@ -37,10 +37,13 @@ class ChatListViewBody extends StatelessWidget {
     final activeSpace = controller.activeSpaceId;
     if (activeSpace != null) {
       return SpaceView(
-        key: ValueKey(activeSpace),
+        key: controller.spaceViewKey,
         spaceId: activeSpace,
         onBack: controller.clearActiveSpace,
         onChatTab: controller.onChatTap,
+        onChatLongPress: controller.toggleSelection,
+        selectedRoomIds: controller.selectedRoomIds,
+        onVisibleRooms: (ids) => controller.selectableRoomIds = ids,
         activeChat: controller.activeChat,
       );
     }
@@ -77,6 +80,12 @@ class ChatListViewBody extends StatelessWidget {
           if (AppSettings.hideRoomsInSpaces.value) return false;
           return !SpaceChildVisibility.instance.isHiddenOutside(space.id);
         }).toList();
+        controller.selectableRoomIds = [
+          for (final r in rooms)
+            if (filter.isEmpty ||
+                r.getLocalizedDisplayname().toLowerCase().contains(filter))
+              r.id,
+        ];
 
         return CustomScrollView(
           controller: controller.scrollController,
@@ -256,8 +265,10 @@ class ChatListViewBody extends StatelessWidget {
                       key: Key('chat_list_item_${room.id}'),
                       filter: filter,
                       onTap: () => controller.onChatTap(room),
-                      onLongPress: (context) =>
+                      onLongPress: (_) => controller.toggleSelection(room),
+                      onMenu: (context) =>
                           controller.chatContextAction(room, context, space),
+                      selected: controller.selectedRoomIds.contains(room.id),
                       activeChat: controller.activeChat == room.id,
                     );
                   },

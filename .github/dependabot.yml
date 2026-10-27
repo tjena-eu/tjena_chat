@@ -9,8 +9,6 @@ updates:
     commit-message:
       prefix: "build: "
       include: "scope"
-    assignees:
-      - "krille-chan"
     open-pull-requests-limit: 5
   - package-ecosystem: "github-actions"
     directory: "/"

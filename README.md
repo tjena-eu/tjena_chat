@@ -24,10 +24,10 @@ On top of the full FluffyChat feature set (E2E-encrypted chats, spaces, voice me
 push, group moderation, Material You, etc.), tjena!chat adds:
 
 - **🏠 Personal WhatsApp bridge** — an unmodified mautrix-whatsapp running in the tjena
-  Bridge app on a phone at home (`personal-bridge/`).
+  Bridge app on a phone at home ([tjena_bridge](https://github.com/tjena-eu/tjena_bridge), its own repo).
 - **📞 WhatsApp calls** — call WhatsApp contacts from tjena!chat and answer their calls,
   through the personal bridge (1:1 voice and video, one calls device per WhatsApp account;
-  see `personal-bridge/wacall/`).
+  see `wacall/` in tjena_bridge).
 - **📞 Matrix calls** — MatrixRTC (LiveKit) calls from FluffyChat when the server
   advertises a LiveKit service, with the old 1:1 calls kept as fallback (`matrixrtc/`).
 - **📍 Live location sharing**, **📸 stories**, **💾 auto-save received media**, and various
@@ -47,8 +47,21 @@ push, group moderation, Material You, etc.), tjena!chat adds:
 | Path | What it is |
 |---|---|
 | `lib/`, `android/`, `ios/`, `linux/`, `macos/`, `windows/`, `web/` | The Flutter app (FluffyChat fork) |
-| `personal-bridge/` | Personal WhatsApp bridge: gateway (server), relay, calls daemon and the Bridge app |
 | `patches/` | Local source patches applied during the build |
+
+---
+
+## Install & updates (Android)
+
+- **Obtainium (automatic updates):** add `https://github.com/tjena-eu/tjena_chat` in
+  [Obtainium](https://github.com/ImranR98/Obtainium), or open
+  `obtainium://add/https://github.com/tjena-eu/tjena_chat` on the phone.
+- **APK:** [latest release](https://github.com/tjena-eu/tjena_chat/releases/latest) ·
+  website: <https://tjena.eu/download/>
+- Signing certificate SHA-256:
+  `A9:4B:EA:04:5D:79:00:38:94:8B:9C:57:B3:39:AE:E5:79:D9:9B:0E:0C:08:FF:44:06:DC:EB:BC:A2:1F:44:46`
+
+Releases are published with fastlane: see [android/fastlane/README.md](android/fastlane/README.md).
 
 ---
 
@@ -111,7 +124,7 @@ flutter build web --release
 - **WhatsApp history** is copied by your own bridge when you link an account (settings in
   the tjena Bridge app).
 - **WhatsApp calls are 1:1** (voice and video) and need the personal bridge with calls set
-  up in the Bridge app (`docs/personal-bridge/`).
+  up in the Bridge app (docs in [tjena_bridge](https://github.com/tjena-eu/tjena_bridge)).
 - **Matrix group calls** need a LiveKit service; see `matrixrtc/README.md`. Without it the
   app uses the old 1:1 calls.
 - **Your WhatsApp account is never modified** by the bridge beyond what a normal

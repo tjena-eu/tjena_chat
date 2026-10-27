@@ -489,22 +489,40 @@ class ChatController extends State<ChatPageWithRoom>
   /// Saver is restricting us) — then each image waits for a tap instead.
   Future<void> _onChatOpenedMedia() async {
     if (!mounted) return;
-    if (!MediaAutoDownload.enabledFor(room.id)) return;
-
-    // Matrix: the SDK downloads lazily as bubbles build, so opening the chat
-    // already pulls what is on screen. Auto-save is the part that no longer
-    // happens on arrival, so run it here for the recent attachments. It is
-    // de-duplicated per event id, so re-opening a chat costs nothing.
-    if (!AppSettings.autoSaveMedia.value) return;
+    final photos = MediaAutoDownload.enabledFor(room.id);
+    final videos = MediaAutoDownload.enabledFor(room.id, video: true);
+    if (!photos && !videos) return;
     final events = timeline?.events;
     if (events == null) return;
+
+    // Photos: the bubbles load them as they build. Videos only show a preview,
+    // so fetch the recent ones now and tapping plays at once (the SDK keeps
+    // files up to its cache limit; bigger ones would be fetched twice).
+    // Auto-save no longer happens on arrival, so it runs here too; it is
+    // de-duplicated per event id, so re-opening a chat costs nothing.
+    final maxCached = room.client.database.maxFileSize;
+    final prefetch = <Event>[];
     for (final event in events.take(_autoSaveOnOpenLimit)) {
-      if (event.messageType != MessageTypes.Image &&
-          event.messageType != MessageTypes.Video) {
-        continue;
+      final isVideo = event.messageType == MessageTypes.Video;
+      if (!isVideo && event.messageType != MessageTypes.Image) continue;
+      if (!(isVideo ? videos : photos)) continue;
+      if (AppSettings.autoSaveMedia.value) {
+        // ignore: unawaited_futures
+        event.autoSaveBackground();
+      } else if (isVideo) {
+        final size = event.infoMap.tryGet<int>('size');
+        if (size != null && size <= maxCached) prefetch.add(event);
       }
-      // ignore: unawaited_futures
-      event.autoSaveBackground();
+    }
+    // One at a time, newest first, so a chat full of videos doesn't start
+    // them all at once.
+    for (final event in prefetch) {
+      if (!mounted) return;
+      try {
+        await event.downloadAndDecryptAttachment();
+      } catch (e) {
+        Logs().d('[MediaAutoDownload] video prefetch failed: $e');
+      }
     }
   }
 

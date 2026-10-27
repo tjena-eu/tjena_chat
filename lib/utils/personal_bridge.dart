@@ -408,12 +408,59 @@ class PersonalBridgeMonitor {
 
   PersonalBridgeMonitor._(this.client);
 
+  final _joining = <String>{};
+  bool _acceptRunning = false;
+
+  /// Linking WhatsApp makes the bridge invite you to every chat (also with
+  /// double puppeting, where invites can arrive before the bridge has the
+  /// puppet token). Invites from the user's own WhatsApp bridges (server
+  /// bridge and own bridge, bot or WhatsApp contacts) are accepted here.
+  Future<void> _acceptBridgeInvites() async {
+    if (_acceptRunning) return;
+    _acceptRunning = true;
+    try {
+      while (true) {
+        final cfg = WhatsAppBridgeConfig.of(client);
+        final bots = [
+          WhatsAppBridgeConfig.serverBot(client),
+          if (cfg.ownBot != null) cfg.ownBot!,
+        ];
+        final next = client.rooms.firstWhereOrNull((r) {
+          if (r.membership != Membership.invite || _joining.contains(r.id)) {
+            return false;
+          }
+          final inviter = r
+              .getState(EventTypes.RoomMember, client.userID!)
+              ?.senderId;
+          return bots.any((b) => BridgeCleanup.isFromBridge(inviter, b));
+        });
+        if (next == null) break;
+        _joining.add(next.id);
+        try {
+          await next.join();
+          Logs().i('[PersonalBridge] accepted bridge invite ${next.id}');
+        } catch (e) {
+          Logs().w('[PersonalBridge] could not accept ${next.id}', e);
+        }
+        // Many chats arrive at once after linking: don't hit rate limits.
+        await Future.delayed(const Duration(milliseconds: 300));
+      }
+    } finally {
+      _acceptRunning = false;
+    }
+  }
+
   static PersonalBridgeMonitor start(Client client) {
     if (_instance?.client == client) return _instance!;
     _instance?._timer?.cancel();
     _instance?._syncSub?.cancel();
     final m = PersonalBridgeMonitor._(client);
-    m._syncSub = client.onSync.stream.listen(m._forgetDeletedPortals);
+    m._syncSub = client.onSync.stream.listen((sync) {
+      m._forgetDeletedPortals(sync);
+      if (sync.rooms?.invite?.isNotEmpty ?? false) m._acceptBridgeInvites();
+    });
+    // Invites that arrived while the app was closed.
+    client.roomsLoading?.then((_) => m._acceptBridgeInvites());
     m._timer = Timer.periodic(const Duration(minutes: 5), (_) => m.check());
     Future.delayed(const Duration(seconds: 30), m.check);
     _instance = m;
@@ -474,6 +521,100 @@ class PersonalBridgeMonitor {
         ),
         iOS: DarwinNotificationDetails(),
       ),
+    );
+  }
+}
+
+/// Removes a WhatsApp bridge from the account after it broke off badly
+/// (e.g. the bridge phone was reset): logs out what still answers, removes
+/// the own bridge from the tjena server, and leaves + forgets its chats,
+/// spaces, invites and the bot chat. Every step is best effort.
+class BridgeCleanup {
+  /// Ghost users of a bridge are `X_…` for the bot `Xbot`.
+  static String? _ghostPrefix(String bot) {
+    final local = bot.startsWith('@') ? bot.substring(1).split(':').first : '';
+    if (!local.endsWith('bot') || local.length <= 3) return null;
+    return '${local.substring(0, local.length - 3)}_';
+  }
+
+  static bool isFromBridge(String? userId, String bot) {
+    if (userId == null) return false;
+    if (userId == bot) return true;
+    final prefix = _ghostPrefix(bot);
+    if (prefix == null) return false;
+    return userId.startsWith('@$prefix') &&
+        userId.split(':').skip(1).join(':') == bot.split(':').skip(1).join(':');
+  }
+
+  /// Chats, spaces and invites of the bridge with the bot [bot].
+  static List<Room> roomsOf(Client c, String bot) => c.rooms.where((r) {
+    if (r.membership == Membership.leave) return false;
+    if (RoomBridgeInfo.of(r)?.bridgeBot == bot) return true;
+    if (r.directChatMatrixID == bot) return true;
+    if (isFromBridge(r.getState(EventTypes.RoomCreate)?.senderId, bot)) {
+      return true;
+    }
+    if (r.membership == Membership.invite) {
+      final me = r.getState(EventTypes.RoomMember, c.userID!);
+      if (isFromBridge(me?.senderId, bot)) return true;
+    }
+    return false;
+  }).toList();
+
+  /// Runs the cleanup. [own]: the bridge is the user's own bridge (also
+  /// removed on the tjena server and switched back to the server bridge).
+  static Future<void> run(
+    Client c, {
+    required String bot,
+    required bool own,
+    bool logout = true,
+    required void Function(String line) log,
+  }) async {
+    if (logout) {
+      log('Logging WhatsApp out of $bot…');
+      try {
+        final n = await BridgeBotChat.logoutAll(
+          c,
+          bot,
+        ).timeout(const Duration(seconds: 60));
+        log(n == 0 ? 'No login answered (bridge offline?).' : 'Logged out $n.');
+      } catch (e) {
+        log('Logout skipped: $e');
+      }
+    }
+    if (own) {
+      final cfg = WhatsAppBridgeConfig.of(c);
+      log('Removing your own bridge from the tjena server…');
+      try {
+        await PersonalBridgeApi.revoke(c, cfg.gateway);
+        log('Removed on the server.');
+      } catch (e) {
+        log('Server removal failed: $e');
+      }
+      try {
+        await cfg.copyWith(mode: 'server', clearOwn: true).save(c);
+        log('Switched back to the tjena server bridge.');
+      } catch (e) {
+        log('Could not reset the bridge setting: $e');
+      }
+    }
+    final rooms = roomsOf(c, bot);
+    log('Removing ${rooms.length} chats, spaces and invites…');
+    var failed = 0;
+    for (final r in rooms) {
+      try {
+        if (r.membership != Membership.leave) await r.leave();
+      } catch (_) {}
+      try {
+        await r.forget();
+      } catch (_) {
+        failed++;
+      }
+    }
+    log(
+      failed == 0
+          ? 'Done.'
+          : 'Done; $failed could not be forgotten (they stay in the archive).',
     );
   }
 }

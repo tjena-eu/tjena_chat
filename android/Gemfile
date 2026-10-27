@@ -1,4 +1,6 @@
 source "https://rubygems.org"
 
-gem "fastlane"
+# 2.225 still installs on Ruby 3.0 (newer fastlane needs newer Ruby).
+# Native gems need the Ruby headers: sudo apt install ruby-dev
+gem "fastlane", "~> 2.225.0"
 gem "multi_json"

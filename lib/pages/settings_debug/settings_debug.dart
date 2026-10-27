@@ -5,6 +5,7 @@ import 'dart:async';
 
 import 'package:fluffychat/config/setting_keys.dart';
 import 'package:fluffychat/utils/matrix_live_kit_calls/matrix_live_kit_call.dart';
+import 'package:fluffychat/utils/personal_bridge.dart';
 import 'package:fluffychat/widgets/matrix.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
@@ -26,6 +27,7 @@ class _CallInfo {
 
 class _SettingsDebugState extends State<SettingsDebug> {
   bool _busy = false;
+  List<String>? _bridgeLog;
   Future<_CallInfo>? _callInfo;
 
   @override
@@ -155,7 +157,8 @@ class _SettingsDebugState extends State<SettingsDebug> {
 
   Future<void> _deleteOne(Client client, Room room) async {
     try {
-      if (room.membership == Membership.join) await room.leave();
+      // Leaving an invite declines it.
+      if (room.membership != Membership.leave) await room.leave();
     } catch (_) {}
     try {
       await room.forget();
@@ -187,6 +190,156 @@ class _SettingsDebugState extends State<SettingsDebug> {
     );
     if (!confirmed) return;
     await _deleteRooms(groups);
+  }
+
+  Future<void> _deleteEverything() async {
+    final client = Matrix.of(context).client;
+    final all = client.rooms
+        .where((r) => r.membership != Membership.leave)
+        .toList();
+    final invites = all.where((r) => r.membership == Membership.invite).length;
+    final confirmed = await _confirm(
+      'Delete everything (${all.length})?',
+      'Leaves and forgets every chat, group and space, and declines '
+          '$invites invites. Bridged chats (WhatsApp) come back when new '
+          'messages arrive while the bridge is still linked.',
+    );
+    if (!confirmed) return;
+    // Rooms before spaces, so space children aren't re-listed in between.
+    all.sort((a, b) => (a.isSpace ? 1 : 0) - (b.isSpace ? 1 : 0));
+    await _deleteRooms(all);
+  }
+
+  Future<void> _declineInvites() async {
+    final client = Matrix.of(context).client;
+    final invites = client.rooms
+        .where((r) => r.membership == Membership.invite)
+        .toList();
+    if (invites.isEmpty) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('No open invites.')));
+      return;
+    }
+    final confirmed = await _confirm(
+      'Decline all invites (${invites.length})?',
+      'Every open invite to a chat, group or space is declined.',
+      action: 'Decline',
+    );
+    if (!confirmed) return;
+    await _deleteRooms(invites);
+  }
+
+  /// Bridge bots this account has chats from (plus the configured ones).
+  Map<String, int> _bridgeBots(Client client) {
+    final cfg = WhatsAppBridgeConfig.of(client);
+    final bots = <String>{
+      WhatsAppBridgeConfig.serverBot(client),
+      if (cfg.ownBot != null) cfg.ownBot!,
+      for (final r in client.rooms) ?RoomBridgeInfo.of(r)?.bridgeBot,
+    };
+    return {for (final b in bots) b: BridgeCleanup.roomsOf(client, b).length};
+  }
+
+  Future<void> _cleanupBridge(String bot) async {
+    final client = Matrix.of(context).client;
+    final cfg = WhatsAppBridgeConfig.of(client);
+    final own = cfg.ownBot == bot;
+    final count = BridgeCleanup.roomsOf(client, bot).length;
+    var logout = true;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialog) => AlertDialog(
+          title: Text('Remove bridge $bot?'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                '${own ? 'Your own bridge is removed from the tjena server and the app switches back to the server bridge. ' : ''}'
+                '$count chats, spaces and invites from this bridge are left '
+                'and forgotten, including the bot chat.',
+              ),
+              CheckboxListTile(
+                contentPadding: EdgeInsets.zero,
+                value: logout,
+                onChanged: (v) => setDialog(() => logout = v ?? true),
+                title: const Text('Log WhatsApp out first'),
+                subtitle: const Text(
+                  'Turn off if the bridge is broken or offline (saves '
+                  'waiting for it).',
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              style: FilledButton.styleFrom(backgroundColor: Colors.redAccent),
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Remove'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (ok != true || !mounted) return;
+    final lines = <String>[];
+    setState(() {
+      _busy = true;
+      _bridgeLog = lines;
+    });
+    await BridgeCleanup.run(
+      client,
+      bot: bot,
+      own: own,
+      logout: logout,
+      log: (l) {
+        if (mounted) setState(() => lines.add(l));
+      },
+    );
+    if (mounted) setState(() => _busy = false);
+  }
+
+  Widget _bridgeCard() {
+    final client = Matrix.of(context).client;
+    final bots = _bridgeBots(client);
+    final cfg = WhatsAppBridgeConfig.of(client);
+    return Card(
+      margin: EdgeInsets.zero,
+      child: Column(
+        children: [
+          for (final e in bots.entries) ...[
+            ListTile(
+              leading: const Icon(Icons.link_off_outlined),
+              title: Text(
+                e.key == cfg.ownBot
+                    ? 'Own bridge (home)'
+                    : e.key == WhatsAppBridgeConfig.serverBot(client)
+                    ? 'tjena server bridge'
+                    : 'Bridge',
+              ),
+              subtitle: Text('${e.key}\n${e.value} chats, spaces and invites'),
+              isThreeLine: true,
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => _cleanupBridge(e.key),
+            ),
+            const Divider(height: 1),
+          ],
+          const ListTile(
+            dense: true,
+            title: Text(
+              'For a bridge that broke off (phone reset, lost link): '
+              'cleans up its chats so you can link WhatsApp again from scratch.',
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _openMultiSelect() async {
@@ -242,7 +395,19 @@ class _SettingsDebugState extends State<SettingsDebug> {
         leading: BackButton(onPressed: () => context.go('/rooms/settings')),
       ),
       body: _busy
-          ? const Center(child: CircularProgressIndicator.adaptive())
+          ? Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const CircularProgressIndicator.adaptive(),
+                  for (final l in _bridgeLog ?? const <String>[])
+                    Padding(
+                      padding: const EdgeInsets.only(top: 8),
+                      child: Text(l, textAlign: TextAlign.center),
+                    ),
+                ],
+              ),
+            )
           : ListView(
               padding: const EdgeInsets.all(16),
               children: [
@@ -275,9 +440,46 @@ class _SettingsDebugState extends State<SettingsDebug> {
                         trailing: const Icon(Icons.chevron_right),
                         onTap: _deleteAllGroups,
                       ),
+                      const Divider(height: 1),
+                      ListTile(
+                        leading: const Icon(Icons.mail_outline),
+                        title: const Text('Decline all invites'),
+                        subtitle: const Text(
+                          'Chats, groups and spaces you were invited to',
+                        ),
+                        trailing: const Icon(Icons.chevron_right),
+                        onTap: _declineInvites,
+                      ),
+                      const Divider(height: 1),
+                      ListTile(
+                        leading: Icon(
+                          Icons.delete_forever_outlined,
+                          color: theme.colorScheme.error,
+                        ),
+                        title: const Text('Delete everything'),
+                        subtitle: const Text(
+                          'All chats, groups, spaces and invites',
+                        ),
+                        trailing: const Icon(Icons.chevron_right),
+                        onTap: _deleteEverything,
+                      ),
                     ],
                   ),
                 ),
+                const SizedBox(height: 24),
+                _sectionLabel(theme, 'WHATSAPP BRIDGE CLEANUP'),
+                const SizedBox(height: 8),
+                if (_bridgeLog != null && _bridgeLog!.isNotEmpty) ...[
+                  Card(
+                    margin: EdgeInsets.zero,
+                    child: Padding(
+                      padding: const EdgeInsets.all(12),
+                      child: Text(_bridgeLog!.join('\n')),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                ],
+                _bridgeCard(),
                 const SizedBox(height: 24),
                 _sectionLabel(theme, 'SELECT & DELETE'),
                 const SizedBox(height: 8),

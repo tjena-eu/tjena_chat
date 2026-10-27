@@ -23,7 +23,13 @@ class ChatListItem extends StatelessWidget {
   final Room room;
   final Room? space;
   final bool activeChat;
+
+  /// Long press and avatar tap: select the chat (multi-select).
   final void Function(BuildContext context)? onLongPress;
+
+  /// The small menu button shown on hover (mouse): the single-chat menu.
+  final void Function(BuildContext context)? onMenu;
+  final bool selected;
   final void Function()? onForget;
   final void Function() onTap;
   final String? filter;
@@ -33,6 +39,8 @@ class ChatListItem extends StatelessWidget {
     this.activeChat = false,
     required this.onTap,
     this.onLongPress,
+    this.onMenu,
+    this.selected = false,
     this.onForget,
     this.filter,
     this.space,
@@ -50,7 +58,9 @@ class ChatListItem extends StatelessWidget {
     final directChatMatrixId = room.directChatMatrixID;
     final isDirectChat = directChatMatrixId != null;
     final hasNotifications = room.notificationCount > 0;
-    final backgroundColor = activeChat
+    final backgroundColor = selected
+        ? theme.colorScheme.primaryContainer
+        : activeChat
         ? theme.colorScheme.secondaryContainer
         : null;
     final displayname = room.getLocalizedDisplayname(
@@ -145,7 +155,7 @@ class ChatListItem extends StatelessWidget {
                           top: 0,
                           right: 0,
                           child: GestureDetector(
-                            onTap: () => onLongPress?.call(context),
+                            onTap: () => (onMenu ?? onLongPress)?.call(context),
                             child: AnimatedScale(
                               duration: FluffyThemes.animationDuration,
                               curve: FluffyThemes.animationCurve,
@@ -161,6 +171,24 @@ class ChatListItem extends StatelessWidget {
                             ),
                           ),
                         ),
+                        if (selected)
+                          Positioned(
+                            bottom: 0,
+                            right: 0,
+                            child: CircleAvatar(
+                              radius: 11,
+                              backgroundColor: backgroundColor,
+                              child: CircleAvatar(
+                                radius: 9,
+                                backgroundColor: theme.colorScheme.primary,
+                                child: Icon(
+                                  Icons.check,
+                                  size: 14,
+                                  color: theme.colorScheme.onPrimary,
+                                ),
+                              ),
+                            ),
+                          ),
                       ],
                     ),
                   ),

@@ -7,6 +7,7 @@ import 'package:fluffychat/config/app_config.dart';
 import 'package:fluffychat/config/setting_keys.dart';
 import 'package:fluffychat/config/themes.dart';
 import 'package:fluffychat/pages/chat_list/chat_list.dart';
+import 'package:fluffychat/pages/chat_list/chat_selection_bar.dart';
 import 'package:fluffychat/pages/chat_list/navigation_rail.dart';
 import 'package:fluffychat/pages/chat_list/start_chat_fab.dart';
 import 'package:material_ui/material_ui.dart';
@@ -24,9 +25,16 @@ class ChatListView extends StatelessWidget {
         !FluffyThemes.isColumnMode(context) &&
         AppSettings.displayNavigationRail.value;
     return PopScope(
-      canPop: !controller.isSearchMode && controller.activeSpaceId == null,
+      canPop:
+          !controller.selectMode &&
+          !controller.isSearchMode &&
+          controller.activeSpaceId == null,
       onPopInvokedWithResult: (pop, _) {
         if (pop) return;
+        if (controller.selectMode) {
+          controller.clearSelection();
+          return;
+        }
         if (controller.activeSpaceId != null) {
           controller.clearActiveSpace();
           return;
@@ -68,6 +76,9 @@ class ChatListView extends StatelessWidget {
               excludeFromSemantics: true,
               behavior: HitTestBehavior.translucent,
               child: Scaffold(
+                appBar: controller.selectMode
+                    ? ChatSelectionBar(controller)
+                    : null,
                 backgroundColor: oneColumnSpacesMode
                     ? Theme.of(context).colorScheme.surfaceContainer
                     : null,
@@ -93,6 +104,7 @@ class ChatListView extends StatelessWidget {
                 ),
                 floatingActionButton:
                     !controller.isSearchMode &&
+                        !controller.selectMode &&
                         controller.activeSpaceId == null &&
                         !FluffyThemes.isColumnMode(context)
                     ? ValueListenableBuilder(

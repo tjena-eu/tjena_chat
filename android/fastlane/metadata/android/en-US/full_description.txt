@@ -1,31 +1,20 @@
-<b>Messaging how it should be</b>
+<b>tjena!chat: private messaging from Europe</b>
 
-Whether for your friends, your company or local community, FluffyChat supports a variety of features to cover all your daily needs.
+tjena!chat is a free, open-source messenger based on the open Matrix protocol and FluffyChat. Your chats are end-to-end encrypted, and your account lives on European servers.
 
-<b>Easy to use</b>
+<b>Your WhatsApp chats in one place</b>
 
-Simply install, log in and start chatting. The intuitive user interface makes secure communication as easy as possible.
+Run your own WhatsApp bridge with the tjena Bridge app on a spare phone at home. Your WhatsApp messages are decrypted only on that phone and on your devices, and you can call WhatsApp contacts from tjena!chat.
 
-<b>Secure</b>
+<b>Features</b>
 
-With olm/megolm end-to-end encryption, encrypted message backups and an automated key trust system, FluffyChat is among the most secure messengers available.
+• End-to-end encrypted chats, groups and spaces
+• Voice and video calls
+• Live location sharing and stories
+• Voice messages, stickers and reactions
+• Choose when photos and videos download: Wi-Fi, mobile data or Data Saver
+• Optional saving of received media to your gallery
 
-<b>Decentral</b>
+<b>Open source</b>
 
-Based on the open Matrix protocol we build a decentralized messaging network together, which no entity can control. Host your own chat server while remaining in contact with everyone.
-
-<b>Feature rich and reliable</b>
-
-From public chats with tens of thousands of participants and polls to custom stickers, spaces, rich moderation tools, and multi-device support, FluffyChat delivers a comprehensive communication suite.
-
-<b>Secure video calls</b>
-
-Direct calls and video conferences, fully secured with Matrix RTC-compatible encryption.
-
-<b>Not another walled garden</b>
-
-We do not build another walled garden! FluffyChat is fully compatible with any other Matrix client like Element, Nheko, Cinny or NeoChat. Learn more at matrix.org.
-
-<b>Made by volunteers</b>
-
-FluffyChat is a non-profit project based on open standards and driven entirely by volunteers. Infrastructure is funded by donations, and participation is open to everyone.
+The source code is on GitHub: https://github.com/tjena-eu/tjena_chat

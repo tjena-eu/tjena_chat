@@ -1,11 +1,11 @@
 {
-    "name": "FluffyChat",
-    "short_name": "FluffyChat",
+    "name": "tjena",
+    "short_name": "tjena",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#295d9f",
     "theme_color": "#295d9f",
-    "description": "The cutest messenger in the Matrix network",
+    "description": "Private, end-to-end encrypted chat on Matrix",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

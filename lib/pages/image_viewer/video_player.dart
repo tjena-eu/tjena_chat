@@ -61,6 +61,10 @@ class EventVideoPlayerState extends State<EventVideoPlayer> {
               },
       );
 
+      // A tapped video counts as downloaded: save it if auto-save is on.
+      // ignore: unawaited_futures
+      widget.event.autoSaveBackground();
+
       // Dispose the controllers if we already have them.
       _disposeControllers();
       late VideoPlayerController videoPlayerController;

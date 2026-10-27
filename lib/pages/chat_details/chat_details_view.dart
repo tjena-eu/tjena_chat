@@ -400,8 +400,8 @@ class ChatDetailsView extends StatelessWidget {
   }
 }
 
-/// Per-chat switch for automatically downloading images and videos. Overrides
-/// the global "Show thumbnails" setting for this one chat.
+/// Per-chat auto-download for images and videos: follow the global
+/// per-network settings, or always / never for this one chat.
 class _AutoDownloadTile extends StatefulWidget {
   final Room room;
   final Color? iconColor;
@@ -416,25 +416,39 @@ class _AutoDownloadTileState extends State<_AutoDownloadTile> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final enabled = MediaAutoDownload.enabledFor(widget.room.id);
-    return SwitchListTile.adaptive(
-      value: enabled,
-      onChanged: (value) async {
-        await MediaAutoDownload.setOverride(widget.room.id, value);
-        if (mounted) setState(() {});
-      },
-      secondary: CircleAvatar(
+    final override = MediaAutoDownload.overrideFor(widget.room.id);
+    final subtitle = switch (override) {
+      null => 'Follows Settings ▸ Chat (Wi-Fi, mobile data, Data Saver).',
+      true => 'Photos and videos load automatically on Wi-Fi and mobile data.',
+      false => 'Photos and videos load only when you tap them.',
+    };
+    return ListTile(
+      leading: CircleAvatar(
         backgroundColor: theme.colorScheme.surfaceContainer,
         foregroundColor: widget.iconColor,
         child: Icon(
-          enabled ? Icons.download_outlined : Icons.file_download_off_outlined,
+          override == false
+              ? Icons.file_download_off_outlined
+              : Icons.download_outlined,
         ),
       ),
       title: const Text('Auto-download media'),
-      subtitle: Text(
-        enabled
-            ? 'Photos and videos load automatically in this chat.'
-            : 'Photos and videos load only when you tap them.',
+      subtitle: Text(subtitle),
+      trailing: DropdownButton<int>(
+        value: override == null ? 0 : (override ? 1 : 2),
+        underline: const SizedBox.shrink(),
+        items: const [
+          DropdownMenuItem(value: 0, child: Text('Default')),
+          DropdownMenuItem(value: 1, child: Text('Always')),
+          DropdownMenuItem(value: 2, child: Text('Never')),
+        ],
+        onChanged: (v) async {
+          await MediaAutoDownload.setOverride(
+            widget.room.id,
+            v == 0 ? null : v == 1,
+          );
+          if (mounted) setState(() {});
+        },
       ),
     );
   }

@@ -1,56 +1,23 @@
-fastlane documentation
-----
+# fastlane (tjena!chat)
 
-# Installation
+Publishes the Android APK as a GitHub release, which is what Obtainium and the
+website install from. Run from `android/`:
 
-Make sure you have the latest version of the Xcode command line tools installed:
-
-```sh
-xcode-select --install
+```bash
+sudo apt install ruby-dev                        # once: Ruby headers for native gems
+gem install --user-install bundler               # once
+export PATH="$HOME/.local/share/gem/ruby/3.0.0/bin:$PATH"   # bundler (add to ~/.bashrc)
+bundle config set --local path vendor/bundle    # once: gems stay in this folder
+bundle install                                  # once
+bundle exec fastlane bump                       # new version name (+ build number)
+# write metadata/android/en-US/changelogs/<build>.txt, commit, push
+GITHUB_TOKEN=... bundle exec fastlane release   # build + publish v<version>
 ```
 
-For _fastlane_ installation instructions, see [Installing _fastlane_](https://docs.fastlane.tools/#installing-fastlane)
+Lanes: `bump [type:minor|major]`, `build`, `github [draft:true]`, `release`.
+Every published release needs a new version name (Obtainium compares the tag
+with the installed version). The APK must always be signed with the same key
+(`android/key.properties`), or installed apps can't update.
 
-# Available Actions
-
-## Android
-
-### android set_build_code_internal
-
-```sh
-[bundle exec] fastlane android set_build_code_internal
-```
-
-
-
-### android deploy_internal_test
-
-```sh
-[bundle exec] fastlane android deploy_internal_test
-```
-
-
-
-### android deploy_candidate
-
-```sh
-[bundle exec] fastlane android deploy_candidate
-```
-
-
-
-### android deploy_release
-
-```sh
-[bundle exec] fastlane android deploy_release
-```
-
-
-
-----
-
-This README.md is auto-generated and will be re-generated every time [_fastlane_](https://fastlane.tools) is run.
-
-More information about _fastlane_ can be found on [fastlane.tools](https://fastlane.tools).
-
-The documentation of _fastlane_ can be found on [docs.fastlane.tools](https://docs.fastlane.tools).
+`metadata/` is the store listing (fastlane / F-Droid layout, linked from the
+repo root as `fastlane/metadata`).

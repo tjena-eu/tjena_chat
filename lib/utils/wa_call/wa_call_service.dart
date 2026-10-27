@@ -3,7 +3,7 @@
 
 // WhatsApp calls through the user's own bridge at home.
 //
-// The bridge phone runs a calls daemon (personal-bridge/wacall) with its own
+// The bridge phone runs a calls daemon (tjena_bridge repo: wacall/) with its own
 // linked WhatsApp device. tjena talks to it like this:
 //
 //   tjena ──wss wap.tjena.eu/_tjena/call/v1/app── gateway ── bridge phone ── WhatsApp
@@ -142,7 +142,123 @@ class WaCallService {
   final _sdpWaiters = <String, Completer<Map<String, dynamic>>>{};
   final _shownRings = <String>{};
 
-  WaCallService._(this.client);
+  /// No UI (the push isolate only watches whether a call still rings).
+  final bool _headless;
+  bool _gotStatus = false;
+
+  /// A ring the system call screen already answered or declined, handled
+  /// as soon as the bridge reports it.
+  ({String roomId, bool answer, bool video, DateTime until})? _fromCallKit;
+
+  WaCallService._(this.client, {bool headless = false}) : _headless = headless;
+
+  /// The bridge's "Incoming call" notice (bridgev2 action message), fresh
+  /// enough to still be ringing.
+  static bool isIncomingCallNotice(Event e) {
+    if (e.senderId == e.room.client.userID) return false;
+    final action = e.content['com.beeper.action_message'];
+    if (action is! Map || action['type'] != 'call') return false;
+    return DateTime.now().difference(e.originServerTs) <
+        const Duration(seconds: 90);
+  }
+
+  static bool isVideoCallNotice(Event e) =>
+      (e.content['com.beeper.action_message'] as Map?)?['call_type'] == 'video';
+
+  bool _ringIsFor(WaRing r, String roomId) => _roomForPeer(r)?.id == roomId;
+
+  /// Accept was tapped on the system call screen for the chat [roomId].
+  void answerFromCallKit(String roomId, {bool video = false}) =>
+      _handleFromCallKit(roomId, answer: true, video: video);
+
+  /// Decline was tapped on the system call screen for the chat [roomId].
+  void declineFromCallKit(String roomId) =>
+      _handleFromCallKit(roomId, answer: false, video: false);
+
+  void _handleFromCallKit(
+    String roomId, {
+    required bool answer,
+    required bool video,
+  }) {
+    final known = ringing.value.firstWhereOrNull((r) => _ringIsFor(r, roomId));
+    if (known != null) {
+      _shownRings.add(known.waCallId);
+      answer ? _answerAndShow(known, video: video) : reject(known);
+      return;
+    }
+    _fromCallKit = (
+      roomId: roomId,
+      answer: answer,
+      video: video,
+      until: DateTime.now().add(const Duration(seconds: 60)),
+    );
+    unawaited(checkRinging());
+  }
+
+  Future<void> _answerAndShow(WaRing r, {bool video = false}) async {
+    final room = _roomForPeer(r);
+    final title =
+        room?.getLocalizedDisplayname() ?? _pretty(r.peerPn ?? r.peer);
+    final nav = FluffyChatApp.router.routerDelegate.navigatorKey.currentState;
+    try {
+      final future = answer(r, title: title, room: room, video: video);
+      final call = current.value;
+      if (call != null && nav != null) {
+        unawaited(
+          nav.push(
+            MaterialPageRoute(
+              fullscreenDialog: true,
+              builder: (_) => WaCallPage(service: this, call: call),
+            ),
+          ),
+        );
+      }
+      await future;
+    } catch (e) {
+      Logs().w('[WaCall] answering from the call screen failed', e);
+    }
+  }
+
+  /// Push isolate: returns once the bridge no longer reports a call ringing
+  /// in [room] (ended, answered elsewhere, declined), or after [timeout].
+  /// [onRing] gets the ring once seen (to decline it from the call screen).
+  static Future<void> waitWhileRinging(
+    Client client,
+    Room room, {
+    Duration timeout = const Duration(seconds: 60),
+    void Function(WaCallService service, WaRing ring)? onRing,
+  }) async {
+    final target = callTarget(room);
+    if (target == null) return;
+    final s = WaCallService._(client, headless: true);
+    final done = Completer<void>();
+    WaRing? seen;
+    void check() {
+      final now = s.ringing.value.firstWhereOrNull(
+        (r) => r.ids.contains(target),
+      );
+      if (now != null) {
+        if (seen == null) onRing?.call(s, now);
+        seen = now;
+      } else if ((seen != null ||
+              (s._gotStatus && s.phoneOnline.value == true)) &&
+          !done.isCompleted) {
+        done.complete();
+      }
+    }
+
+    s.ringing.addListener(check);
+    try {
+      await s._ensureConnected();
+      s._send({'type': 'status'});
+      await done.future.timeout(timeout, onTimeout: () {});
+    } catch (e) {
+      Logs().w('[WaCall] cannot watch the ringing call: $e');
+    } finally {
+      s.ringing.removeListener(check);
+      await s._ws?.close();
+    }
+  }
 
   /// Starts listening for WhatsApp call notices. Safe to call repeatedly.
   static WaCallService start(Client client) {
@@ -298,6 +414,7 @@ class WaCallService {
         }
         break;
       case 'status':
+        _gotStatus = true;
         final calls = (m['calls'] as List? ?? [])
             .map((c) => WaRing.fromJson((c as Map).cast<String, dynamic>()))
             .toList();
@@ -394,7 +511,19 @@ class WaCallService {
   }
 
   void _showIncoming(WaRing r) {
+    if (_headless) return;
     if (current.value != null || _shownRings.contains(r.waCallId)) return;
+    final pending = _fromCallKit;
+    if (pending != null &&
+        DateTime.now().isBefore(pending.until) &&
+        _ringIsFor(r, pending.roomId)) {
+      _fromCallKit = null;
+      _shownRings.add(r.waCallId);
+      pending.answer
+          ? unawaited(_answerAndShow(r, video: pending.video))
+          : unawaited(reject(r));
+      return;
+    }
     _shownRings.add(r.waCallId);
     final room = _roomForPeer(r);
     final nav = FluffyChatApp.router.routerDelegate.navigatorKey.currentState;

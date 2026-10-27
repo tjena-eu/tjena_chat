@@ -1,0 +1,3 @@
+• Auto-download media: choose separately for photos and videos on Wi-Fi, mobile data and with Data Saver on (Settings → Chat). Each chat can override it (Default / Always / Never).
+• Videos that are allowed to auto-download are fetched when you open the chat, so they play at once.
+• Auto-save to gallery now also saves videos you tap to play.

@@ -20,7 +20,9 @@ import 'package:fluffychat/utils/notification_avatar_extension.dart';
 import 'package:fluffychat/utils/notification_background_handler.dart';
 import 'package:fluffychat/utils/platform_infos.dart';
 import 'package:fluffychat/utils/start_push_foreground_service.dart';
+import 'package:fluffychat/utils/wa_call/wa_call_service.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter_callkit_incoming/entities/entities.dart';
 import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_new_badger/flutter_new_badger.dart';
@@ -178,6 +180,20 @@ Future<void> _tryPushHelper(
       PlatformInfos.isMobile) {
     _showIncomingCall(event, l10n);
     return;
+  }
+
+  // WhatsApp call through the own bridge: ring like a phone call (also on
+  // the lock screen). In the foreground the app shows its own call screen.
+  if (PlatformInfos.isMobile && WaCallService.isIncomingCallNotice(event)) {
+    await event.room.postLoad();
+    if (WaCallService.callTarget(event.room) != null) {
+      if (!isBackgroundMessage &&
+          WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed) {
+        return;
+      }
+      await _showIncomingWaCall(event, l10n);
+      return;
+    }
   }
 
   if (notification.roomId != null &&
@@ -540,6 +556,49 @@ Future<void> _showIncomingCall(Event event, L10n l10n) async {
       break;
     }
   }
+}
+
+Future<void> _showIncomingWaCall(Event event, L10n l10n) async {
+  final room = event.room;
+  final active = await FlutterCallkitIncoming.activeCalls();
+  if (active.any((c) => c.extra?['roomId'] == room.id)) return;
+  const timeout = Duration(seconds: 60);
+  final params = await buildFluffyChatCallKitParams(
+    room,
+    l10n: l10n,
+    intent: WaCallService.isVideoCallNotice(event) ? .video : .voice,
+    timeout: timeout,
+    extra: const {'wa': true},
+  );
+  await FlutterCallkitIncoming.showCallkitIncoming(params);
+
+  // Decline on the call screen while the app isn't running: tell the bridge.
+  WaCallService? service;
+  WaRing? ring;
+  var declined = false;
+  final sub = FlutterCallkitIncoming.onEvent.listen((e) {
+    if (e is CallEventActionCallDecline && e.callKitParams.id == params.id) {
+      declined = true;
+      final s = service, r = ring;
+      if (s != null && r != null) s.reject(r);
+    }
+  });
+  try {
+    await WaCallService.waitWhileRinging(
+      room.client,
+      room,
+      timeout: timeout,
+      onRing: (s, r) {
+        service = s;
+        ring = r;
+        if (declined) s.reject(r);
+      },
+    );
+  } finally {
+    await sub.cancel();
+  }
+  // Ended, answered (the app shows its own call screen) or timed out.
+  await FlutterCallkitIncoming.endCall(params.id);
 }
 
 Future<void> cancelNotificationsOnSync(

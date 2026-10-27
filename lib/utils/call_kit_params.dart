@@ -18,6 +18,7 @@ Future<CallKitParams> buildFluffyChatCallKitParams(
   L10n? l10n,
   MatrixRtcCallIntent intent = .video,
   Duration timeout = RtcNotificationContent.defaultLifetime,
+  Map<String, Object?> extra = const {},
 }) async {
   l10n ??= await lookupL10n(PlatformDispatcher.instance.locale);
   final avatarUrl = await room.avatar?.getThumbnailUri(
@@ -33,6 +34,7 @@ Future<CallKitParams> buildFluffyChatCallKitParams(
       'roomId': room.id,
       'clientName': room.client.clientName,
       'intent': intent.name,
+      ...extra,
     },
     appName: AppSettings.applicationName.value,
     nameCaller: room.getLocalizedDisplayname(),

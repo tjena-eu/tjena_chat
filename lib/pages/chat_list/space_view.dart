@@ -50,6 +50,14 @@ class SpaceView extends StatefulWidget {
   final String spaceId;
   final void Function() onBack;
   final void Function(Room room) onChatTab;
+
+  /// Long press on a joined chat (multi-select). Without it, the old
+  /// per-chat menu opens.
+  final void Function(Room room)? onChatLongPress;
+  final Set<String> selectedRoomIds;
+
+  /// Called while building with the joined chats currently shown.
+  final void Function(List<String> roomIds)? onVisibleRooms;
   final String? activeChat;
 
   const SpaceView({
@@ -57,14 +65,17 @@ class SpaceView extends StatefulWidget {
     required this.onBack,
     required this.onChatTab,
     required this.activeChat,
+    this.onChatLongPress,
+    this.selectedRoomIds = const {},
+    this.onVisibleRooms,
     super.key,
   });
 
   @override
-  State<SpaceView> createState() => _SpaceViewState();
+  State<SpaceView> createState() => SpaceViewState();
 }
 
-class _SpaceViewState extends State<SpaceView> {
+class SpaceViewState extends State<SpaceView> {
   final List<SpaceRoomsChunk$2> _discoveredChildren = [];
   final TextEditingController _filterController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
@@ -157,6 +168,42 @@ class _SpaceViewState extends State<SpaceView> {
     setState(() => _archived = newArchived);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setStringList(_archivedPrefKey, newArchived.toList());
+  }
+
+  // ---- used by the chat selection bar (chat_selection_bar.dart)
+
+  bool isPinned(String roomId) => _pins.contains(roomId);
+  bool isArchived(String roomId) => _archived.contains(roomId);
+
+  Future<void> setPinned(Iterable<String> roomIds, bool pinned) async {
+    final next = Set<String>.from(_pins);
+    pinned ? next.addAll(roomIds) : next.removeAll(roomIds);
+    setState(() => _pins = next);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(_pinsPrefKey, next.toList());
+  }
+
+  Future<void> setArchived(Iterable<String> roomIds, bool archived) async {
+    final next = Set<String>.from(_archived);
+    archived ? next.addAll(roomIds) : next.removeAll(roomIds);
+    setState(() => _archived = next);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(_archivedPrefKey, next.toList());
+  }
+
+  bool get canRemoveChildren =>
+      Matrix.of(context).client
+          .getRoomById(widget.spaceId)
+          ?.canChangeStateEvent(EventTypes.SpaceChild) ==
+      true;
+
+  Future<void> removeFromSpace(Iterable<String> roomIds) async {
+    final space = Matrix.of(context).client.getRoomById(widget.spaceId);
+    if (space == null) return;
+    for (final id in roomIds) {
+      await space.removeSpaceChild(id);
+    }
+    if (mounted) await _refreshHierarchy();
   }
 
   List<SpaceRoomsChunk$2> _applySortAndPin(
@@ -655,6 +702,21 @@ class _SpaceViewState extends State<SpaceView> {
                   _discoveredChildren,
                   room.client,
                 );
+                widget.onVisibleRooms?.call([
+                  for (final c in sortedChildren)
+                    if ((_showArchived || !_archived.contains(c.roomId)) &&
+                        room.client.getRoomById(c.roomId)?.membership ==
+                            Membership.join &&
+                        (filter.isEmpty ||
+                            (c.name ??
+                                    room.client
+                                        .getRoomById(c.roomId)
+                                        ?.getLocalizedDisplayname() ??
+                                    '')
+                                .toLowerCase()
+                                .contains(filter)))
+                      c.roomId,
+                ]);
                 return CustomScrollView(
                   controller: _scrollController,
                   slivers: [
@@ -819,7 +881,9 @@ class _SpaceViewState extends State<SpaceView> {
                               AppConfig.borderRadius,
                             ),
                             clipBehavior: Clip.hardEdge,
-                            color: isArchived
+                            color: widget.selectedRoomIds.contains(item.roomId)
+                                ? theme.colorScheme.primaryContainer
+                                : isArchived
                                 ? theme.colorScheme.surfaceContainerLow
                                 : joinedRoom != null &&
                                       widget.activeChat == joinedRoom.id
@@ -837,14 +901,29 @@ class _SpaceViewState extends State<SpaceView> {
                                 onTap: joinedRoom != null
                                     ? () => widget.onChatTab(joinedRoom!)
                                     : null,
-                                onLongPress: joinedRoom != null
-                                    ? () => _showSpaceChildEditMenu(
+                                onLongPress: joinedRoom == null
+                                    ? null
+                                    : widget.onChatLongPress != null
+                                    ? () => widget.onChatLongPress!(joinedRoom!)
+                                    : () => _showSpaceChildEditMenu(
                                         context,
                                         item.roomId,
-                                      )
-                                    : null,
+                                      ),
                                 leading:
-                                    hovered && (isAdmin || joinedRoom != null)
+                                    widget.selectedRoomIds.contains(item.roomId)
+                                    ? SizedBox.square(
+                                        dimension: avatarSize,
+                                        child: CircleAvatar(
+                                          backgroundColor:
+                                              theme.colorScheme.primary,
+                                          child: Icon(
+                                            Icons.check,
+                                            size: 18,
+                                            color: theme.colorScheme.onPrimary,
+                                          ),
+                                        ),
+                                      )
+                                    : hovered && (isAdmin || joinedRoom != null)
                                     ? SizedBox.square(
                                         dimension: avatarSize,
                                         child: IconButton(

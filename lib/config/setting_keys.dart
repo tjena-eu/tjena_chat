@@ -66,6 +66,15 @@ enum AppSettings<T> {
   ),
   displayChatDetailsColumn('chat.fluffy.display_chat_details_column', false),
   autoSaveMedia<bool>('chat.fluffy.auto_save_media', false),
+
+  /// Media auto-download per network (see MediaAutoDownload). "Data Saver"
+  /// means Android's Data Saver is restricting the app right now.
+  autoDownloadPhotosWifi<bool>('tjena.auto_download.photos.wifi', true),
+  autoDownloadPhotosMobile<bool>('tjena.auto_download.photos.mobile', true),
+  autoDownloadPhotosDataSaver<bool>('tjena.auto_download.photos.data_saver', false),
+  autoDownloadVideosWifi<bool>('tjena.auto_download.videos.wifi', true),
+  autoDownloadVideosMobile<bool>('tjena.auto_download.videos.mobile', false),
+  autoDownloadVideosDataSaver<bool>('tjena.auto_download.videos.data_saver', false),
   // AppConfig-mirrored settings
   applicationName<String>('chat.fluffy.application_name', 'tjena'),
   defaultHomeserver<String>('chat.fluffy.default_homeserver', 'tjena.eu'),

@@ -5,6 +5,7 @@
 
 import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
 import 'package:fluffychat/config/setting_keys.dart';
+import 'package:fluffychat/pages/settings_chat/media_auto_download_settings.dart';
 import 'package:fluffychat/config/themes.dart';
 import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/pages/settings_stories/settings_stories.dart';
@@ -84,6 +85,7 @@ class SettingsChatView extends StatelessWidget {
                   title: L10n.of(context).autoplayImages,
                   setting: AppSettings.autoplayImages,
                 ),
+              const MediaAutoDownloadSettings(),
               if (PlatformInfos.isMobile)
                 SettingsSwitchListTile.adaptive(
                   title: L10n.of(context).autoSaveMedia,
@@ -97,10 +99,6 @@ class SettingsChatView extends StatelessWidget {
               SettingsSwitchListTile.adaptive(
                 title: L10n.of(context).swipeRightToLeftToReply,
                 setting: AppSettings.swipeRightToLeftToReply,
-              ),
-              SettingsSwitchListTile.adaptive(
-                title: L10n.of(context).showThumbnailsInTimeline,
-                setting: AppSettings.showThumbnailsInTimeline,
               ),
               SettingsSwitchListTile.adaptive(
                 title: L10n.of(context).doubleTapToReact,

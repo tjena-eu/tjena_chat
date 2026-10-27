@@ -13,6 +13,7 @@ import 'package:fluffychat/config/app_config.dart';
 import 'package:fluffychat/config/themes.dart';
 import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/pages/chat_list/chat_list_view.dart';
+import 'package:fluffychat/pages/chat_list/space_view.dart';
 import 'package:fluffychat/utils/error_reporter.dart';
 import 'package:fluffychat/utils/hidden_rooms.dart';
 import 'package:fluffychat/utils/localized_exception_extension.dart';
@@ -107,17 +108,63 @@ class ChatListController extends State<ChatList>
 
     setState(() {
       _activeSpaceId = spaceId;
+      selectedRoomIds.clear();
+      spaceViewKey = GlobalKey<SpaceViewState>();
     });
   }
 
   void clearActiveSpace() => setState(() {
     _activeSpaceId = null;
+    selectedRoomIds.clear();
   });
+
+  /// The open space's list (for space-only actions like "pin in space").
+  GlobalKey<SpaceViewState> spaceViewKey = GlobalKey<SpaceViewState>();
+
+  // ------------------------------------------------------------ multi-select
+  // Long press selects a chat; while something is selected, a tap adds or
+  // removes chats. The selection bar (chat_selection_bar.dart) acts on all.
+
+  final Set<String> selectedRoomIds = {};
+
+  bool get selectMode => selectedRoomIds.isNotEmpty;
+
+  /// Chats the list currently shows (set while building), for "select all".
+  List<String> selectableRoomIds = const [];
+
+  List<Room> get selectedRooms {
+    final client = Matrix.of(context).client;
+    return selectedRoomIds.map(client.getRoomById).nonNulls.toList();
+  }
+
+  void toggleSelection(Room room) {
+    HapticFeedback.selectionClick();
+    setState(() {
+      if (!selectedRoomIds.remove(room.id)) selectedRoomIds.add(room.id);
+    });
+  }
+
+  bool get allSelected =>
+      selectableRoomIds.isNotEmpty &&
+      selectableRoomIds.every(selectedRoomIds.contains);
+
+  void selectAll() => setState(() => selectedRoomIds.addAll(selectableRoomIds));
+
+  void clearSelection() => setState(selectedRoomIds.clear);
 
   Future<void> _onCallEvent(CallEvent? event) async {
     switch (event) {
       case CallEventActionCallAccept():
         _joinCallWith(event.callKitParams);
+        break;
+      case CallEventActionCallDecline()
+          when event.callKitParams.extra?['wa'] == true:
+        final roomId = event.callKitParams.extra?.tryGet<String>('roomId');
+        if (roomId != null) {
+          WaCallService.start(
+            Matrix.of(context).client,
+          ).declineFromCallKit(roomId);
+        }
         break;
       case CallEventActionCallEnded():
         final roomId = event.callKitParams.extra?.tryGet<String>('roomId');
@@ -143,6 +190,10 @@ class ChatListController extends State<ChatList>
   }
 
   Future<void> onChatTap(Room room) async {
+    if (selectMode) {
+      toggleSelection(room);
+      return;
+    }
     if (room.membership == Membership.leave) {
       context.go('/rooms/archive/${room.id}');
       return;
@@ -402,6 +453,15 @@ class ChatListController extends State<ChatList>
   void _joinCallWith(CallKitParams params) {
     final roomId = params.extra?.tryGet<String>('roomId');
     final clientName = params.extra?.tryGet<String>('clientName');
+    if (roomId != null && params.extra?['wa'] == true) {
+      // WhatsApp call (own bridge): answer it here, then drop the system
+      // call screen; the app's own call screen takes over.
+      WaCallService.start(
+        Matrix.of(context).client,
+      ).answerFromCallKit(roomId, video: params.extra?['intent'] == 'video');
+      FlutterCallkitIncoming.endCall(params.id);
+      return;
+    }
     if (roomId != null) {
       context.go('/rooms/$roomId?client=$clientName&action=call');
     }

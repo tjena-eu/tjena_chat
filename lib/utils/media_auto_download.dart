@@ -10,21 +10,31 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:fluffychat/config/setting_keys.dart';
 import 'package:fluffychat/utils/platform_infos.dart';
 
-/// Per-chat control over whether image/video media loads by itself in the
-/// timeline.
+/// Which network the phone is on, as far as media downloads are concerned.
+enum MediaNetwork {
+  /// Unmetered (Wi-Fi, Ethernet).
+  wifi,
+
+  /// Metered (mobile data, metered hotspot).
+  mobile,
+
+  /// Android's Data Saver is restricting this app right now (only happens on
+  /// a metered network).
+  dataSaver,
+}
+
+/// Decides whether photos and videos load by themselves in the timeline.
 ///
-/// The global switch (Settings ▸ Chat ▸ "Show thumbnails…") stays the default;
-/// a chat may override it in either direction, so a data-heavy group can be
-/// silenced without turning thumbnails off everywhere — and one important chat
-/// can keep loading while the global default is off.
+/// Settings ▸ Chats ▸ "Auto-download media" holds one switch per media type and
+/// network (Wi-Fi / mobile data / Data Saver). A chat may override that: off
+/// means everything waits for a tap there, on means it auto-downloads on Wi-Fi
+/// and mobile data (Data Saver still follows the global setting).
 ///
-/// Overrides live in SharedPreferences and are mirrored in a memory cache,
-/// because the timeline reads this on every bubble build (a synchronous path).
+/// Saving to the gallery is a separate setting (auto-save); it saves whatever
+/// got downloaded, automatically or by tap.
 ///
-/// Android's system Data Saver overrides everything: while it is actively
-/// restricting the app, nothing auto-downloads and every image waits for a tap.
-/// That mirrors what the user asked the OS for, so it deliberately wins over
-/// both the per-chat override and the global setting.
+/// The timeline reads this on every bubble build (a synchronous path), so the
+/// overrides and the network state are cached in memory.
 abstract class MediaAutoDownload {
   static const _prefix = 'auto_download_media_';
 
@@ -34,20 +44,20 @@ abstract class MediaAutoDownload {
   /// roomId → override. Absent means "follow the global setting".
   static final Map<String, bool> _overrides = {};
 
-  /// Bumped whenever an override (or the Data Saver state) changes, so open
+  /// Bumped whenever an override, a setting or the network changes, so open
   /// timelines rebuild.
   static final ValueNotifier<int> revision = ValueNotifier<int>(0);
 
-  /// Cached Data Saver state — read on a platform channel, so it can't be
-  /// awaited from the synchronous timeline path. Refreshed at start and on
-  /// every app resume.
-  static bool _dataSaver = false;
+  /// Last known network. Wi-Fi until told otherwise (desktop/web never are).
+  static MediaNetwork _network = MediaNetwork.wifi;
+
+  static MediaNetwork get network => _network;
 
   /// Whether Android's Data Saver is currently restricting this app.
-  static bool get dataSaverActive => _dataSaver;
+  static bool get dataSaverActive => _network == MediaNetwork.dataSaver;
 
-  /// Load all stored overrides into memory. Must be awaited during app start,
-  /// before the first timeline is built.
+  /// Load all stored overrides into memory and start following the network.
+  /// Must be awaited during app start, before the first timeline is built.
   static Future<void> init() async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -60,34 +70,78 @@ abstract class MediaAutoDownload {
     } catch (e) {
       Logs().w('[MediaAutoDownload] load failed: $e');
     }
+    if (PlatformInfos.isAndroid) {
+      _system.setMethodCallHandler((call) async {
+        if (call.method == 'networkChanged') _apply(call.arguments);
+      });
+    }
     await refreshDataSaver();
   }
 
-  /// Re-read the system Data Saver state. Call at start and whenever the app is resumed — the
-  /// user may have flipped it while away, or moved between metered and
-  /// unmetered networks.
+  /// Re-read the network and Data Saver state. Called at start and on every
+  /// app resume; changes while running arrive as "networkChanged".
   static Future<void> refreshDataSaver() async {
     if (!PlatformInfos.isAndroid) return;
     try {
-      final active =
-          await _system.invokeMethod<bool>('isDataSaverRestricted') ?? false;
-      if (active != _dataSaver) {
-        _dataSaver = active;
-        revision.value++;
-      }
+      _apply(await _system.invokeMethod<Object?>('networkState'));
     } catch (e) {
-      Logs().d('[MediaAutoDownload] data saver check failed: $e');
+      Logs().d('[MediaAutoDownload] network check failed: $e');
     }
   }
 
-  /// Whether media in [roomId] should download and render on its own.
-  ///
-  /// False under Data Saver regardless of the chat's own setting — the image
-  /// then shows its embedded preview with a tap-to-load overlay.
-  static bool enabledFor(String roomId) {
-    if (_dataSaver) return false;
-    return _overrides[roomId] ?? AppSettings.showThumbnailsInTimeline.value;
+  static void _apply(Object? state) {
+    if (state is! Map) return;
+    final MediaNetwork next;
+    if (state['dataSaver'] == true) {
+      next = MediaNetwork.dataSaver;
+    } else if (state['type'] == 'mobile') {
+      next = MediaNetwork.mobile;
+    } else {
+      // Offline counts as Wi-Fi: nothing downloads anyway, and coming back
+      // on Wi-Fi shouldn't need another event to unlock media.
+      next = MediaNetwork.wifi;
+    }
+    if (next != _network) {
+      _network = next;
+      revision.value++;
+    }
   }
+
+  /// The global setting for one media type on one network.
+  static AppSettings<bool> settingFor(
+    MediaNetwork network, {
+    required bool video,
+  }) => switch ((network, video)) {
+    (MediaNetwork.wifi, false) => AppSettings.autoDownloadPhotosWifi,
+    (MediaNetwork.mobile, false) => AppSettings.autoDownloadPhotosMobile,
+    (MediaNetwork.dataSaver, false) => AppSettings.autoDownloadPhotosDataSaver,
+    (MediaNetwork.wifi, true) => AppSettings.autoDownloadVideosWifi,
+    (MediaNetwork.mobile, true) => AppSettings.autoDownloadVideosMobile,
+    (MediaNetwork.dataSaver, true) => AppSettings.autoDownloadVideosDataSaver,
+  };
+
+  /// Change a global setting and refresh open timelines.
+  static Future<void> setSetting(
+    MediaNetwork network, {
+    required bool video,
+    required bool value,
+  }) async {
+    await settingFor(network, video: video).setItem(value);
+    revision.value++;
+  }
+
+  /// Whether photos ([video] false) or videos in [roomId] download on their
+  /// own on the current network.
+  static bool enabledFor(String roomId, {bool video = false}) {
+    final override = _overrides[roomId];
+    if (override == false) return false;
+    if (override == true && _network != MediaNetwork.dataSaver) return true;
+    return settingFor(_network, video: video).value;
+  }
+
+  /// Whether this event's media (photo or video) auto-downloads.
+  static bool enabledForEvent(Event event) =>
+      enabledFor(event.room.id, video: event.messageType == MessageTypes.Video);
 
   /// The chat's explicit override, or null when it follows the global setting.
   static bool? overrideFor(String roomId) => _overrides[roomId];

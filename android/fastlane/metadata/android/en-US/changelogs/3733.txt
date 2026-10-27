@@ -1,0 +1,5 @@
+- Chat list: long press selects a chat, tap adds more; select all/none; mute, hide, delete, pin, mark read and more for all selected chats (same on every phone)
+- WhatsApp calls through your own bridge ring like a phone call, also on the lock screen
+- Invites from your WhatsApp bridge are accepted automatically when you link an account
+- Debug tools: decline all invites, delete everything, clean up a broken WhatsApp bridge
+- Media auto-download: Data Saver is only applied on mobile data, and switching it on/off is noticed right away

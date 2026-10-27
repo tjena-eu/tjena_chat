@@ -1,7 +1,14 @@
 package tjena.tjenachat
 
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.os.Handler
+import android.os.Looper
 import android.os.PowerManager
 import io.flutter.embedding.android.FlutterFragment
 import io.flutter.embedding.android.FlutterFragmentActivity
@@ -25,16 +32,21 @@ class MainActivity : FlutterFragmentActivity() {
         // Plugins are registered in provideEngine. Only tjena's own channels
         // are set up here (again on every attach; the handlers are replaced).
 
-        // System state the app reads (Data Saver for tap-to-load media).
-        MethodChannel(
+        // System state the app reads (network type + Data Saver for media
+        // auto-download). Changes are pushed as "networkChanged".
+        val system = MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
             "tjena.chat/system",
-        ).setMethodCallHandler { call, result ->
+        )
+        system.setMethodCallHandler { call, result ->
             when (call.method) {
                 "isDataSaverRestricted" -> result.success(isDataSaverRestricted())
+                "networkState" -> result.success(networkState())
                 else -> result.notImplemented()
             }
         }
+        systemChannel = system
+        registerNetworkCallback()
 
         // Proximity screen-off for audio calls
         MethodChannel(
@@ -69,6 +81,75 @@ class MainActivity : FlutterFragmentActivity() {
                 else -> result.notImplemented()
             }
         }
+    }
+
+    private var systemChannel: MethodChannel? = null
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
+
+    /**
+     * "mobile" for a metered network (cellular, metered hotspot), "wifi" for an
+     * unmetered one, "none" when offline. dataSaver: Data Saver restricts us now.
+     */
+    private fun networkState(): Map<String, Any> {
+        val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+        val caps = cm?.getNetworkCapabilities(cm.activeNetwork)
+        val type = when {
+            caps == null -> "none"
+            caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED) -> "wifi"
+            else -> "mobile"
+        }
+        // Data Saver only limits metered networks; on Wi-Fi it doesn't apply.
+        // Android also reports "restricted" when Background data is off for
+        // this app, which has the same effect on mobile data.
+        return mapOf(
+            "type" to type,
+            "dataSaver" to (type == "mobile" && isDataSaverRestricted()),
+        )
+    }
+
+    private fun registerNetworkCallback() {
+        if (networkCallback != null) return
+        val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return
+        val main = Handler(Looper.getMainLooper())
+        val notify = { main.post { systemChannel?.invokeMethod("networkChanged", networkState()) } }
+        val cb = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) { notify() }
+            override fun onLost(network: Network) { notify() }
+            override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) { notify() }
+            override fun onBlockedStatusChanged(network: Network, blocked: Boolean) { notify() }
+        }
+        try {
+            cm.registerDefaultNetworkCallback(cb)
+            networkCallback = cb
+        } catch (e: Exception) {
+            // Too many callbacks or no permission: the app still re-reads on resume.
+        }
+        // Data Saver switched on/off (e.g. from quick settings) doesn't change
+        // the network, so the callback above doesn't see it.
+        if (dataSaverReceiver == null) {
+            val r = object : BroadcastReceiver() {
+                override fun onReceive(context: Context, intent: Intent) { notify() }
+            }
+            try {
+                registerReceiver(r, IntentFilter(ConnectivityManager.ACTION_RESTRICT_BACKGROUND_CHANGED))
+                dataSaverReceiver = r
+            } catch (_: Exception) {}
+        }
+    }
+
+    private var dataSaverReceiver: BroadcastReceiver? = null
+
+    override fun onDestroy() {
+        networkCallback?.let {
+            try {
+                (getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager)?.unregisterNetworkCallback(it)
+            } catch (_: Exception) {}
+        }
+        networkCallback = null
+        dataSaverReceiver?.let { try { unregisterReceiver(it) } catch (_: Exception) {} }
+        dataSaverReceiver = null
+        systemChannel = null
+        super.onDestroy()
     }
 
     // Prevent Flutter engine gets destroyed on back button close.
