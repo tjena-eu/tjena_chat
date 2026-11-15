@@ -1,0 +1,2 @@
+- Only invites from the WhatsApp bridge you use are accepted automatically (not from an old one)
+- Debug Tools: WhatsApp bridge cleanup finds all chats of a bridge

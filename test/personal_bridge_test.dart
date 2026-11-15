@@ -9,6 +9,8 @@ void main() {
     expect(logins.length, 2);
     expect(logins[0].id, '491701234567');
     expect(logins[0].state, 'CONNECTED');
+    expect(logins[0].name, '+49 170 1234567');
+    expect(logins[1].name, 'Work');
     expect(logins[1].state, 'TRANSIENT_DISCONNECT');
   });
 

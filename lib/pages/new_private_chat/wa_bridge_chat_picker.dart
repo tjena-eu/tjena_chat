@@ -31,7 +31,15 @@ class WaContact {
   final String id; // WhatsApp user id: phone digits or "lid-…"
   final String name;
   final String? roomId; // existing DM portal
-  WaContact(this.id, this.name, this.roomId);
+  /// The own WhatsApp account (login ID) the contact was found in.
+  final String? account;
+  WaContact(this.id, this.name, this.roomId, {this.account});
+
+  WaContact withAccount(String? account) =>
+      WaContact(id, name, roomId, account: account);
+
+  /// The name without the bridge's " (WA)" suffix.
+  String get displayName => name.replaceFirst(RegExp(r'\s*\(WA\)$'), '');
 
   /// What `start-chat` accepts: "+" and the digits for a phone number, else the id.
   String get identifier => RegExp(r'^\d+$').hasMatch(id) ? '+$id' : id;
@@ -67,10 +75,14 @@ List<WaContact> parseSearchReply(String? html, String? body) {
     }
     room ??= roomIdFromReply(null, item);
     if (name == null) {
-      final plain = RegExp(
-        r'/\s*([^<\-\[]+)',
-      ).firstMatch(item.replaceAll(RegExp(r'<[^>]+>'), ''));
-      name = plain?.group(1)?.trim();
+      final plain = item.replaceAll(RegExp(r'<[^>]+>'), '');
+      final slash = plain.indexOf(' / ');
+      if (slash >= 0) {
+        var rest = plain.substring(slash + 3);
+        final portal = rest.indexOf(' - DM portal:');
+        if (portal >= 0) rest = rest.substring(0, portal);
+        name = rest.trim();
+      }
     }
     out.add(WaContact(contactId, _unescape(name ?? ''), room));
   }
@@ -110,82 +122,119 @@ String _unescape(String s) => s
 class _WaBridgeChatPickerState extends State<WaBridgeChatPicker> {
   final _query = TextEditingController();
   String _filter = '';
-  List<WaContact>? _contacts;
+
+  /// Search results per account tab (null key: only one account).
+  final Map<String?, List<WaContact>> _contacts = {};
+  String? _searchingIn;
   bool _searching = false;
   String? _busyId;
   String? _error;
+  int _tab = 0;
+
+  /// The bridge's WhatsApp logins (from `list-logins`).
+  List<({String id, String name, String state})> _logins = const [];
+  bool _loginsLoaded = false;
 
   Client get client => widget.client;
 
-  List<Room> get _chats {
-    final q = _filter.toLowerCase();
-    final rooms =
-        client.rooms.where((r) {
-          if (r.membership != Membership.join || r.isSpace) return false;
-          if (r.isDirectChat && r.directChatMatrixID == widget.bot) {
-            return false;
-          }
-          if (RoomBridgeInfo.of(r)?.bridgeBot != widget.bot) return false;
-          return q.isEmpty ||
-              r.getLocalizedDisplayname().toLowerCase().contains(q);
-        }).toList()..sort(
-          (a, b) =>
-              b.latestEventReceivedTime.compareTo(a.latestEventReceivedTime),
-        );
-    return rooms;
+  /// One tab per account: the logins, plus accounts only seen in chats
+  /// (while the bot hasn't answered yet).
+  List<({String id, String name, String state})> get _accounts => [
+    ..._logins,
+    for (final a in WaAccounts.known(client, bot: widget.bot))
+      if (!_logins.any((l) => l.id == a)) (id: a, name: '', state: ''),
+  ];
+
+  /// The account of the open tab; null with one account (commands then
+  /// need no login ID).
+  String? get _account {
+    final accounts = _accounts;
+    if (accounts.length < 2) return null;
+    return accounts[_tab.clamp(0, accounts.length - 1)].id;
   }
 
-  /// Sends a bot command and returns (formatted_body, body) of its reply.
-  Future<({String? html, String? body})?> _command(String command) async {
-    final room = await BridgeBotChat.dm(client, widget.bot);
-    final sentAfter = DateTime.now().subtract(const Duration(seconds: 1));
-    final completer = Completer<({String? html, String? body})?>();
-    final sub = client.onTimelineEvent.stream.listen((e) {
-      if (e.roomId != room.id || e.senderId != widget.bot) return;
-      if (e.originServerTs.isBefore(sentAfter) ||
-          e.type != EventTypes.Message) {
-        return;
-      }
-      if (!completer.isCompleted) {
-        completer.complete((
-          html: e.content['formatted_body'] as String?,
-          body: e.body,
-        ));
-      }
+  @override
+  void initState() {
+    super.initState();
+    WaAccounts.ensureLoaded(client).then((_) {
+      if (mounted) setState(() {});
     });
+    _loadLogins();
+  }
+
+  Future<void> _loadLogins() async {
     try {
-      await room.sendTextEvent(command);
-      return await completer.future.timeout(
-        const Duration(seconds: 45),
-        onTimeout: () => null,
-      );
+      final logins = await WaAccounts.fetch(client, widget.bot);
+      if (!mounted) return;
+      setState(() => _logins = logins);
+    } catch (e) {
+      Logs().w('[WaBridgeChatPicker] list-logins', e);
     } finally {
-      await sub.cancel();
+      if (mounted) setState(() => _loginsLoaded = true);
     }
   }
 
+  /// The WhatsApp chats of [account] (all of them with one account).
+  List<Room> _chatsOf(String? account) {
+    final q = _filter.toLowerCase();
+    return client.rooms.where((r) {
+      if (r.membership != Membership.join || r.isSpace) return false;
+      if (r.isDirectChat && r.directChatMatrixID == widget.bot) return false;
+      if (RoomBridgeInfo.of(r)?.bridgeBot != widget.bot) return false;
+      if (account != null && !WaAccounts.accountsOf(r).contains(account)) {
+        return false;
+      }
+      return q.isEmpty || r.getLocalizedDisplayname().toLowerCase().contains(q);
+    }).toList()..sort(
+      (a, b) => b.latestEventReceivedTime.compareTo(a.latestEventReceivedTime),
+    );
+  }
+
+  Future<({String? html, String? body})?> _command(
+    String command,
+    bool Function(String) accept,
+  ) async {
+    final room = await BridgeBotChat.dm(client, widget.bot);
+    return BridgeBotChat.commandFull(
+      room,
+      widget.bot,
+      command,
+      accept: accept,
+      timeout: const Duration(seconds: 90),
+    );
+  }
+
+  static const _noAnswer =
+      'Your bridge did not answer. Is it online? (tjena may also be slowing '
+      'down your messages while the bridge copies history: try again in a minute.)';
+
   Future<void> _search() async {
     final q = _query.text.trim();
-    if (q.length < 2) return;
+    if (q.length < 2 || _searching) return;
+    final acct = _account;
     setState(() {
       _searching = true;
+      _searchingIn = acct;
       _error = null;
+      _contacts.remove(acct);
     });
     try {
-      final reply = await _command('search $q');
+      final reply = await _command(
+        acct == null ? 'search $q' : 'search $acct $q',
+        BridgeBotChat.isSearchReply,
+      );
       if (!mounted) return;
       if (reply == null) {
-        setState(() => _error = 'Your bridge did not answer. Is it online?');
-      } else {
-        final found = parseSearchReply(reply.html, reply.body);
-        setState(() {
-          _contacts = found;
-          if (found.isEmpty &&
-              !(reply.body ?? '').startsWith('Search results')) {
-            _error = reply.body;
-          }
-        });
+        setState(() => _error = _noAnswer);
+        return;
       }
+      final found = parseSearchReply(reply.html, reply.body);
+      setState(() {
+        _contacts[acct] = [for (final c in found) c.withAccount(acct)];
+        if (found.isEmpty && !(reply.body ?? '').startsWith('Search results')) {
+          _error = reply.body;
+        }
+      });
     } catch (e) {
       if (mounted) setState(() => _error = '$e');
     } finally {
@@ -193,28 +242,32 @@ class _WaBridgeChatPickerState extends State<WaBridgeChatPicker> {
     }
   }
 
-  Future<void> _start(String identifier, {String? knownRoom}) async {
+  Future<void> _start(
+    String identifier, {
+    String? account,
+    String? knownRoom,
+  }) async {
     if (knownRoom != null &&
         client.getRoomById(knownRoom)?.membership == Membership.join) {
       _open(knownRoom);
       return;
     }
     setState(() {
-      _busyId = identifier;
+      _busyId = '$account/$identifier';
       _error = null;
     });
     try {
-      final reply = await _command('start-chat $identifier');
+      final reply = await _command(
+        account == null
+            ? 'start-chat $identifier'
+            : 'start-chat $account $identifier',
+        BridgeBotChat.isStartChatReply,
+      );
       final roomId = reply == null
           ? null
           : roomIdFromReply(reply.html, reply.body);
       if (roomId == null) {
-        if (mounted) {
-          setState(
-            () => _error =
-                reply?.body ?? 'Your bridge did not answer. Is it online?',
-          );
-        }
+        if (mounted) setState(() => _error = reply?.body ?? _noAnswer);
         return;
       }
       if (client.getRoomById(roomId)?.membership != Membership.join) {
@@ -229,6 +282,16 @@ class _WaBridgeChatPickerState extends State<WaBridgeChatPicker> {
       if (mounted) setState(() => _busyId = null);
     }
   }
+
+  static String _stateText(String state) => switch (state) {
+    'CONNECTED' => 'Connected',
+    'CONNECTING' || 'BACKFILLING' => 'Connecting…',
+    'TRANSIENT_DISCONNECT' => 'Reconnecting…',
+    'BAD_CREDENTIALS' ||
+    'LOGGED_OUT' => 'Logged out: link it again in the bridge app',
+    '' => 'Status unknown',
+    _ => state,
+  };
 
   void _open(String roomId) {
     final router = GoRouter.of(context);
@@ -245,125 +308,216 @@ class _WaBridgeChatPickerState extends State<WaBridgeChatPicker> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final chats = _chats;
+    final accounts = _accounts;
+    final multi = accounts.length > 1;
+    if (_tab >= accounts.length) _tab = 0;
+    final acct = _account;
+    final login = multi ? accounts[_tab] : accounts.firstOrNull;
+    final chats = _chatsOf(acct);
+    final contacts = _contacts[acct];
     final digits = _query.text.replaceAll(RegExp(r'[\s\-()]'), '');
-    final looksLikeNumber = RegExp(r'^\+?\d{6,15}$').hasMatch(digits);
-    final number = looksLikeNumber
+    final number = RegExp(r'^\+?\d{6,15}$').hasMatch(digits)
         ? (digits.startsWith('+') ? digits : '+$digits')
         : null;
+    final where = acct == null ? '' : ' · ${WaAccounts.label(acct)}';
 
-    return Scaffold(
-      appBar: AppBar(title: const Text('WhatsApp chat')),
-      body: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-            child: TextField(
-              controller: _query,
-              autofocus: true,
-              textInputAction: TextInputAction.search,
-              decoration: InputDecoration(
-                hintText: 'Name or phone number',
-                prefixIcon: const Icon(Icons.search),
-                suffixIcon: IconButton(
-                  tooltip: 'Search WhatsApp contacts',
-                  icon: const Icon(Icons.person_search_outlined),
-                  onPressed: _searching ? null : _search,
-                ),
-                border: const OutlineInputBorder(),
-                isDense: true,
-              ),
-              onChanged: (v) => setState(() => _filter = v.trim()),
-              onSubmitted: (_) => _search(),
-            ),
-          ),
-          if (_searching || _busyId != null) const LinearProgressIndicator(),
-          if (_error != null)
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-              child: Text(
-                _error!,
-                style: TextStyle(color: theme.colorScheme.error),
-              ),
-            ),
-          Expanded(
-            child: ListView(
-              children: [
-                if (number != null)
-                  ListTile(
-                    leading: const CircleAvatar(
-                      child: Icon(Icons.dialpad_outlined),
-                    ),
-                    title: Text('Start chat with $number'),
-                    subtitle: const Text('Works for any number on WhatsApp'),
-                    onTap: _busyId != null ? null : () => _start(number),
-                  ),
-                _Header('Your WhatsApp chats (${chats.length})'),
-                if (chats.isEmpty)
-                  const ListTile(dense: true, title: Text('No matching chats')),
-                for (final r in chats.take(_filter.isEmpty ? 30 : 200))
-                  ListTile(
-                    leading: Avatar(
-                      mxContent: r.avatar,
-                      name: r.getLocalizedDisplayname(),
-                    ),
-                    title: Text(
-                      r.getLocalizedDisplayname(),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    onTap: () => _open(r.id),
-                  ),
-                _Header('WhatsApp contacts'),
-                if (_contacts == null)
-                  ListTile(
-                    dense: true,
-                    leading: const Icon(Icons.info_outline),
-                    title: const Text(
-                      'Type a name or number and press search to find WhatsApp contacts.',
-                    ),
-                    onTap: _search,
-                  )
-                else if (_contacts!.isEmpty)
-                  const ListTile(dense: true, title: Text('No contacts found'))
-                else
-                  for (final c in _contacts!)
-                    ListTile(
-                      leading: CircleAvatar(
-                        child: Text(
-                          c.name.isNotEmpty
-                              ? c.name.characters.first.toUpperCase()
-                              : '#',
+    return DefaultTabController(
+      key: ValueKey(accounts.map((a) => a.id).join(',')),
+      length: multi ? accounts.length : 1,
+      initialIndex: multi ? _tab : 0,
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text('WhatsApp chat'),
+          bottom: multi
+              ? TabBar(
+                  isScrollable: accounts.length > 2,
+                  onTap: (i) => setState(() {
+                    _tab = i;
+                    _error = null;
+                  }),
+                  tabs: [
+                    for (final a in accounts)
+                      Tab(
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              Icons.circle,
+                              size: 8,
+                              color: a.state == 'CONNECTED'
+                                  ? Colors.green
+                                  : theme.colorScheme.outline,
+                            ),
+                            const SizedBox(width: 6),
+                            Text(WaAccounts.label(a.id)),
+                          ],
                         ),
                       ),
+                  ],
+                )
+              : null,
+        ),
+        body: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+              child: TextField(
+                controller: _query,
+                autofocus: true,
+                textInputAction: TextInputAction.search,
+                decoration: InputDecoration(
+                  hintText: 'Name or phone number',
+                  prefixIcon: const Icon(Icons.search),
+                  suffixIcon: IconButton(
+                    tooltip: 'Search WhatsApp contacts',
+                    icon: const Icon(Icons.person_search_outlined),
+                    onPressed: _searching ? null : _search,
+                  ),
+                  border: const OutlineInputBorder(),
+                  isDense: true,
+                ),
+                onChanged: (v) => setState(() => _filter = v.trim()),
+                onSubmitted: (_) => _search(),
+              ),
+            ),
+            if (_searching || _busyId != null) const LinearProgressIndicator(),
+            if (_error != null)
+              Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 4,
+                ),
+                child: Text(
+                  _error!,
+                  style: TextStyle(color: theme.colorScheme.error),
+                ),
+              ),
+            Expanded(
+              child: ListView(
+                children: [
+                  if (login != null)
+                    ListTile(
+                      dense: true,
+                      leading: Icon(
+                        Icons.phone_android,
+                        color: login.state == 'CONNECTED'
+                            ? Colors.green
+                            : theme.colorScheme.outline,
+                      ),
+                      title: Text('Account ${WaAccounts.label(login.id)}'),
+                      subtitle: Text(_stateText(login.state)),
+                    )
+                  else
+                    ListTile(
+                      dense: true,
+                      leading: const Icon(Icons.info_outline),
                       title: Text(
-                        c.name.isNotEmpty
-                            ? c.name
-                            : c.label.isNotEmpty
-                            ? c.label
-                            : c.id,
+                        _loginsLoaded
+                            ? 'No WhatsApp account found (or the bridge did not answer).'
+                            : 'Asking your bridge…',
                       ),
+                    ),
+                  if (number != null)
+                    ListTile(
+                      leading: const CircleAvatar(
+                        child: Icon(Icons.dialpad_outlined),
+                      ),
+                      title: Text('Start chat with $number'),
                       subtitle: Text(
-                        [
-                          if (c.label.isNotEmpty && c.name.isNotEmpty) c.label,
-                          if (c.roomId != null) 'chat exists',
-                        ].join(' · '),
+                        acct == null
+                            ? 'Works for any number on WhatsApp'
+                            : 'From your account ${WaAccounts.label(acct)}',
                       ),
-                      trailing: _busyId == c.identifier
-                          ? const SizedBox(
-                              width: 20,
-                              height: 20,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : const Icon(Icons.chat_bubble_outline),
+                      trailing: _busyId == '$acct/$number'
+                          ? const _Spinner()
+                          : null,
                       onTap: _busyId != null
                           ? null
-                          : () => _start(c.identifier, knownRoom: c.roomId),
+                          : () => _start(number, account: acct),
                     ),
-              ],
+                  _Header('Your WhatsApp chats$where (${chats.length})'),
+                  if (chats.isEmpty)
+                    const ListTile(
+                      dense: true,
+                      title: Text('No matching chats'),
+                    ),
+                  for (final r in chats.take(_filter.isEmpty ? 30 : 200))
+                    ListTile(
+                      leading: Avatar(
+                        mxContent: r.avatar,
+                        name: r.getLocalizedDisplayname(),
+                      ),
+                      title: Text(
+                        r.getLocalizedDisplayname(),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      subtitle: r.isDirectChat
+                          ? null
+                          : Text(
+                              WaAccounts.accountsOf(r).length > 1
+                                  ? 'Group · in all your accounts'
+                                  : 'Group',
+                            ),
+                      onTap: () => _open(r.id),
+                    ),
+                  _Header('WhatsApp contacts$where'),
+                  if (contacts == null)
+                    ListTile(
+                      dense: true,
+                      leading: const Icon(Icons.info_outline),
+                      title: Text(
+                        _searching && _searchingIn == acct
+                            ? 'Searching…'
+                            : 'Type a name or number and press search to find contacts of this account.',
+                      ),
+                      onTap: _search,
+                    )
+                  else if (contacts.isEmpty)
+                    const ListTile(
+                      dense: true,
+                      title: Text('No contacts found'),
+                    )
+                  else
+                    for (final c in contacts)
+                      ListTile(
+                        leading: CircleAvatar(
+                          child: Text(
+                            c.displayName.isNotEmpty
+                                ? c.displayName.characters.first.toUpperCase()
+                                : '#',
+                          ),
+                        ),
+                        title: Text(
+                          c.displayName.isNotEmpty
+                              ? c.displayName
+                              : c.label.isNotEmpty
+                              ? c.label
+                              : c.id,
+                        ),
+                        subtitle: Text(
+                          [
+                            if (c.label.isNotEmpty && c.displayName.isNotEmpty)
+                              c.label,
+                            if (c.roomId != null) 'chat exists',
+                          ].join(' · '),
+                        ),
+                        trailing: _busyId == '${c.account}/${c.identifier}'
+                            ? const _Spinner()
+                            : const Icon(Icons.chat_bubble_outline),
+                        onTap: _busyId != null
+                            ? null
+                            : () => _start(
+                                c.identifier,
+                                account: c.account,
+                                knownRoom: c.roomId,
+                              ),
+                      ),
+                ],
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -386,4 +540,14 @@ class _Header extends StatelessWidget {
       ),
     );
   }
+}
+
+class _Spinner extends StatelessWidget {
+  const _Spinner();
+  @override
+  Widget build(BuildContext context) => const SizedBox(
+    width: 20,
+    height: 20,
+    child: CircularProgressIndicator(strokeWidth: 2),
+  );
 }

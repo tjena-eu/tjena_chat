@@ -191,7 +191,7 @@ Future<void> _tryPushHelper(
           WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed) {
         return;
       }
-      await _showIncomingWaCall(event, l10n);
+      await _showIncomingWaCall(event, l10n, canAnswer: !isBackgroundMessage);
       return;
     }
   }
@@ -208,14 +208,15 @@ Future<void> _tryPushHelper(
   // Calculate the body
   final body = event.type == EventTypes.Encrypted
       ? l10n.newMessageInFluffyChat
-      : await event.calcLocalizedBody(
-          matrixLocals,
-          plaintextBody: true,
-          withSenderNamePrefix: false,
-          hideReply: true,
-          hideEdit: true,
-          removeMarkdown: true,
-        );
+      : WaCallService.noticeText(event) ??
+            await event.calcLocalizedBody(
+              matrixLocals,
+              plaintextBody: true,
+              withSenderNamePrefix: false,
+              hideReply: true,
+              hideEdit: true,
+              removeMarkdown: true,
+            );
 
   // The person object for the android message style notification
   final avatar = event.room.avatar;
@@ -558,7 +559,11 @@ Future<void> _showIncomingCall(Event event, L10n l10n) async {
   }
 }
 
-Future<void> _showIncomingWaCall(Event event, L10n l10n) async {
+Future<void> _showIncomingWaCall(
+  Event event,
+  L10n l10n, {
+  bool canAnswer = true,
+}) async {
   final room = event.room;
   final active = await FlutterCallkitIncoming.activeCalls();
   if (active.any((c) => c.extra?['roomId'] == room.id)) return;
@@ -573,6 +578,8 @@ Future<void> _showIncomingWaCall(Event event, L10n l10n) async {
   await FlutterCallkitIncoming.showCallkitIncoming(params);
 
   // Decline on the call screen while the app isn't running: tell the bridge.
+  // Accept is handled here too: on the lock screen tjena's window isn't
+  // drawn, so the chat list (which also listens) may not exist yet.
   WaCallService? service;
   WaRing? ring;
   var declined = false;
@@ -581,6 +588,12 @@ Future<void> _showIncomingWaCall(Event event, L10n l10n) async {
       declined = true;
       final s = service, r = ring;
       if (s != null && r != null) s.reject(r);
+    } else if (e is CallEventActionCallAccept &&
+        e.callKitParams.id == params.id &&
+        canAnswer) {
+      WaCallService.start(
+        room.client,
+      ).answerFromCallKit(room.id, video: params.extra?['intent'] == 'video');
     }
   });
   try {

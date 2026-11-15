@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-FLUTTER="${FLUTTER:-/home/niklas/flutter/bin/flutter}"
+FLUTTER="${FLUTTER:-/mnt/SSD/PhD_local_only/tools/flutter-3.47.7/bin/flutter}"
 export ANDROID_HOME="${ANDROID_HOME:-$HOME/android-sdk}"
 export ANDROID_SDK_ROOT="$ANDROID_HOME"
 
@@ -66,6 +66,30 @@ if [ -n "$CALL_SESSION" ] && [ -f "$CALL_SESSION" ]; then
   python3 "$SCRIPT_DIR/patches/voip_remote_stream_fix.py" "$CALL_SESSION"
 else
   echo "  WARNING: matrix SDK source not found (run 'flutter pub get'); skipping VoIP patch"
+fi
+
+# flutter_callkit_incoming: Accept on the lock screen must not ask to unlock
+# (see patches/callkit_lockscreen_fix.py).
+echo "==> Ensuring CallKit lock-screen patch is applied..."
+CALLKIT_ROOT="$(python3 - "$SCRIPT_DIR" <<'PY'
+import json, os, sys
+from urllib.parse import urlparse, unquote
+root = sys.argv[1]
+try:
+    data = json.load(open(os.path.join(root, ".dart_tool", "package_config.json")))
+except Exception:
+    sys.exit(0)
+for p in data.get("packages", []):
+    if p.get("name") == "flutter_callkit_incoming":
+        uri = p.get("rootUri", "")
+        print(unquote(urlparse(uri).path) if uri.startswith("file://")
+              else os.path.normpath(os.path.join(root, ".dart_tool", uri)))
+PY
+)"
+if [ -n "$CALLKIT_ROOT" ]; then
+  python3 "$SCRIPT_DIR/patches/callkit_lockscreen_fix.py" "$CALLKIT_ROOT"
+else
+  echo "  WARNING: flutter_callkit_incoming not found (run 'flutter pub get'); skipping"
 fi
 
 echo "==> Building Android APK (release)..."

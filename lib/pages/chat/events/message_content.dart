@@ -18,6 +18,7 @@ import '../../../config/app_config.dart';
 import '../../../utils/event_checkbox_extension.dart';
 import '../../../utils/platform_infos.dart';
 import '../../../utils/url_launcher.dart';
+import '../../../utils/wa_call/wa_call_service.dart';
 import 'audio_player.dart';
 import 'cute_events.dart';
 import 'html_message.dart';
@@ -214,9 +215,13 @@ class MessageContent extends StatelessWidget {
                 fontSize: fontSize,
               );
             }
-            var html = AppSettings.renderHtml.value && event.isRichMessage
-                ? event.formattedText
-                : event.body.replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+            var html =
+                WaCallService.noticeText(event) ??
+                (AppSettings.renderHtml.value && event.isRichMessage
+                    ? event.formattedText
+                    : event.body
+                          .replaceAll('<', '&lt;')
+                          .replaceAll('>', '&gt;'));
             if (event.messageType == MessageTypes.Emote) {
               html = '* $html';
             }

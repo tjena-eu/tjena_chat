@@ -1,0 +1,2 @@
+- New WhatsApp chat: shows all your WhatsApp accounts, searches contacts in all of them and starts the chat in the account the contact was found in
+- Bridge commands run one at a time (replies could get mixed up)

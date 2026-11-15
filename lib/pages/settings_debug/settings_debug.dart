@@ -34,6 +34,10 @@ class _SettingsDebugState extends State<SettingsDebug> {
   void initState() {
     super.initState();
     _callInfo = _loadCallInfo();
+    // Bridge chat counts need each chat's m.bridge state.
+    WaAccounts.ensureLoaded(Matrix.of(context).client).then((_) {
+      if (mounted) setState(() {});
+    });
   }
 
   /// Which call system the chat call button uses. [refresh] re-reads the

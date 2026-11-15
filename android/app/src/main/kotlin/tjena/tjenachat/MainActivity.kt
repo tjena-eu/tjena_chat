@@ -1,5 +1,6 @@
 package tjena.tjenachat
 
+import android.app.KeyguardManager
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -7,9 +8,12 @@ import android.content.IntentFilter
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
+import android.os.Build
+import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
+import android.view.WindowManager
 import io.flutter.embedding.android.FlutterFragment
 import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -22,6 +26,55 @@ class MainActivity : FlutterFragmentActivity() {
 
     override fun attachBaseContext(base: Context) {
         super.attachBaseContext(base)
+    }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        handleCallAccept(intent)
+        super.onCreate(savedInstanceState)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handleCallAccept(intent)
+    }
+
+    /**
+     * Accept tapped on the system call screen (flutter_callkit_incoming starts
+     * us with its ACTION_CALL_ACCEPT; patched so it no longer asks to unlock).
+     * A WhatsApp call shows its call screen over the lock screen; other calls
+     * ask to unlock, as the plugin used to.
+     */
+    private fun handleCallAccept(i: Intent?) {
+        if (i?.action?.endsWith("ACTION_CALL_ACCEPT") != true) return
+        val data = i.getBundleExtra("EXTRA_CALLKIT_CALL_DATA")
+        @Suppress("DEPRECATION")
+        val extra = data?.getSerializable("EXTRA_CALLKIT_EXTRA") as? Map<*, *>
+        if (extra?.get("wa") == true) {
+            showOverLockScreen(true)
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            (getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager)
+                .requestDismissKeyguard(this, null)
+        }
+    }
+
+    private fun showOverLockScreen(on: Boolean) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+            setShowWhenLocked(on)
+            setTurnScreenOn(on)
+        } else {
+            @Suppress("DEPRECATION")
+            val flags = WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+                WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
+            if (on) window.addFlags(flags) else window.clearFlags(flags)
+        }
+    }
+
+    /** The call ended: if it ran over the lock screen, go back to it. */
+    private fun onCallEnded() {
+        val km = getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
+        val wasOverLock = km.isKeyguardLocked
+        showOverLockScreen(false)
+        if (wasOverLock) moveTaskToBack(true)
     }
 
     override fun provideFlutterEngine(context: Context): FlutterEngine? {
@@ -68,6 +121,10 @@ class MainActivity : FlutterFragmentActivity() {
                     } catch (e: Exception) {
                         result.error("WAKELOCK_ERROR", e.message, null)
                     }
+                }
+                "callEnded" -> {
+                    onCallEnded()
+                    result.success(null)
                 }
                 "releaseProximityWakeLock" -> {
                     try {

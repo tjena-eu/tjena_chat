@@ -1,0 +1,2 @@
+- New WhatsApp chat: with several WhatsApp accounts, choose which one starts the chat and searches contacts
+- Your WhatsApp chats and chat search show which account each chat is from

@@ -337,6 +337,7 @@ class ChatListController extends State<ChatList>
     setState(() {
       isSearchMode = true;
     });
+    _loadWaAccounts();
     _coolDown?.cancel();
     if (globalSearch) {
       _coolDown = Timer(const Duration(milliseconds: 500), _search);
@@ -351,10 +352,17 @@ class ChatListController extends State<ChatList>
     });
   }
 
+  /// Search results show which WhatsApp account a chat is from: needs the
+  /// chats' m.bridge state, which isn't loaded with the room list.
+  void _loadWaAccounts() => WaAccounts.ensureLoaded(
+    Matrix.of(context).client,
+  ).then((_) => mounted ? setState(() {}) : null);
+
   void startSearch() {
     setState(() {
       isSearchMode = true;
     });
+    _loadWaAccounts();
     searchFocusNode.requestFocus();
     _coolDown?.cancel();
     _coolDown = Timer(const Duration(milliseconds: 500), _search);
@@ -508,6 +516,8 @@ class ChatListController extends State<ChatList>
       FlutterCallkitIncoming.activeCalls().then((calls) {
         final params = calls.firstOrNull;
         if (params == null) return;
+        // A WhatsApp call still ringing: opening the app must not answer it.
+        if (params.extra?['wa'] == true && !params.isAccepted) return;
         _joinCallWith(params);
       });
     }

@@ -17,6 +17,7 @@ import 'package:matrix/matrix.dart';
 
 import '../../config/themes.dart';
 import '../../utils/date_time_extension.dart';
+import '../../utils/wa_call/wa_call_service.dart';
 import '../../widgets/avatar.dart';
 
 class ChatListItem extends StatelessWidget {
@@ -30,6 +31,10 @@ class ChatListItem extends StatelessWidget {
   /// The small menu button shown on hover (mouse): the single-chat menu.
   final void Function(BuildContext context)? onMenu;
   final bool selected;
+
+  /// Which WhatsApp account the chat is from (shown in search results when
+  /// the user has several).
+  final String? accountTag;
   final void Function()? onForget;
   final void Function() onTap;
   final String? filter;
@@ -41,6 +46,7 @@ class ChatListItem extends StatelessWidget {
     this.onLongPress,
     this.onMenu,
     this.selected = false,
+    this.accountTag,
     this.onForget,
     this.filter,
     this.space,
@@ -71,6 +77,9 @@ class ChatListItem extends StatelessWidget {
       return const SizedBox.shrink();
     }
 
+    final waCallText = lastEvent == null
+        ? null
+        : WaCallService.noticeText(lastEvent);
     final needLastEventSender =
         lastEvent != null &&
         room.getState(EventTypes.RoomMember, lastEvent.senderId) == null;
@@ -205,6 +214,25 @@ class ChatListItem extends StatelessWidget {
                       style: const TextStyle(fontWeight: FontWeight.bold),
                     ),
                   ),
+                  if (accountTag != null)
+                    Container(
+                      margin: const EdgeInsets.only(left: 4),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 6,
+                        vertical: 1,
+                      ),
+                      decoration: BoxDecoration(
+                        color: theme.colorScheme.secondaryContainer,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Text(
+                        accountTag!,
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: theme.colorScheme.onSecondaryContainer,
+                        ),
+                      ),
+                    ),
                   if (isMuted)
                     const Padding(
                       padding: EdgeInsets.only(left: 4.0),
@@ -341,7 +369,9 @@ class ChatListItem extends StatelessWidget {
                               '${lastEvent?.eventId}_${lastEvent?.type}_${lastEvent?.redacted}_'
                               '${lastEvent != null ? room.getState(EventTypes.RoomMember, lastEvent.senderId)?.content.tryGet<String>('displayname') : null}',
                             ),
-                            future: needLastEventSender
+                            future: waCallText != null
+                                ? Future.value(waCallText)
+                                : needLastEventSender
                                 ? lastEvent.calcLocalizedBody(
                                     MatrixLocals(L10n.of(context)),
                                     hideReply: true,
@@ -354,17 +384,19 @@ class ChatListItem extends StatelessWidget {
                                             room.lastEvent?.senderId,
                                   )
                                 : null,
-                            initialData: lastEvent?.calcLocalizedBodyFallback(
-                              MatrixLocals(L10n.of(context)),
-                              hideReply: true,
-                              hideEdit: true,
-                              plaintextBody: true,
-                              removeMarkdown: true,
-                              withSenderNamePrefix:
-                                  !isDirectChat ||
-                                  directChatMatrixId !=
-                                      room.lastEvent?.senderId,
-                            ),
+                            initialData:
+                                waCallText ??
+                                lastEvent?.calcLocalizedBodyFallback(
+                                  MatrixLocals(L10n.of(context)),
+                                  hideReply: true,
+                                  hideEdit: true,
+                                  plaintextBody: true,
+                                  removeMarkdown: true,
+                                  withSenderNamePrefix:
+                                      !isDirectChat ||
+                                      directChatMatrixId !=
+                                          room.lastEvent?.senderId,
+                                ),
                             builder: (context, snapshot) => Text(
                               room.membership == Membership.invite
                                   ? room

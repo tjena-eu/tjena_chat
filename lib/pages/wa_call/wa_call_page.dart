@@ -3,9 +3,9 @@
 
 import 'dart:async';
 
-import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 
 import '../../utils/platform_infos.dart';
@@ -13,6 +13,16 @@ import '../../utils/wa_call/wa_call_service.dart';
 import '../../widgets/avatar.dart';
 
 const _callManager = MethodChannel('tjena.chat/call_manager');
+
+/// Closes the screen [context] belongs to, and only that one. maybePop()
+/// closes whatever is on top: from the ringing screen left under the call
+/// screen, that was the call screen, which hung up the call.
+void _closeOwnScreen(BuildContext context) {
+  final route = ModalRoute.of(context);
+  if (route == null || !route.isActive) return;
+  final nav = Navigator.of(context);
+  route.isCurrent ? nav.pop() : nav.removeRoute(route);
+}
 
 String _endText(WaCall c) {
   if (c.error != null) return c.error!;
@@ -75,7 +85,7 @@ class _WaCallPageState extends State<WaCallPage> {
     if (call.ended && !_closing) {
       _closing = true;
       Timer(const Duration(seconds: 2), () {
-        if (mounted) Navigator.of(context).maybePop();
+        if (mounted) _closeOwnScreen(context);
       });
     }
   }
@@ -139,7 +149,7 @@ class _WaCallPageState extends State<WaCallPage> {
       color: Colors.red,
       onVideo: onVideo,
       onTap: call.ended
-          ? () => Navigator.of(context).maybePop()
+          ? () => _closeOwnScreen(context)
           : () => widget.service.hangup(call),
     ),
     if (call.cameraOn)
@@ -473,7 +483,7 @@ class _WaIncomingCallPageState extends State<WaIncomingCallPage> {
     final still = widget.service.ringing.value.any(
       (r) => r.waCallId == widget.ring.waCallId,
     );
-    if (!still && !_busy && mounted) Navigator.of(context).maybePop();
+    if (!still && !_busy && mounted) _closeOwnScreen(context);
   }
 
   Future<void> _answer({bool video = false}) async {
@@ -514,7 +524,7 @@ class _WaIncomingCallPageState extends State<WaIncomingCallPage> {
 
   Future<void> _decline() async {
     await widget.service.reject(widget.ring);
-    if (mounted) Navigator.of(context).maybePop();
+    if (mounted) _closeOwnScreen(context);
   }
 
   @override

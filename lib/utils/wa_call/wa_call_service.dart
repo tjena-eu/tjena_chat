@@ -21,8 +21,10 @@ import 'dart:io';
 import 'dart:math';
 
 import 'package:collection/collection.dart';
-import 'package:material_ui/material_ui.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
+import 'package:livekit_client/livekit_client.dart' as lk;
+import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 
 import '../../pages/wa_call/wa_call_page.dart';
@@ -132,6 +134,7 @@ class WaCallService {
   WebSocket? _ws;
   Completer<void>? _connecting;
   StreamSubscription? _timelineSub;
+  AppLifecycleListener? _lifecycle;
   Timer? _idleClose;
 
   /// Whether the bridge phone's calls daemon is connected to the gateway.
@@ -162,61 +165,110 @@ class WaCallService {
         const Duration(seconds: 90);
   }
 
+  /// What tjena shows for the bridge's call notice. The bridge (unmodified
+  /// mautrix-whatsapp) says "Use the WhatsApp app to answer", which isn't true
+  /// for chats of the own bridge: tjena rings and can answer. Null for other
+  /// events and for other bridges' chats.
+  static String? noticeText(Event e) {
+    final action = e.content['com.beeper.action_message'];
+    if (action is! Map || action['type'] != 'call') return null;
+    if (callTarget(e.room) == null) return null;
+    return action['call_type'] == 'video'
+        ? 'Incoming WhatsApp video call'
+        : 'Incoming WhatsApp call';
+  }
+
   static bool isVideoCallNotice(Event e) =>
       (e.content['com.beeper.action_message'] as Map?)?['call_type'] == 'video';
 
-  bool _ringIsFor(WaRing r, String roomId) => _roomForPeer(r)?.id == roomId;
+  /// Whether [r] rings in the chat [roomId]. Compares with that chat's own
+  /// WhatsApp ID, so it works even if other chats aren't loaded yet.
+  bool _ringIsFor(WaRing r, String roomId) {
+    final target = _targetOf(roomId);
+    return target != null && r.ids.contains(target);
+  }
+
+  String? _targetOf(String roomId) {
+    final room = client.getRoomById(roomId);
+    return room == null ? null : callTarget(room);
+  }
 
   /// Accept was tapped on the system call screen for the chat [roomId].
   void answerFromCallKit(String roomId, {bool video = false}) =>
-      _handleFromCallKit(roomId, answer: true, video: video);
+      unawaited(_handleFromCallKit(roomId, answer: true, video: video));
 
   /// Decline was tapped on the system call screen for the chat [roomId].
   void declineFromCallKit(String roomId) =>
-      _handleFromCallKit(roomId, answer: false, video: false);
+      unawaited(_handleFromCallKit(roomId, answer: false, video: false));
 
-  void _handleFromCallKit(
+  Future<void> _handleFromCallKit(
     String roomId, {
     required bool answer,
     required bool video,
-  }) {
-    final known = ringing.value.firstWhereOrNull((r) => _ringIsFor(r, roomId));
-    if (known != null) {
-      _shownRings.add(known.waCallId);
-      answer ? _answerAndShow(known, video: video) : reject(known);
-      return;
-    }
-    _fromCallKit = (
+  }) async {
+    // Accept can arrive twice (the call screen's event and the app start).
+    if (current.value != null) return;
+    // Remember it right away: if the bridge reports the ring while the chats
+    // are still loading, _showIncoming handles it instead of ringing again.
+    final pending = _fromCallKit = (
       roomId: roomId,
       answer: answer,
       video: video,
       until: DateTime.now().add(const Duration(seconds: 60)),
     );
+    // Accepting on the lock screen often starts tjena from scratch: the
+    // chats aren't loaded yet, and their m.bridge state (what callTarget
+    // reads) only comes with postLoad.
+    await client.roomsLoading;
+    final room = client.getRoomById(roomId);
+    await room?.postLoad();
+    if (_fromCallKit != pending) return; // already handled
+    final known = ringing.value.firstWhereOrNull((r) => _ringIsFor(r, roomId));
+    if (known != null) {
+      _fromCallKit = null;
+      _shownRings.add(known.waCallId);
+      answer
+          ? unawaited(_answerAndShow(known, video: video, room: room))
+          : unawaited(reject(known));
+      return;
+    }
     unawaited(checkRinging());
   }
 
-  Future<void> _answerAndShow(WaRing r, {bool video = false}) async {
-    final room = _roomForPeer(r);
+  Future<void> _answerAndShow(
+    WaRing r, {
+    bool video = false,
+    Room? room,
+  }) async {
+    room ??= _roomForPeer(r);
     final title =
         room?.getLocalizedDisplayname() ?? _pretty(r.peerPn ?? r.peer);
-    final nav = FluffyChatApp.router.routerDelegate.navigatorKey.currentState;
     try {
       final future = answer(r, title: title, room: room, video: video);
       final call = current.value;
-      if (call != null && nav != null) {
-        unawaited(
-          nav.push(
-            MaterialPageRoute(
-              fullscreenDialog: true,
-              builder: (_) => WaCallPage(service: this, call: call),
-            ),
-          ),
-        );
-      }
+      if (call != null) unawaited(_showCallPage(call));
       await future;
     } catch (e) {
       Logs().w('[WaCall] answering from the call screen failed', e);
     }
+  }
+
+  /// Opens the call screen for [call]. Answered on the lock screen, tjena's
+  /// window may not be drawn yet (no navigator): wait for it.
+  Future<void> _showCallPage(WaCall call) async {
+    NavigatorState? nav;
+    for (var i = 0; i < 100 && !call.ended; i++) {
+      nav = FluffyChatApp.router.routerDelegate.navigatorKey.currentState;
+      if (nav != null) break;
+      await Future.delayed(const Duration(milliseconds: 200));
+    }
+    if (nav == null || call.ended) return;
+    await nav.push(
+      MaterialPageRoute(
+        fullscreenDialog: true,
+        builder: (_) => WaCallPage(service: this, call: call),
+      ),
+    );
   }
 
   /// Push isolate: returns once the bridge no longer reports a call ringing
@@ -267,11 +319,21 @@ class WaCallService {
     existing?._dispose();
     final s = WaCallService._(client);
     s._timelineSub = client.onTimelineEvent.stream.listen(s._onEvent);
+    // Rings that came in while tjena was in the background: show them once
+    // tjena is in front, unless the system call screen answered them by then.
+    s._lifecycle = AppLifecycleListener(
+      onResume: () => Timer(const Duration(milliseconds: 800), () {
+        if (_instance == s) s.ringing.value.forEach(s._showIncoming);
+      }),
+    );
+    // Matching a ring to its chat needs the chats' m.bridge state.
+    unawaited(WaAccounts.ensureLoaded(client));
     return _instance = s;
   }
 
   void _dispose() {
     _timelineSub?.cancel();
+    _lifecycle?.dispose();
     _ws?.close();
   }
 
@@ -299,17 +361,8 @@ class WaCallService {
   }
 
   /// The own WhatsApp account (phone digits, the bridge login ID) a portal
-  /// belongs to: bridgev2 puts it in m.bridge as channel["fi.mau.receiver"].
-  static String? account(Room room) {
-    for (final type in const ['m.bridge', 'uk.half-shot.bridge']) {
-      final states = room.states[type];
-      if (states == null || states.isEmpty) continue;
-      final r =
-          (states.values.first.content['channel'] as Map?)?['fi.mau.receiver'];
-      if (r is String && r.isNotEmpty) return r;
-    }
-    return null;
-  }
+  /// belongs to.
+  static String? account(Room room) => WaAccounts.of(room);
 
   /// The chat of the caller, in the account that is being called.
   Room? _roomForPeer(WaRing r) {
@@ -322,13 +375,11 @@ class WaCallService {
         (matches.length == 1 ? matches.single : null);
   }
 
-  /// "…1234": short label of an own WhatsApp account, shown when the user
-  /// has more than one.
+  /// Label of an own WhatsApp account, shown when the user has more than one.
   String? accountLabel(String? acct) {
     if (acct == null || acct.isEmpty) return null;
-    final all = client.rooms.map(account).whereType<String>().toSet();
-    if (all.length < 2) return null;
-    return '…${acct.length > 4 ? acct.substring(acct.length - 4) : acct}';
+    if (WaAccounts.known(client).length < 2) return null;
+    return WaAccounts.label(acct);
   }
 
   // ------------------------------------------------------------- signalling
@@ -481,13 +532,14 @@ class WaCallService {
 
   // ------------------------------------------------------------- incoming
 
-  void _onEvent(Event e) {
+  Future<void> _onEvent(Event e) async {
     if (e.senderId == client.userID) return;
     final action = e.content['com.beeper.action_message'];
     if (action is! Map || action['type'] != 'call') return;
     final age = DateTime.now().difference(e.originServerTs);
     if (age > const Duration(minutes: 1)) return;
     final room = e.room;
+    await room.postLoad();
     if (callTarget(room) == null) return;
     // The bridge says a WhatsApp call is ringing: ask our calls device.
     unawaited(checkRinging());
@@ -496,8 +548,8 @@ class WaCallService {
   /// Opening a chat from the "Incoming call" notification: pick it up here.
   void checkRoom(Room room) {
     final last = room.lastEvent;
-    if (last == null || callTarget(room) == null) return;
-    _onEvent(last);
+    if (last == null) return;
+    unawaited(_onEvent(last));
   }
 
   Future<void> checkRinging() async {
@@ -516,14 +568,28 @@ class WaCallService {
     final pending = _fromCallKit;
     if (pending != null &&
         DateTime.now().isBefore(pending.until) &&
-        _ringIsFor(r, pending.roomId)) {
+        (_ringIsFor(r, pending.roomId) ||
+            // The chat's WhatsApp ID isn't known (yet): with one ring only,
+            // it's the call that was accepted.
+            (_targetOf(pending.roomId) == null && ringing.value.length == 1))) {
       _fromCallKit = null;
       _shownRings.add(r.waCallId);
       pending.answer
-          ? unawaited(_answerAndShow(r, video: pending.video))
+          ? unawaited(
+              _answerAndShow(
+                r,
+                video: pending.video,
+                room: client.getRoomById(pending.roomId),
+              ),
+            )
           : unawaited(reject(r));
       return;
     }
+    // In the background (e.g. phone locked) the system call screen rings.
+    // tjena's own ringing screen would wait hidden behind it and ask to
+    // answer a second time; it is shown on resume if still ringing.
+    final state = WidgetsBinding.instance.lifecycleState;
+    if (state != null && state != AppLifecycleState.resumed) return;
     _shownRings.add(r.waCallId);
     final room = _roomForPeer(r);
     final nav = FluffyChatApp.router.routerDelegate.navigatorKey.currentState;
@@ -623,6 +689,7 @@ class WaCallService {
     }
     current.value = call;
     try {
+      await _audioStart(call);
       await call.localRenderer.initialize();
       await call.remoteRenderer.initialize();
       await _ensureConnected();
@@ -746,8 +813,38 @@ class WaCallService {
 
   Future<void> setSpeaker(WaCall call, bool on) async {
     call.speaker = on;
-    await Helper.setSpeakerphoneOn(on);
     call.changed();
+    if (Platform.isAndroid) {
+      // LiveKit owns audio routing on Android (it turns flutter_webrtc's
+      // routing off), so Helper.setSpeakerphoneOn would do nothing here.
+      await lk.AudioManager.instance.setSpeakerOutputPreferred(on);
+    } else {
+      await Helper.setSpeakerphoneOn(on);
+    }
+  }
+
+  /// Starts the phone's call audio (communication mode, earpiece first).
+  /// LiveKit only does this for its own rooms.
+  Future<void> _audioStart(WaCall call) async {
+    if (!Platform.isAndroid) return;
+    try {
+      await lk.AudioManager.instance.setSpeakerOutputPreferred(call.speaker);
+      // ignore: invalid_use_of_internal_member
+      await lk.AudioManager.instance.applyOptionsForConnect();
+    } catch (e) {
+      Logs().w('[WaCall] audio session', e);
+    }
+  }
+
+  /// MainActivity: shown over the lock screen for a call answered there;
+  /// "callEnded" returns to the lock screen.
+  static const _lockScreen = MethodChannel('tjena.chat/call_manager');
+
+  void _audioStop() {
+    if (!Platform.isAndroid) return;
+    const MethodChannel(
+      'livekit_client',
+    ).invokeMethod<void>('stopAndroidAudioSession').catchError((_) {});
   }
 
   // ------------------------------------------------------------- video
@@ -900,6 +997,8 @@ class WaCallService {
       call.remoteRenderer.dispose();
     });
     call.pc?.close();
+    _audioStop();
+    _lockScreen.invokeMethod<void>('callEnded').catchError((_) {});
     if (current.value == call) current.value = null;
     _scheduleIdleClose();
   }

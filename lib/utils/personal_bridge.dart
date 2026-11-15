@@ -261,6 +261,10 @@ class BridgeBotChat {
     return c.getRoomById(id)!;
   }
 
+  /// The bot's replies don't reference the command, so commands run one at
+  /// a time: otherwise two commands could each take the other's reply.
+  static Future<void> _queue = Future.value();
+
   /// Sends [command] and waits for the bot's next text reply.
   /// With [redactAfter] the command message is redacted once answered (used
   /// for `login-matrix <token>`, so the token doesn't stay in chat history).
@@ -270,20 +274,77 @@ class BridgeBotChat {
     String command, {
     Duration timeout = const Duration(seconds: 45),
     bool redactAfter = false,
-  }) async {
+    bool Function(String body)? accept,
+  }) async => (await commandFull(
+    room,
+    bot,
+    command,
+    timeout: timeout,
+    redactAfter: redactAfter,
+    accept: accept,
+  ))?.body;
+
+  /// Like [command], with the reply's formatted_body too.
+  ///
+  /// The reply is the bot's first message after the command in the room.
+  /// [accept] skips bot messages that can't be the answer (e.g. the late
+  /// answer to an earlier command that timed out).
+  static Future<({String? html, String? body})?> commandFull(
+    Room room,
+    String bot,
+    String command, {
+    Duration timeout = const Duration(seconds: 45),
+    bool redactAfter = false,
+    bool Function(String body)? accept,
+  }) {
+    final result = _queue.then(
+      (_) => _run(room, bot, command, timeout, redactAfter, accept),
+    );
+    _queue = result.then((_) {}, onError: (_) {});
+    return result;
+  }
+
+  static Future<({String? html, String? body})?> _run(
+    Room room,
+    String bot,
+    String command,
+    Duration timeout,
+    bool redactAfter,
+    bool Function(String body)? accept,
+  ) async {
     final c = room.client;
-    final sentAfter = DateTime.now().subtract(const Duration(seconds: 1));
-    final completer = Completer<String?>();
-    late final StreamSubscription sub;
-    sub = c.onTimelineEvent.stream.listen((e) {
-      if (e.roomId != room.id || e.senderId != bot) return;
-      if (e.originServerTs.isBefore(sentAfter)) return;
-      if (e.type != EventTypes.Message) return;
-      if (!completer.isCompleted) completer.complete(e.body);
-    });
+    final completer = Completer<({String? html, String? body})?>();
+    // Events of this room in arrival order; the answer is the first fitting
+    // bot message after the command itself.
+    final seen = <Event>[];
     String? sentId;
+    var sentAt = 0; // seen.length when the send returned
+    void check() {
+      if (sentId == null || completer.isCompleted) return;
+      final own = seen.indexWhere((e) => e.eventId == sentId);
+      final start = own >= 0 ? own + 1 : sentAt;
+      for (final e in seen.skip(start)) {
+        if (e.senderId != bot || e.type != EventTypes.Message) continue;
+        if (accept != null && !accept(e.body)) continue;
+        completer.complete((
+          html: e.content['formatted_body'] as String?,
+          body: e.body,
+        ));
+        return;
+      }
+    }
+
+    final sub = c.onTimelineEvent.stream.listen((e) {
+      if (e.roomId != room.id) return;
+      seen.add(e);
+      check();
+    });
     try {
       sentId = await room.sendTextEvent(command);
+      // Not sent (e.g. tjena refused it for sending too fast): no answer.
+      if (sentId == null) return null;
+      sentAt = seen.length;
+      check();
       return await completer.future.timeout(timeout, onTimeout: () => null);
     } finally {
       await sub.cancel();
@@ -297,16 +358,44 @@ class BridgeBotChat {
     }
   }
 
-  /// IDs from bridgev2's `list-logins` reply, e.g. "* `491701234567` (…) - `CONNECTED`".
-  static List<({String id, String state})> parseLogins(String? text) {
+  /// The bot's possible answers to `search`, `start-chat` and `list-logins`.
+  static bool isSearchReply(String b) =>
+      b.startsWith('Search results') ||
+      b.startsWith('Failed to search') ||
+      _isGenericReply(b);
+  static bool isStartChatReply(String b) =>
+      b.startsWith('Created chat with') ||
+      b.startsWith('You already have a direct chat') ||
+      b.startsWith('Failed to resolve') ||
+      b.startsWith('Identifier ') ||
+      _isGenericReply(b);
+  static bool isListLoginsReply(String b) =>
+      RegExp(r'^\s*\* `[^`]+` \(', multiLine: true).hasMatch(b) ||
+      _isGenericReply(b);
+  static bool _isGenericReply(String b) =>
+      b.startsWith("You're not logged in") ||
+      b.startsWith('This bridge does not support') ||
+      b.startsWith('Usage:') ||
+      b.startsWith('Unknown command');
+
+  /// Logins from bridgev2's `list-logins` reply,
+  /// e.g. "* `491701234567` (+49 170 1234567) - `CONNECTED`".
+  static List<({String id, String name, String state})> parseLogins(
+    String? text,
+  ) {
     if (text == null) return [];
-    final out = <({String id, String state})>[];
+    final out = <({String id, String name, String state})>[];
     for (final line in text.split('\n')) {
       final ticks = RegExp(
         r'`([^`]+)`',
       ).allMatches(line).map((m) => m.group(1)!).toList();
       if (!RegExp(r'^\s*[*-]').hasMatch(line) || ticks.isEmpty) continue;
-      out.add((id: ticks.first, state: ticks.length > 1 ? ticks.last : ''));
+      final name = RegExp(r'`\s*\((.*)\)\s*-\s*`').firstMatch(line)?.group(1);
+      out.add((
+        id: ticks.first,
+        name: name?.trim() ?? '',
+        state: ticks.length > 1 ? ticks.last : '',
+      ));
     }
     return out;
   }
@@ -314,11 +403,133 @@ class BridgeBotChat {
   /// Logs every WhatsApp login out of [bot]. Returns how many were logged out.
   static Future<int> logoutAll(Client c, String bot) async {
     final room = await dm(c, bot);
-    final logins = parseLogins(await command(room, bot, 'list-logins'));
+    final logins = parseLogins(
+      await command(room, bot, 'list-logins', accept: isListLoginsReply),
+    );
     for (final l in logins) {
       await command(room, bot, 'logout ${l.id}');
     }
     return logins.length;
+  }
+}
+
+/// The WhatsApp accounts (bridgev2 logins) behind bridged chats. A portal
+/// belongs to one login: m.bridge channel["fi.mau.receiver"] (or
+/// channel.receiver). Groups can be shared by several logins and then have none.
+class WaAccounts {
+  /// login ID → name from `list-logins` (e.g. "+49 170 1234567").
+  static final Map<String, String> _names = {};
+
+  /// The login a portal belongs to, from its m.bridge state. DMs have one;
+  /// groups usually don't (several logins can share a group).
+  static String? receiverOf(Room room) {
+    final channel = _channel(room);
+    if (channel == null) return null;
+    for (final key in const ['fi.mau.receiver', 'receiver']) {
+      final r = channel[key];
+      if (r is String && r.isNotEmpty) return r;
+    }
+    return null;
+  }
+
+  static Map? _channel(Room room) {
+    for (final type in const ['m.bridge', 'uk.half-shot.bridge']) {
+      final states = room.states[type];
+      if (states == null || states.isEmpty) continue;
+      final channel = states.values.first.content['channel'];
+      if (channel is Map) return channel;
+    }
+    return null;
+  }
+
+  /// bridgev2 gives every login its own space ("WhatsApp (+49…)") holding
+  /// all of that account's chats, groups included.
+  static bool isAccountSpace(Room r) =>
+      r.isSpace && _channel(r)?['id'] == '__personal_filtering_space__';
+
+  static Map<String, Set<String>> _index = {};
+  static DateTime _indexAt = DateTime.fromMillisecondsSinceEpoch(0);
+
+  /// room id → accounts whose space contains it (rebuilt at most every 2 s).
+  static Map<String, Set<String>> _spaceIndex(Client c) {
+    if (DateTime.now().difference(_indexAt) < const Duration(seconds: 2)) {
+      return _index;
+    }
+    final index = <String, Set<String>>{};
+    for (final space in c.rooms) {
+      if (!isAccountSpace(space)) continue;
+      final acct = receiverOf(space);
+      if (acct == null) continue;
+      for (final child in space.spaceChildren) {
+        final id = child.roomId;
+        if (id != null) (index[id] ??= {}).add(acct);
+      }
+    }
+    _indexAt = DateTime.now();
+    return _index = index;
+  }
+
+  /// All own accounts a chat belongs to (a group can be in several).
+  static Set<String> accountsOf(Room room) {
+    final r = receiverOf(room);
+    if (r != null) return {r};
+    return _spaceIndex(room.client)[room.id] ?? const {};
+  }
+
+  /// The account of a chat, if it is exactly one.
+  static String? of(Room room) {
+    final a = accountsOf(room);
+    return a.length == 1 ? a.first : null;
+  }
+
+  static Future<void>? _loading;
+
+  /// m.bridge isn't loaded with the room list: loads the full state of every
+  /// joined room once (in the background) so [of] works for all chats.
+  static Future<void> ensureLoaded(Client c) => _loading ??= () async {
+    for (final r in c.rooms.toList()) {
+      if (!r.partial || r.membership != Membership.join) continue;
+      try {
+        await r.postLoad();
+      } catch (e) {
+        Logs().w('[WaAccounts] postLoad ${r.id}', e);
+      }
+    }
+    _indexAt = DateTime.fromMillisecondsSinceEpoch(0);
+  }();
+
+  /// Accounts seen in the user's chats (of [bot] only, if given).
+  static Set<String> known(Client c, {String? bot}) => {
+    for (final r in c.rooms)
+      if (bot == null || RoomBridgeInfo.of(r)?.bridgeBot == bot) ?receiverOf(r),
+  };
+
+  /// "+49 170 1234567" for a login ID (phone digits), or the name the
+  /// bridge gave it.
+  static String label(String id) {
+    final name = _names[id];
+    if (name != null && name.isNotEmpty && name != id) return name;
+    return RegExp(r'^\d+$').hasMatch(id) ? '+$id' : id;
+  }
+
+  /// Asks [bot] for the logins (and remembers their names for [label]).
+  static Future<List<({String id, String name, String state})>> fetch(
+    Client c,
+    String bot,
+  ) async {
+    final room = await BridgeBotChat.dm(c, bot);
+    final logins = BridgeBotChat.parseLogins(
+      await BridgeBotChat.command(
+        room,
+        bot,
+        'list-logins',
+        accept: BridgeBotChat.isListLoginsReply,
+      ),
+    );
+    for (final l in logins) {
+      _names[l.id] = l.name;
+    }
+    return logins;
   }
 }
 
@@ -421,10 +632,9 @@ class PersonalBridgeMonitor {
     try {
       while (true) {
         final cfg = WhatsAppBridgeConfig.of(client);
-        final bots = [
-          WhatsAppBridgeConfig.serverBot(client),
-          if (cfg.ownBot != null) cfg.ownBot!,
-        ];
+        // Only the bridge in use: chats of a bridge you left (e.g. the old
+        // server bridge) must not be accepted again.
+        final bots = [cfg.activeBot(client)];
         final next = client.rooms.firstWhereOrNull((r) {
           if (r.membership != Membership.invite || _joining.contains(r.id)) {
             return false;
@@ -439,6 +649,17 @@ class PersonalBridgeMonitor {
         try {
           await next.join();
           Logs().i('[PersonalBridge] accepted bridge invite ${next.id}');
+        } on MatrixException catch (e) {
+          if (e.error == MatrixError.M_LIMIT_EXCEEDED) {
+            // tjena limits how fast you join rooms: wait as long as it asks
+            // and try the same invite again.
+            _joining.remove(next.id);
+            final wait = e.retryAfterMs ?? 10000;
+            Logs().i('[PersonalBridge] join rate limited, waiting ${wait}ms');
+            await Future.delayed(Duration(milliseconds: wait + 200));
+            continue;
+          }
+          Logs().w('[PersonalBridge] could not accept ${next.id}', e);
         } catch (e) {
           Logs().w('[PersonalBridge] could not accept ${next.id}', e);
         }
@@ -598,6 +819,8 @@ class BridgeCleanup {
         log('Could not reset the bridge setting: $e');
       }
     }
+    log('Loading chat details…');
+    await WaAccounts.ensureLoaded(c);
     final rooms = roomsOf(c, bot);
     log('Removing ${rooms.length} chats, spaces and invites…');
     var failed = 0;

@@ -1,0 +1,3 @@
+- New WhatsApp chat: one tab per WhatsApp account with its own chats (groups included) and contacts
+- Bridge commands: answers are matched to the right command (no more random chat opening)
+- Accepting many bridge invites waits when tjena says "too many requests"

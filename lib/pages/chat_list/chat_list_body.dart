@@ -12,6 +12,7 @@ import 'package:fluffychat/pages/chat_list/dummy_chat_list_item.dart';
 import 'package:fluffychat/pages/chat_list/search_title.dart';
 import 'package:fluffychat/pages/chat_list/space_view.dart';
 import 'package:fluffychat/pages/chat_list/status_msg_list.dart';
+import 'package:fluffychat/utils/personal_bridge.dart';
 import 'package:fluffychat/utils/space_child_visibility.dart';
 import 'package:fluffychat/utils/stream_extension.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/public_room_dialog.dart';
@@ -80,6 +81,8 @@ class ChatListViewBody extends StatelessWidget {
           if (AppSettings.hideRoomsInSpaces.value) return false;
           return !SpaceChildVisibility.instance.isHiddenOutside(space.id);
         }).toList();
+        final showWaAccount =
+            controller.isSearchMode && WaAccounts.known(client).length > 1;
         controller.selectableRoomIds = [
           for (final r in rooms)
             if (filter.isEmpty ||
@@ -269,6 +272,7 @@ class ChatListViewBody extends StatelessWidget {
                       onMenu: (context) =>
                           controller.chatContextAction(room, context, space),
                       selected: controller.selectedRoomIds.contains(room.id),
+                      accountTag: showWaAccount ? waAccountTag(room) : null,
                       activeChat: controller.activeChat == room.id,
                     );
                   },
@@ -356,4 +360,9 @@ class _SearchItem extends StatelessWidget {
       ),
     ),
   );
+}
+
+String? waAccountTag(Room room) {
+  final acct = WaAccounts.of(room);
+  return acct == null ? null : WaAccounts.label(acct);
 }
