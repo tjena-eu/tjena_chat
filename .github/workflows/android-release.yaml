@@ -100,14 +100,18 @@ jobs:
       - name: Build APK (with patches)
         run: |
           flutter pub get
-          FLUTTER="$(command -v flutter)" ./build_android
+          FLUTTER="$(command -v flutter)" bash ./build_android
 
       - name: Check signing certificate
         run: |
           bt="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)"
-          got="$("$bt/apksigner" verify --print-certs "$APK" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p')"
+          out="$("$bt/apksigner" verify --print-certs "$APK" 2>&1)" || { echo "$out"; exit 1; }
+          # Line wording differs between build-tools versions ("Signer #1 …",
+          # "Signer (minSdkVersion=…) …"); take the first certificate digest.
+          got="$(grep -m1 -i 'certificate SHA-256 digest:' <<< "$out" | sed 's/.*digest: *//' | tr -d '[:space:]:' | tr 'A-F' 'a-f' || true)"
           if [[ "$got" != "$EXPECTED_CERT" ]]; then
-            echo "::error::APK is signed with $got, expected $EXPECTED_CERT. Not publishing."
+            echo "$bt/apksigner output:"; echo "$out"
+            echo "::error::APK is signed with '$got', expected $EXPECTED_CERT. Not publishing."
             exit 1
           fi
           echo "Signed with the tjena key."
