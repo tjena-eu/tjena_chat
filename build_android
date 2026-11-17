@@ -14,6 +14,12 @@ APK_SRC="$SCRIPT_DIR/build/app/outputs/flutter-apk/app-release.apk"
 mkdir -p "$OUT_DIR"
 
 # Auto-generate a development signing keystore if none configured yet
+# On CI (GitHub Actions sets CI=true) never make a new key: the APK must be
+# signed with the release key, or installed apps can't update.
+if [ ! -f "$KEY_PROPS" ] && [ -n "${CI:-}" ]; then
+  echo "ERROR: $KEY_PROPS missing on CI; refusing to generate a new signing key." >&2
+  exit 1
+fi
 if [ ! -f "$KEY_PROPS" ]; then
   echo "==> No key.properties found — generating development keystore..."
   keytool -genkey -v \
@@ -66,6 +72,7 @@ if [ -n "$CALL_SESSION" ] && [ -f "$CALL_SESSION" ]; then
   python3 "$SCRIPT_DIR/patches/voip_remote_stream_fix.py" "$CALL_SESSION"
 else
   echo "  WARNING: matrix SDK source not found (run 'flutter pub get'); skipping VoIP patch"
+  [ -z "${CI:-}" ] || exit 1
 fi
 
 # flutter_callkit_incoming: Accept on the lock screen must not ask to unlock
@@ -90,6 +97,7 @@ if [ -n "$CALLKIT_ROOT" ]; then
   python3 "$SCRIPT_DIR/patches/callkit_lockscreen_fix.py" "$CALLKIT_ROOT"
 else
   echo "  WARNING: flutter_callkit_incoming not found (run 'flutter pub get'); skipping"
+  [ -z "${CI:-}" ] || exit 1
 fi
 
 echo "==> Building Android APK (release)..."

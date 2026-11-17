@@ -1,0 +1,154 @@
+# Builds the signed tjena!chat Android APK (via ./build_android, which applies
+# the patches in patches/) and publishes it.
+#
+#   push to main    -> APK on the "edge" prerelease (replaced each time)
+#   tag v1.2.3      -> APK on the release v1.2.3 (tag must match pubspec.yaml;
+#                      notes from android/fastlane/metadata/.../changelogs/<code>.txt)
+#   manual run      -> APK as a run artifact
+#
+# Pull requests are checked by integrate.yaml.
+#
+# Signing secrets (repo or org): ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD,
+# ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD. Same key as tjena Bridge; the build
+# fails if the APK isn't signed with EXPECTED_CERT.
+name: Android release
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-release-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  EXPECTED_CERT: a94bea045d790038948b9c57b339aee579d99b0e0c08ff4406dcebbca21f4446
+  APK: .build/tjena-release.apk
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write # releases
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Version
+        id: version
+        run: |
+          v="$(sed -n 's/^version: *//p' pubspec.yaml)"
+          echo "full=$v" >> "$GITHUB_OUTPUT"
+          echo "name=${v%%+*}" >> "$GITHUB_OUTPUT"
+          echo "code=${v##*+}" >> "$GITHUB_OUTPUT"
+          if [[ "$GITHUB_REF" == refs/tags/v* && "${GITHUB_REF_NAME#v}" != "${v%%+*}" ]]; then
+            echo "::error::Tag $GITHUB_REF_NAME doesn't match pubspec.yaml version $v"
+            exit 1
+          fi
+
+      - uses: ./.github/actions/free_up_space
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version-file: .fvmrc
+          cache: true
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Gradle
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-release-${{ runner.os }}-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: gradle-release-${{ runner.os }}-
+
+      - name: Signing key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [[ -z "$KEYSTORE_BASE64" ]]; then
+            echo "::error::Secret ANDROID_KEYSTORE_BASE64 is missing (see the top of this workflow)."
+            exit 1
+          fi
+          dir="$RUNNER_TEMP/signing"
+          mkdir -p "$dir"
+          printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$dir/release.keystore"
+          cat > android/key.properties <<EOF
+          storeFile=$dir/release.keystore
+          storePassword=$STORE_PASSWORD
+          keyAlias=$KEY_ALIAS
+          keyPassword=$KEY_PASSWORD
+          EOF
+
+      - name: Build APK (with patches)
+        run: |
+          flutter pub get
+          FLUTTER="$(command -v flutter)" ./build_android
+
+      - name: Check signing certificate
+        run: |
+          bt="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)"
+          got="$("$bt/apksigner" verify --print-certs "$APK" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p')"
+          if [[ "$got" != "$EXPECTED_CERT" ]]; then
+            echo "::error::APK is signed with $got, expected $EXPECTED_CERT. Not publishing."
+            exit 1
+          fi
+          echo "Signed with the tjena key."
+
+      - name: Remove signing key
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/signing" android/key.properties
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: tjena-${{ steps.version.outputs.full }}
+          path: ${{ env.APK }}
+          retention-days: 14
+
+      - name: Publish edge prerelease
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.full }}
+        run: |
+          gh release delete edge --repo "$GITHUB_REPOSITORY" --cleanup-tag --yes || true
+          gh release create edge "$APK" --repo "$GITHUB_REPOSITORY" \
+            --prerelease --target "$GITHUB_SHA" \
+            --title "edge $VERSION (${GITHUB_SHA::7})" \
+            --notes "Test build from main, replaced on every update. Commit $GITHUB_SHA."
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.name }}
+          CODE: ${{ steps.version.outputs.code }}
+        run: |
+          tag="$GITHUB_REF_NAME"
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release upload "$tag" "$APK" --repo "$GITHUB_REPOSITORY" --clobber
+            exit 0
+          fi
+          notes=android/fastlane/metadata/android/en-US/changelogs
+          f="$notes/$CODE.txt"; [[ -f "$f" ]] || f="$notes/default.txt"
+          [[ -f "$f" ]] || { f="$RUNNER_TEMP/notes.txt"; : > "$f"; }
+          pre=""; [[ "$tag" == *-* ]] && pre="--prerelease"
+          gh release create "$tag" "$APK" --repo "$GITHUB_REPOSITORY" \
+            $pre --title "tjena!chat $VERSION" --notes-file "$f"
